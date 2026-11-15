@@ -1,0 +1,16 @@
+# Normalize line endings: sources are authored and stored as LF, on every
+# platform. This is what stops the per-file "LF will be replaced by CRLF"
+# churn on Windows checkouts.
+* text=auto
+
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
