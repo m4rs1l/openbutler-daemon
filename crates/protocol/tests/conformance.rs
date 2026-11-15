@@ -1,0 +1,438 @@
+//! Conformance suite: every JSON vector under `conformance/` must decode into
+//! its contract type and serialize back to the identical wire value, and the
+//! decoder/validation semantics must match the TypeScript implementation.
+
+use openbutler_protocol::{
+    AttachResult, DAEMON_PROTOCOL_VERSION, DaemonEvent, DaemonRequest, DaemonResponse,
+    DaemonStatus, FrameDecoder, MAX_DAEMON_FRAME_BYTES, RuntimeViewData, SessionEntriesPatch,
+    SessionEntriesRange, SessionEntry, SessionPatch, SessionSnapshotData, ValidationError,
+    validate_request, validate_response,
+};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+
+/// Decodes a fixture into `T`, then proves the wire value survives a
+/// decode → encode round trip unchanged.
+fn roundtrip<T: DeserializeOwned + serde::Serialize>(fixture: &str) -> T {
+    let original: Value = serde_json::from_str(fixture).expect("fixture must be valid JSON");
+    let typed: T = serde_json::from_value(original.clone()).expect("fixture must decode");
+    let back = serde_json::to_value(&typed).expect("typed value must serialize");
+    assert_eq!(back, original, "round trip must preserve the wire value");
+    typed
+}
+
+fn fixture(name: &str) -> &'static str {
+    match name {
+        "response-status" => include_str!("../conformance/response-status.json"),
+        "request-attach" => include_str!("../conformance/request-attach.json"),
+        "response-error" => include_str!("../conformance/response-error.json"),
+        "event-notification" => include_str!("../conformance/event-notification.json"),
+        "event-snapshot" => include_str!("../conformance/event-snapshot.json"),
+        "daemon-status" => include_str!("../conformance/daemon-status.json"),
+        "runtime-view" => include_str!("../conformance/runtime-view.json"),
+        "snapshot-window" => include_str!("../conformance/snapshot-window.json"),
+        "patch-delta" => include_str!("../conformance/patch-delta.json"),
+        "entries-patch-replace-all" => {
+            include_str!("../conformance/entries-patch-replace-all.json")
+        }
+        "entries-all-kinds" => include_str!("../conformance/entries-all-kinds.json"),
+        "attach-result" => include_str!("../conformance/attach-result.json"),
+        "entries-range" => include_str!("../conformance/entries-range.json"),
+        "legacy-v1-status" => include_str!("../conformance/legacy-v1-status.json"),
+        other => panic!("unknown fixture {other}"),
+    }
+}
+
+// --- Envelopes ---------------------------------------------------------------
+
+#[test]
+fn real_status_response_round_trip() {
+    let response: DaemonResponse = roundtrip(fixture("response-status"));
+    assert_eq!(response.id(), "probe-1");
+    assert_eq!(response.version(), DAEMON_PROTOCOL_VERSION);
+    validate_response(&response, DAEMON_PROTOCOL_VERSION).expect("valid response");
+
+    let DaemonResponse::Success { result, .. } = response else {
+        panic!("captured frame is a success");
+    };
+    let status: DaemonStatus =
+        serde_json::from_value(result).expect("captured result must decode as DaemonStatus");
+    assert_eq!(status.pid, 21104);
+    assert_eq!(status.workspace_count, 3);
+    assert_eq!(status.connected_clients, 2);
+    // Explicit nulls survive as present-but-null (required nullable fields).
+    let telegram = status.telegram.expect("telegram status present");
+    assert_eq!(telegram.username, None);
+    assert!(!telegram.paired);
+}
+
+#[test]
+fn error_response_round_trip() {
+    let response: DaemonResponse = roundtrip(fixture("response-error"));
+    let DaemonResponse::Failure { error, ok, .. } = &response else {
+        panic!("expected a failure frame");
+    };
+    assert!(!ok);
+    assert!(error.starts_with("Authentication failed"));
+    validate_response(&response, DAEMON_PROTOCOL_VERSION).expect("valid failure");
+    assert!(matches!(
+        validate_response(&response, DAEMON_PROTOCOL_VERSION + 1),
+        Err(ValidationError::ResponseVersionMismatch { .. })
+    ));
+}
+
+#[test]
+fn attach_request_round_trip() {
+    let request: DaemonRequest = roundtrip(fixture("request-attach"));
+    assert_eq!(request.action, "attach");
+    validate_request(&request).expect("valid request");
+    assert_eq!(
+        request.get("clientKind"),
+        Some(&Value::String("terminal".into()))
+    );
+    assert!(
+        request.get("workspaceKey").is_none(),
+        "attach carries no host key"
+    );
+}
+
+#[test]
+fn request_validation_matrix() {
+    let valid: DaemonRequest = serde_json::from_str(fixture("request-attach")).unwrap();
+    validate_request(&valid).expect("baseline valid");
+
+    let wrong_version = DaemonRequest {
+        version: DAEMON_PROTOCOL_VERSION - 1,
+        ..valid.clone()
+    };
+    assert!(matches!(
+        validate_request(&wrong_version),
+        Err(ValidationError::WrongVersion { .. })
+    ));
+
+    let empty_id = DaemonRequest {
+        id: String::new(),
+        ..valid.clone()
+    };
+    assert!(matches!(
+        validate_request(&empty_id),
+        Err(ValidationError::InvalidIdLength { actual: 0 })
+    ));
+
+    // JS `String.length` counts UTF-16 units: 64 astral characters are 128
+    // units in JS even though they are 256 bytes here.
+    let astral_64 = "\u{1F600}".repeat(64);
+    let too_many_units = DaemonRequest {
+        id: astral_64,
+        ..valid.clone()
+    };
+    assert!(matches!(
+        validate_request(&too_many_units),
+        Err(ValidationError::InvalidIdLength { actual: 128 })
+    ));
+    let astral_32 = DaemonRequest {
+        id: "\u{1F600}".repeat(32),
+        ..valid.clone()
+    };
+    validate_request(&astral_32).expect("64 UTF-16 units are exactly the limit");
+
+    let long_action = DaemonRequest {
+        action: "a".repeat(65),
+        ..valid
+    };
+    assert!(matches!(
+        validate_request(&long_action),
+        Err(ValidationError::InvalidActionLength { actual: 65 })
+    ));
+}
+
+// --- Events ------------------------------------------------------------------
+
+#[test]
+fn notification_event_round_trip() {
+    let event: DaemonEvent = roundtrip(fixture("event-notification"));
+    let DaemonEvent::Notification {
+        title,
+        message,
+        version,
+    } = event
+    else {
+        panic!("expected notification");
+    };
+    assert_eq!(version, DAEMON_PROTOCOL_VERSION);
+    assert_eq!(title, "OpenButler host stopping");
+    assert!(message.contains("openbutler"));
+}
+
+#[test]
+fn snapshot_event_round_trip() {
+    let event: DaemonEvent = roundtrip(fixture("event-snapshot"));
+    let DaemonEvent::Snapshot {
+        snapshot, runtime, ..
+    } = event
+    else {
+        panic!("expected snapshot");
+    };
+    assert!(snapshot.session.entries.is_empty());
+    assert!(!snapshot.run.busy);
+    assert_eq!(
+        runtime.reasoning_support,
+        openbutler_protocol::runtime::ReasoningSupport::ModelUnsupported
+    );
+}
+
+#[test]
+fn patch_event_variant_serializes_with_tag() {
+    let patch: SessionPatch = serde_json::from_str(fixture("patch-delta")).unwrap();
+    let event = DaemonEvent::Patch {
+        version: DAEMON_PROTOCOL_VERSION,
+        patch,
+    };
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(value.get("event"), Some(&Value::String("patch".into())));
+    assert_eq!(value.get("version"), Some(&Value::from(2)));
+}
+
+// --- Status and runtime ------------------------------------------------------
+
+#[test]
+fn daemon_status_round_trip() {
+    let status: DaemonStatus = roundtrip(fixture("daemon-status"));
+    assert_eq!(status.pid, 21104);
+    let telegram = status.telegram.expect("telegram present");
+    assert_eq!(format!("{:?}", telegram.state), "Polling");
+    assert!(telegram.paired);
+    assert_eq!(telegram.username.as_deref(), Some("m4rs1l"));
+}
+
+#[test]
+fn runtime_view_round_trip() {
+    let runtime: RuntimeViewData = roundtrip(fixture("runtime-view"));
+    assert_eq!(runtime.context_window_tokens, Some(524_288));
+    assert_eq!(runtime.reasoning_variants.len(), 2);
+    assert_eq!(
+        runtime.approval_mode,
+        Some(openbutler_protocol::runtime::ApprovalMode::FullAccess)
+    );
+    assert_eq!(
+        runtime.reasoning_variants[0].provider_options["reasoningEffort"],
+        serde_json::json!({"effort": "high"})
+    );
+}
+
+// --- Session state -----------------------------------------------------------
+
+#[test]
+fn windowed_snapshot_round_trip() {
+    let snapshot: SessionSnapshotData = roundtrip(fixture("snapshot-window"));
+    assert_eq!(snapshot.entries_from, Some(41));
+    assert_eq!(snapshot.total_entries, Some(43));
+    assert_eq!(snapshot.session.entries.len(), 2);
+    assert!(snapshot.run.busy);
+    assert_eq!(snapshot.run.streaming_assistant_index, Some(2));
+    assert_eq!(snapshot.run.queued_message_count, 1);
+    assert_eq!(snapshot.run.running_turn_id.as_deref(), Some("turn-9"));
+    // Metadata sits flat next to the body.
+    let tool = &snapshot.session.entries[0];
+    assert_eq!(tool.meta().turn_id.as_deref(), Some("turn-9"));
+    assert_eq!(
+        tool.meta().turn_outcome,
+        Some(openbutler_protocol::entry::TurnOutcome::Completed)
+    );
+}
+
+#[test]
+fn delta_patch_round_trip() {
+    let patch: SessionPatch = roundtrip(fixture("patch-delta"));
+    let Some(SessionEntriesPatch::Delta {
+        append,
+        replace,
+        append_text,
+    }) = &patch.entries_patch
+    else {
+        panic!("expected a delta patch");
+    };
+    assert_eq!(append.len(), 1);
+    assert!(replace.is_empty());
+    assert_eq!(append_text[0].index, 42);
+    assert!(patch.run.pending_question.is_some());
+    // `SessionMeta` has no `entries` member — a patch session is typed
+    // without a transcript, so the field cannot ride along.
+    assert_eq!(patch.session.title, "Wire conformance");
+}
+
+#[test]
+fn replace_all_entries_patch_round_trip() {
+    let entries: SessionEntriesPatch = roundtrip(fixture("entries-patch-replace-all"));
+    let SessionEntriesPatch::ReplaceAll { entries } = entries else {
+        panic!("expected replace-all");
+    };
+    assert_eq!(entries.len(), 3);
+}
+
+#[test]
+fn every_entry_kind_round_trip() {
+    let entries: Vec<SessionEntry> = roundtrip(fixture("entries-all-kinds"));
+    assert_eq!(entries.len(), 8);
+    let kinds: Vec<&str> = entries
+        .iter()
+        .map(|entry| match entry {
+            SessionEntry::User { .. } => "user",
+            SessionEntry::Assistant { .. } => "assistant",
+            SessionEntry::Notice { .. } => "notice",
+            SessionEntry::Divider { .. } => "divider",
+            SessionEntry::Reasoning { .. } => "reasoning",
+            SessionEntry::Compaction { .. } => "compaction",
+            SessionEntry::Tool { .. } => "tool",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "user",
+            "user",
+            "assistant",
+            "notice",
+            "divider",
+            "reasoning",
+            "compaction",
+            "tool"
+        ]
+    );
+    // The compaction checkpoint marks the raw summary entry.
+    let SessionEntry::User { meta, .. } = &entries[1] else {
+        panic!("second entry is the stored summary");
+    };
+    assert_eq!(
+        meta.internal,
+        Some(openbutler_protocol::entry::EntryInternal::Compaction)
+    );
+}
+
+#[test]
+fn attach_result_round_trip() {
+    let attach: AttachResult = roundtrip(fixture("attach-result"));
+    assert_eq!(attach.session_attachments, Some(true));
+    assert_eq!(attach.workspace_key.as_deref(), Some("wsk_9b2f1c44"));
+    assert_eq!(
+        attach.client_kind,
+        Some(openbutler_protocol::runtime::LocalClientKind::Terminal)
+    );
+    // Trio semantics: explicit `null` means "source run", not "older host".
+    assert_eq!(attach.host_build_id, Some(None));
+    assert_eq!(attach.saved_sessions.len(), 1);
+    assert_eq!(attach.saved_sessions[0].running, Some(false));
+}
+
+#[test]
+fn absent_build_id_stays_absent() {
+    let mut value: Value = serde_json::from_str(fixture("attach-result")).unwrap();
+    value.as_object_mut().unwrap().remove("hostBuildId");
+    let attach: AttachResult = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(attach.host_build_id, None, "absent and null must differ");
+    let back = serde_json::to_value(&attach).unwrap();
+    assert!(
+        back.get("hostBuildId").is_none(),
+        "an absent key must not be written back"
+    );
+    // …while an explicit null is written back as null.
+    let with_null: AttachResult = serde_json::from_str(fixture("attach-result")).unwrap();
+    let back = serde_json::to_value(&with_null).unwrap();
+    assert_eq!(back.get("hostBuildId"), Some(&Value::Null));
+}
+
+#[test]
+fn entries_range_round_trip() {
+    let range: SessionEntriesRange = roundtrip(fixture("entries-range"));
+    assert_eq!((range.from, range.to, range.total), (0, 2, 40));
+}
+
+#[test]
+fn legacy_v1_status_folds_into_current_shape() {
+    let legacy: openbutler_protocol::status::LegacyV1Status =
+        roundtrip(fixture("legacy-v1-status"));
+    let status = legacy.into_status();
+    assert_eq!(status.legacy, Some(true));
+    assert_eq!(status.pid, 4321);
+    assert!(status.entry.is_none());
+}
+
+// --- Required-key strictness --------------------------------------------------
+
+#[test]
+fn patch_without_required_run_state_is_rejected() {
+    let mut value: Value = serde_json::from_str(fixture("patch-delta")).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.remove("runningTurnId");
+    object.remove("busy");
+    let decoded: Result<SessionPatch, _> = serde_json::from_value(value);
+    assert!(
+        decoded.is_err(),
+        "required nullable keys must be required on the wire, even through flatten"
+    );
+}
+
+#[test]
+fn snapshot_without_session_id_is_rejected() {
+    let mut value: Value = serde_json::from_str(fixture("event-snapshot")).unwrap();
+    value["snapshot"]["session"]
+        .as_object_mut()
+        .unwrap()
+        .remove("id");
+    let decoded: Result<DaemonEvent, _> = serde_json::from_value(value);
+    assert!(decoded.is_err(), "a session without an id is malformed");
+}
+
+// --- Framing -----------------------------------------------------------------
+
+#[test]
+fn decoder_collects_multiple_frames_from_one_chunk() {
+    let mut decoder = FrameDecoder::new(MAX_DAEMON_FRAME_BYTES);
+    let frames = decoder.append(b"{\"a\":1}\n{\"b\":2}\n").unwrap();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0], b"{\"a\":1}");
+    assert_eq!(frames[1], b"{\"b\":2}");
+    assert_eq!(decoder.pending_bytes(), 0);
+}
+
+#[test]
+fn decoder_holds_an_unfinished_tail_across_chunks() {
+    let mut decoder = FrameDecoder::new(MAX_DAEMON_FRAME_BYTES);
+    assert!(decoder.append(b"{\"id\":\"par").unwrap().is_empty());
+    assert_eq!(decoder.pending_bytes(), 10);
+    let frames = decoder.append(b"tial\"}\n").unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0], b"{\"id\":\"partial\"}");
+    assert_eq!(decoder.pending_bytes(), 0, "tail must be released");
+}
+
+#[test]
+fn decoder_enforces_the_cap_across_chunks() {
+    let mut decoder = FrameDecoder::new(8);
+    assert!(decoder.append(b"12345").is_ok());
+    let error = decoder.append(b"67890").unwrap_err();
+    assert_eq!(error.to_string(), "IPC frame exceeded the 32 MB limit.");
+}
+
+#[test]
+fn decoder_accepts_a_frame_exactly_at_the_cap() {
+    let mut decoder = FrameDecoder::new(4);
+    let frames = decoder.append(b"1234\n").unwrap();
+    assert_eq!(frames, vec![b"1234".to_vec()]);
+    assert_eq!(decoder.pending_bytes(), 0);
+}
+
+#[test]
+fn decoder_reports_an_overlong_frame_before_its_newline() {
+    let mut decoder = FrameDecoder::new(4);
+    let error = decoder.append(b"12345").unwrap_err();
+    assert_eq!(error.to_string(), "IPC frame exceeded the 32 MB limit.");
+}
+
+#[test]
+fn decoder_keeps_empty_frames_between_newlines() {
+    let mut decoder = FrameDecoder::new(MAX_DAEMON_FRAME_BYTES);
+    let frames = decoder.append(b"a\n\nb\n").unwrap();
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[1], b"");
+}

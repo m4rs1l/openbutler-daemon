@@ -3,6 +3,6 @@
 fn main() {
     println!(
         "openbutler-daemon protocol v{}",
-        openbutler_protocol::PROTOCOL_VERSION
+        openbutler_protocol::DAEMON_PROTOCOL_VERSION
     );
 }
