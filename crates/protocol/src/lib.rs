@@ -10,20 +10,26 @@
 //! runtime. Both the Rust daemon and the Rust CLI depend on it, and the
 //! TypeScript implementation is cross-checked against the same vectors.
 //!
+//! Layout: shared leaves live at the root (`constants`, `util`, `error`,
+//! `frame`, `envelope`); domains that carry several authorities live in
+//! their own folder — [`session`] (record, run state, patches, transcript
+//! entries, attach) and [`runtime`] (status, runtime view).
+//!
 //! Documentation index: `docs/index.md`.
 
-pub mod attach;
 pub mod constants;
-pub mod entry;
 pub mod envelope;
 pub mod error;
 pub mod frame;
 pub mod runtime;
 pub mod session;
-pub mod status;
 pub mod util;
 
-pub use attach::AttachResult;
+// Historical module paths stay valid: these now live inside their domain
+// folder, re-exported here so no caller changes.
+pub use runtime::status;
+pub use session::{attach, entry};
+
 pub use constants::{
     DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, PREVIOUS_DAEMON_PROTOCOL_VERSION,
 };
@@ -34,8 +40,8 @@ pub use envelope::{
 };
 pub use error::{FrameError, ValidationError};
 pub use frame::FrameDecoder;
-pub use runtime::{ApprovalMode, LocalClientKind, RuntimeViewData};
+pub use runtime::{ApprovalMode, DaemonStatus, LocalClientKind, RuntimeViewData, TelegramStatus};
 pub use session::{
-    SessionEntriesPatch, SessionEntriesRange, SessionPatch, SessionSnapshotData, SessionSummary,
+    AttachResult, SessionEntriesPatch, SessionEntriesRange, SessionPatch, SessionSnapshotData,
+    SessionSummary,
 };
-pub use status::{DaemonStatus, TelegramStatus};
