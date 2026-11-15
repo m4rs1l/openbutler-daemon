@@ -6,44 +6,14 @@
 //! ordering, damage tolerance) is pinned without touching any real install.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use openbutler_daemon::state::{self, WorkspaceFilter};
 use openbutler_protocol::SessionSummary;
 
-/// A record as `session-writer.ts` writes it: two-space pretty JSON with a
-/// trailing newline and the big arrays last.
-fn pretty_session(
-    id: &str,
-    workspace: Option<&str>,
-    title: &str,
-    has_user_message: bool,
-) -> String {
-    let workspace_field = match workspace {
-        Some(root) => format!("    \"workspaceRoot\": {root:?},\n"),
-        None => String::new(),
-    };
-    format!(
-        "{{\n  \"version\": 1,\n  \"id\": \"{id}\",\n  \"title\": \"{title}\",\n  \"createdAt\": \"2026-11-15T20:00:00.000Z\",\n  \"updatedAt\": \"2026-11-15T20:00:00.000Z\",\n  \"lastActivityAt\": \"2026-11-15T20:05:00.000Z\",\n  \"providerId\": \"vercel\",\n  \"modelId\": \"xiaomi/mimo-v2.6-flash\",\n{workspace_field}  \"hasUserMessage\": {has_user_message},\n  \"preview\": \"earlier turn\",\n  \"firstUserMessage\": \"start\",\n  \"lastAssistantMessage\": \"done\",\n  \"entries\": [\n    {{\n      \"kind\": \"user\",\n      \"text\": \"start\",\n      \"source\": \"terminal\"\n    }}\n  ],\n  \"conversation\": [\n    {{ \"role\": \"user\", \"content\": \"start\" }}\n  ]\n}}\n"
-    )
-}
+mod common;
 
-fn uuid(seed: u8) -> String {
-    format!("{seed:08x}-0000-4000-8000-000000000001")
-}
-
-fn write_session(root: &Path, id: &str, body: &str) {
-    let dir = root.join("sessions").join(id);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join(format!("{id}.json")), body).unwrap();
-}
-
-fn temp_root(tag: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!("ob-state-test-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(base.join("sessions")).unwrap();
-    base
-}
+use common::{pretty_session, temp_data_dir as temp_root, uuid, write_session};
 
 #[test]
 fn list_reads_headers_orders_and_filters() {
