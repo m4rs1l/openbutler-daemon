@@ -27,7 +27,7 @@ pub use attach::AttachResult;
 pub use constants::{
     DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, PREVIOUS_DAEMON_PROTOCOL_VERSION,
 };
-pub use entry::{SessionEntry, SessionEntryMeta};
+pub use entry::{SessionEntry, SessionEntryMeta, SessionProject};
 pub use envelope::{
     DaemonEvent, DaemonNotification, DaemonRequest, DaemonResponse, validate_request,
     validate_response,
