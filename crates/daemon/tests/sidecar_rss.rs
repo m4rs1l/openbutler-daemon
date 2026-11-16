@@ -18,11 +18,12 @@ use axum::routing::post;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-/// Observed Windows peak of the sidecar under this load: **136 MB
-/// working set / 169 MB private** (11 samples at 100 ms, 4 concurrent
-/// ~2.5 MB calls). The ceiling sits just under 2× the measured peak so
-/// a doubling trips it, with headroom for machine variance.
-const RSS_CEILING_BYTES: u64 = 256 * 1024 * 1024;
+/// Observed Windows peak **with the production heap belt**
+/// (`--max-old-space-size=64`): **107 MB working set / 139 MB private**
+/// (12 samples at 100 ms, 4 concurrent ~2.5 MB calls; without the belt
+/// the same load peaks 136/169). The ceiling sits just under 2× the
+/// belted peak so a doubling trips it.
+const RSS_CEILING_BYTES: u64 = 200 * 1024 * 1024;
 
 /// How long the mock holds a response open — long enough for samples to
 /// cover the request-build peak and afterwards.
@@ -191,6 +192,9 @@ async fn the_worst_case_payload_stays_within_the_rss_ceiling() {
     let addr = mock_server().await;
 
     let mut child = tokio::process::Command::new("node")
+        // The production spawn profile: the heap belt is part of every
+        // measurement, never an afterthought.
+        .arg("--max-old-space-size=64")
         .arg(entry_script())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

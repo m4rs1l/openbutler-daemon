@@ -118,6 +118,7 @@ fn entry_script() -> PathBuf {
 fn config() -> DoorConfig {
     DoorConfig {
         node_program: PathBuf::from("node"),
+        node_args: Vec::new(),
         script: entry_script(),
         mode: String::new(),
         providers: Some(PROVIDERS.iter().map(|key| (*key).to_owned()).collect()),

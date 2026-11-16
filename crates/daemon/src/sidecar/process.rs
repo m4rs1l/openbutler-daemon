@@ -49,6 +49,9 @@ impl ChildWriter {
 /// own extras — the sidecar never inherits the daemon's full environment.
 pub(crate) async fn spawn(config: &DoorConfig) -> Result<(ChildWriter, ChildStdout), DoorError> {
     let mut command = Command::new(&config.node_program);
+    for flag in &config.node_args {
+        command.arg(flag);
+    }
     command.arg(&config.script);
     command.env_clear();
     command.env(

@@ -44,6 +44,10 @@ pub struct DoorConfig {
     /// The Node executable (`node` next to the packaged runtime in
     /// production).
     pub node_program: PathBuf,
+    /// Extra node flags before the script path — the production heap
+    /// belt (`--max-old-space-size=64`) lives here so every measurement
+    /// runs the spawn profile production will use.
+    pub node_args: Vec<String>,
     /// The sidecar entry script.
     pub script: PathBuf,
     /// The fake-sidecar behavior selector (test only; empty in

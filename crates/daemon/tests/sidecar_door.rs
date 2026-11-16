@@ -23,6 +23,7 @@ fn script_path() -> PathBuf {
 fn config(mode: &str) -> DoorConfig {
     DoorConfig {
         node_program: PathBuf::from("node"),
+        node_args: Vec::new(),
         script: script_path(),
         mode: mode.to_owned(),
         providers: Some(vec!["ok".to_owned()]),
