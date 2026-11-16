@@ -11,9 +11,10 @@
 //! TypeScript implementation is cross-checked against the same vectors.
 //!
 //! Layout: shared leaves live at the root (`auth`, `constants`, `util`,
-//! `error`, `frame`, `envelope`); domains that carry several authorities live in
-//! their own folder — [`session`] (record, run state, patches, transcript
-//! entries, attach) and [`runtime`] (status, runtime view).
+//! `error`, `frame`, `envelope`, `payload`); domains that carry several
+//! authorities live in their own folder — [`session`] (record, run state,
+//! patches, transcript entries, reads, attach) and [`runtime`] (status,
+//! runtime view).
 //!
 //! Documentation index: `docs/index.md`.
 
@@ -22,6 +23,7 @@ pub mod constants;
 pub mod envelope;
 pub mod error;
 pub mod frame;
+pub mod payload;
 pub mod runtime;
 pub mod session;
 pub mod util;
@@ -33,7 +35,8 @@ pub use session::{attach, entry};
 
 pub use auth::{AUTH_FAILED, PAIR_FAILED, REMOTE_FIRST_FRAME_REFUSED};
 pub use constants::{
-    DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, PREVIOUS_DAEMON_PROTOCOL_VERSION,
+    DAEMON_PROTOCOL_VERSION, INLINE_IMAGE_MEDIA_TYPES, MAX_DAEMON_FRAME_BYTES,
+    PREVIOUS_DAEMON_PROTOCOL_VERSION,
 };
 pub use entry::{SessionEntry, SessionEntryMeta, SessionProject};
 pub use envelope::{
@@ -44,6 +47,6 @@ pub use error::{FrameError, ValidationError};
 pub use frame::FrameDecoder;
 pub use runtime::{ApprovalMode, DaemonStatus, LocalClientKind, RuntimeViewData, TelegramStatus};
 pub use session::{
-    AttachResult, SessionEntriesPatch, SessionEntriesRange, SessionPatch, SessionSnapshotData,
-    SessionSummary,
+    AttachResult, EntriesRangeRequest, InlineAttachment, SessionEntriesPatch, SessionEntriesRange,
+    SessionPatch, SessionSnapshotData, SessionSummary, SessionView,
 };

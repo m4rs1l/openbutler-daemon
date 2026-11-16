@@ -59,6 +59,12 @@ pub const AUTH_TOKEN_PREFIX: &str = "obt_";
 pub const MAX_MESSAGE_TEXT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_MESSAGE_IMAGES: usize = 8;
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+/// Attachment media types a browser renders inline (`daemon-host.ts`
+/// `INLINE_IMAGE_MEDIA_TYPES`): the `session.find-attachment` filter.
+pub const INLINE_IMAGE_MEDIA_TYPES: [&str; 4] =
+    ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
 pub const MAX_ENTRIES_RANGE_LIMIT: u32 = 200;
 /// Windowed transcripts are a web-only attach option; older hosts ignore it.
 pub const MIN_ENTRIES_WINDOW: u32 = 1;

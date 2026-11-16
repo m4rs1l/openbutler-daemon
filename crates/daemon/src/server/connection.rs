@@ -107,6 +107,8 @@ where
     let mut decoder = FrameDecoder::new(MAX_DAEMON_FRAME_BYTES);
     let mut buffer = vec![0u8; 16 * 1024];
     let mut pending: VecDeque<Vec<u8>> = VecDeque::new();
+    // The chat this connection carries between requests (`session.load`).
+    let mut dispatch_state = dispatch::DispatchState::new();
 
     if let Admission::Remote { auth_timeout } = admission {
         let first = tokio::time::timeout(
@@ -129,7 +131,7 @@ where
         else {
             return drop_connection(outbound, writer_task).await;
         };
-        let response = dispatch::handle(&host, &data_dir, &request);
+        let response = dispatch::handle(&host, &data_dir, &mut dispatch_state, &request);
         let Ok(mut bytes) = serde_json::to_vec(&response) else {
             return drop_connection(outbound, writer_task).await;
         };

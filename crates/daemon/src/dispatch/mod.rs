@@ -1,22 +1,52 @@
 //! Action routing and the host record.
 //!
 //! `Host` is the authority for what `status` reports (identity, start time,
-//! live connection count, shutdown signal). `handle` is the single dispatch
-//! point: every action is routed here, validated against the envelope rules,
-//! and answered as one protocol response — no other module constructs
-//! responses.
+//! live connection count, shutdown signal). `DispatchState` is what one
+//! connection carries between requests — the chat it has opened. `handle` is
+//! the single dispatch point: every action is routed here, validated against
+//! the envelope rules, and answered as one protocol response — no other
+//! module constructs responses.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use openbutler_protocol::session::{SessionView, read};
 use openbutler_protocol::{
-    DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, DaemonStatus, validate_request,
+    DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, DaemonStatus, InlineAttachment,
+    SessionEntriesRange, validate_request,
 };
 use serde_json::json;
 use tokio::sync::watch;
 
 use crate::auth::PairingCodes;
 use crate::state::{self, WorkspaceFilter};
+
+/// The chat this connection has opened. `session.load` records it; the
+/// paging and attachment reads address it — the per-connection stand-in for
+/// the legacy host's current controller (there is no runtime in this build,
+/// so the record on disk is the whole truth).
+#[derive(Debug, Default)]
+pub struct DispatchState {
+    current_session: Option<String>,
+}
+
+impl DispatchState {
+    /// A fresh connection holds no chat yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The id `session.load` last succeeded with (tests and diagnostics).
+    pub fn current_session(&self) -> Option<&str> {
+        self.current_session.as_deref()
+    }
+}
+
+/// Legacy sentences (verbatim): the custodian refusal on load and the miss
+/// every read of an unopened or vanished chat reports.
+const CHAT_NOT_FOUND: &str = "Chat not found.";
+const CUSTODIAN_LOAD_ERROR: &str =
+    "The machine custodian is the host's own conversation; it is not a chat to open.";
 
 /// What the daemon reports about itself and what keeps it alive.
 pub struct Host {
@@ -94,7 +124,12 @@ impl Default for Host {
 }
 
 /// The one dispatch point: validate the envelope, route the action, answer.
-pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> DaemonResponse {
+pub fn handle(
+    host: &Host,
+    data_dir: &Path,
+    state: &mut DispatchState,
+    request: &DaemonRequest,
+) -> DaemonResponse {
     if let Err(error) = validate_request(request) {
         return failure(request, error.to_string());
     }
@@ -109,6 +144,75 @@ pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> DaemonRe
                 serde_json::to_value(sessions).unwrap_or_else(|_| json!([])),
             ),
             Err(error) => failure(request, error.to_string()),
+        },
+        // Disk-authoritative reads: the saved record is the whole truth in
+        // this build — there is no live session to prefer.
+        "session.load" => match read::load_session_id(&request.payload) {
+            Err(error) => failure(request, error.to_string()),
+            Ok(session_id) => {
+                if session_id == state::CUSTODIAN_SESSION_ID {
+                    return failure(request, CUSTODIAN_LOAD_ERROR.to_owned());
+                }
+                match load_view(data_dir, &session_id) {
+                    Some(view) => {
+                        state.current_session = Some(session_id);
+                        success(
+                            request,
+                            serde_json::to_value(&view).unwrap_or_else(|_| json!({})),
+                        )
+                    }
+                    // A failed load leaves the connection's chat untouched,
+                    // as a failed attachChat leaves the legacy controller.
+                    None => failure(request, CHAT_NOT_FOUND.to_owned()),
+                }
+            }
+        },
+        "session.entries-range" => match read::entries_range(&request.payload) {
+            Err(error) => failure(request, error.to_string()),
+            Ok(range) => match state
+                .current_session
+                .as_deref()
+                .and_then(|id| load_view(data_dir, id))
+            {
+                None => failure(request, CHAT_NOT_FOUND.to_owned()),
+                Some(view) => {
+                    let total = view.entries.len() as u64;
+                    let (start, end) = range.resolve(total);
+                    let page = SessionEntriesRange {
+                        from: start as i64,
+                        to: end as i64,
+                        total: total as i64,
+                        entries: view.entries[start as usize..end as usize].to_vec(),
+                    };
+                    success(
+                        request,
+                        serde_json::to_value(page).unwrap_or_else(|_| json!({})),
+                    )
+                }
+            },
+        },
+        "session.find-attachment" => match read::find_attachment_id(&request.payload) {
+            Err(error) => failure(request, error.to_string()),
+            Ok(attachment_id) => match state
+                .current_session
+                .as_deref()
+                .and_then(|id| load_view(data_dir, id))
+            {
+                None => failure(request, CHAT_NOT_FOUND.to_owned()),
+                Some(view) => match read::find_inline_attachment(&view.entries, &attachment_id) {
+                    Some(file) => success(
+                        request,
+                        serde_json::to_value(InlineAttachment {
+                            path: file.path.clone(),
+                            media_type: file.media_type.clone(),
+                        })
+                        .unwrap_or_else(|_| json!({})),
+                    ),
+                    // Present-but-not-inline and absent ids both answer an
+                    // explicit null, never a failure (legacy `found ?? null`).
+                    None => success(request, serde_json::Value::Null),
+                },
+            },
         },
         "stop" => {
             host.request_shutdown();
@@ -149,6 +253,14 @@ pub(crate) fn envelope_failure(id: &str, error: &str) -> DaemonResponse {
 /// Success envelope for a dispatched request.
 fn success(request: &DaemonRequest, result: serde_json::Value) -> DaemonResponse {
     envelope_success(&request.id, result)
+}
+
+/// Reads one saved record for the three disk-authoritative reads (location
+/// rule + full parse); `None` covers an invalid id, a missing or oversized
+/// or damaged file, or a mismatched identity — all "not found" to a client.
+fn load_view(data_dir: &Path, session_id: &str) -> Option<SessionView> {
+    let path = state::record_path(data_dir, session_id)?;
+    state::read_session_view(&path, session_id)
 }
 
 /// Failure envelope for a dispatched request.

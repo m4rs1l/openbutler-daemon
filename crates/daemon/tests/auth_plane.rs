@@ -171,7 +171,10 @@ fn pair_create_answers_with_a_live_code() {
     }))
     .expect("request shape");
 
-    let DaemonResponse::Success { result, .. } = dispatch::handle(&host, &dir, &request) else {
+    let mut state = dispatch::DispatchState::new();
+    let DaemonResponse::Success { result, .. } =
+        dispatch::handle(&host, &dir, &mut state, &request)
+    else {
         panic!("pair.create must succeed");
     };
     let code = result["code"]
@@ -347,7 +350,10 @@ async fn a_pairing_frame_over_tcp_mints_a_working_token() {
         "version": 2, "id": "pc", "action": "pair.create"
     }))
     .expect("request shape");
-    let DaemonResponse::Success { result, .. } = dispatch::handle(&host, &dir, &request) else {
+    let mut state = dispatch::DispatchState::new();
+    let DaemonResponse::Success { result, .. } =
+        dispatch::handle(&host, &dir, &mut state, &request)
+    else {
         panic!("pair.create must succeed");
     };
     let code = result["code"].as_str().expect("code").to_owned();

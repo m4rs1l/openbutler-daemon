@@ -7,9 +7,8 @@ use openbutler_protocol::SessionSummary;
 
 use super::StateError;
 use super::header::{SessionHeader, read_session_header};
-use super::paths::{
-    CUSTODIAN_SESSION_ID, is_session_id, same_path, session_directory, sessions_directory,
-};
+use super::paths::{CUSTODIAN_SESSION_ID, is_session_id, same_path, sessions_directory};
+use super::record::record_path;
 
 /// Workspace scoping of the list, mirroring the legacy argument triple:
 /// no filter / only sessions without a workspace / exact path match.
@@ -114,27 +113,9 @@ fn session_file_candidates(data_root: &Path) -> Result<Vec<SessionCandidate>, St
     let candidates: Vec<SessionCandidate> = ids
         .into_iter()
         .filter_map(|id| {
-            let path = resolve_record_path(data_root, &id)?;
-            is_regular_file(&path).then_some(SessionCandidate { id, path })
+            let path = record_path(data_root, &id)?;
+            Some(SessionCandidate { id, path })
         })
         .collect();
     Ok(candidates)
-}
-
-/// One location rule for both eras: the current per-directory file when it
-/// exists, otherwise the legacy flat file (`savedSessionFilePath`).
-fn resolve_record_path(data_root: &Path, id: &str) -> Option<PathBuf> {
-    let current = session_directory(data_root, id)
-        .ok()?
-        .join(format!("{id}.json"));
-    if current.is_file() {
-        return Some(current);
-    }
-    let flat = sessions_directory(data_root).join(format!("{id}.json"));
-    flat.is_file().then_some(flat)
-}
-
-/// Regular files only: symlinks are refused (the escape rule).
-fn is_regular_file(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
