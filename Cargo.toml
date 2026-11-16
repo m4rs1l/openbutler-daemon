@@ -39,3 +39,9 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+# Dev builds keep backtrace line numbers without the full debuginfo
+# payload: line tables cut the artifact size roughly in half and pin the
+# target directory's growth (debug assertions stay on by default).
+[profile.dev]
+debug = "line-tables-only"
