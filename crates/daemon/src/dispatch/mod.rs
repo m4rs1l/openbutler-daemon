@@ -8,6 +8,7 @@
 //! module constructs responses.
 
 use std::path::Path;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use openbutler_protocol::session::{SessionView, read};
@@ -19,6 +20,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use crate::auth::PairingCodes;
+use crate::settings::{LoadedSettings, SettingsError, load_settings};
 use crate::state::{self, WorkspaceFilter};
 
 /// The chat this connection has opened. `session.load` records it; the
@@ -54,6 +56,9 @@ pub struct Host {
     connected_clients: AtomicU32,
     shutdown: watch::Sender<bool>,
     pairing: PairingCodes,
+    /// The live settings copy every runtime read goes through. Loaded and
+    /// reloaded only by `reload_settings` — one writer for the host.
+    settings: RwLock<Option<LoadedSettings>>,
 }
 
 impl Host {
@@ -68,7 +73,28 @@ impl Host {
             connected_clients: AtomicU32::new(0),
             shutdown,
             pairing: PairingCodes::new(),
+            settings: RwLock::new(None),
         }
+    }
+
+    /// The live settings copy, if it has been loaded yet. `None` means
+    /// nobody called `reload_settings` — the server boot path always does.
+    pub fn settings(&self) -> std::sync::RwLockReadGuard<'_, Option<LoadedSettings>> {
+        self.settings
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Refresh the live copy from disk under the same lock every reader
+    /// uses. A failed load leaves the previous copy untouched: a broken
+    /// file must never evict working settings.
+    pub fn reload_settings(&self, data_dir: &Path) -> Result<(), SettingsError> {
+        let fresh = load_settings(data_dir)?;
+        *self
+            .settings
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(fresh);
+        Ok(())
     }
 
     /// The shared pairing state: `pair.create` issues through it, the
@@ -217,6 +243,14 @@ pub fn handle(
             host.request_shutdown();
             success(request, json!({ "stopping": true }))
         }
+        "settings.reload" => match host.reload_settings(data_dir) {
+            // The source handler answers a successful reload with `status()`.
+            Ok(()) => success(
+                request,
+                serde_json::to_value(host.status()).unwrap_or_else(|_| json!({})),
+            ),
+            Err(error) => failure(request, error.to_string()),
+        },
         "pair.create" => match host.pairing().issue(crate::auth::now_ms()) {
             Ok((code, expires_at)) => {
                 success(request, json!({ "code": code, "expiresAt": expires_at }))

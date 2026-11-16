@@ -84,6 +84,12 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
     };
     runtime.block_on(async {
         let host = Arc::new(Host::new());
+        // Boot validates and loads the live settings copy; a broken store
+        // refuses to start rather than running on defaults.
+        if let Err(error) = host.reload_settings(&config::data_dir()) {
+            eprintln!("openbutler-daemon: {error}");
+            return ExitCode::FAILURE;
+        }
         let shutdown = host.subscribe_shutdown();
 
         if let Some(addr) = listen {
