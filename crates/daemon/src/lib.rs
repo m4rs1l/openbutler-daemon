@@ -8,3 +8,4 @@ pub mod config;
 pub mod dispatch;
 pub mod server;
 pub mod state;
+pub mod web;

@@ -22,16 +22,32 @@ fn main() -> ExitCode {
     }
 }
 
-/// `run [--listen <addr:port>]`: serve the local IPC endpoint, and the
-/// remote TCP listener (behind the admission gate) when asked for.
+/// `run [--listen <addr:port>] [--web] [--web-bind <addr:port>]`: serve the
+/// local IPC endpoint, the remote TCP listener (behind the admission gate),
+/// and/or the browser surface when asked for.
 fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
     let mut listen: Option<String> = None;
+    let mut web_enabled = false;
+    let mut web_bind: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--listen" => match args.next() {
                 Some(addr) => listen = Some(addr),
                 None => {
                     eprintln!("openbutler-daemon: --listen needs an address, e.g. 127.0.0.1:45278");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--web" => web_enabled = true,
+            "--web-bind" => match args.next() {
+                Some(addr) => {
+                    web_enabled = true;
+                    web_bind = Some(addr);
+                }
+                None => {
+                    eprintln!(
+                        "openbutler-daemon: --web-bind needs an address, e.g. 127.0.0.1:45278"
+                    );
                     return ExitCode::FAILURE;
                 }
             },
@@ -75,6 +91,34 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
 
         let endpoint = server::endpoint_for(&config::data_dir());
         let served = server::serve(endpoint, host.clone(), shutdown);
+
+        // The browser surface lives in this process: the bundle guard runs
+        // before any port opens, and the pair URL is the one line the
+        // operator needs to open a browser.
+        let _web = if web_enabled {
+            let bind =
+                web_bind.unwrap_or_else(|| openbutler_daemon::web::DEFAULT_WEB_BIND.to_owned());
+            let start_from = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            match openbutler_daemon::web::start_web_server(openbutler_daemon::web::WebOptions {
+                bind,
+                data_dir: config::data_dir(),
+                assets: openbutler_daemon::web::AssetsSource::Default { start_from },
+            }) {
+                Ok(server) => {
+                    println!("pair url: {}", server.pair_url());
+                    Some(server)
+                }
+                Err(error) => {
+                    eprintln!("openbutler-daemon: could not start the web server: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            None
+        };
 
         tokio::select! {
             result = served => match result {

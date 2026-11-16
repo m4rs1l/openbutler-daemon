@@ -64,11 +64,7 @@ impl PairingCodes {
         }
         let submitted = Sha256::digest(code.as_bytes());
         let issued = Sha256::digest(current.code.as_bytes());
-        let matches = submitted
-            .iter()
-            .zip(issued.iter())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0;
+        let matches = super::ct_eq(submitted.as_ref(), issued.as_ref());
         // The lock stays held through the clear: releasing it first would let
         // a concurrent issue() land between the match and the consume, and
         // this redemption would wipe the freshly issued code.

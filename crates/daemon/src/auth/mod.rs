@@ -8,6 +8,8 @@
 pub mod pair;
 pub mod store;
 
+use std::fs;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use pair::PairingCodes;
@@ -36,4 +38,34 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
         out.push_str(&format!("{byte:02x}"));
     }
     out
+}
+
+/// Equal-length, content-oblivious comparison. Every credential check in
+/// the daemon (stored tokens, pairing codes, browser cookies) funnels
+/// through it, so there is exactly one constant-time routine.
+pub(crate) fn ct_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right.iter())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
+/// Writes a credential file 0600 where the platform has the concept
+/// (Unix); Windows keeps the default ACL like the rest of the data
+/// directory.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)
 }

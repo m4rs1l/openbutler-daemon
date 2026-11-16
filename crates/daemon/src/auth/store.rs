@@ -15,7 +15,7 @@ use base64::Engine;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::hex_encode;
+use super::{ct_eq, hex_encode, write_private};
 
 /// One minted token: the id lands in the store, the token never does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,17 +191,6 @@ fn hash_token(salt: &[u8], token: &str) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-/// Equal-length, content-oblivious comparison.
-fn ct_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right.iter())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
-}
-
 /// The creation stamp in the TypeScript format: millisecond precision, Z.
 fn creation_stamp() -> String {
     let now = time::OffsetDateTime::now_utc();
@@ -230,20 +219,4 @@ fn malformed(path: &Path) -> String {
 
 fn entropy_error(error: getrandom::Error) -> String {
     format!("Could not read system entropy for a credential: {error}")
-}
-
-/// 0600 where the platform has the concept (Unix); Windows gets the
-/// default ACL like the rest of the data directory.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)
 }
