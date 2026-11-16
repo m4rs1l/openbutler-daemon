@@ -2,14 +2,16 @@
 //! layer (load, closed parsers, write authority) on top of it.
 //!
 //! Authority map: `transaction` owns lock/journal/atomic writes, `schema`
-//! owns what a document may say, `load` is the only reader of the two files.
-//! Save with its write-authority guards lands with the save slice.
+//! owns what a document may say, `load` is the only reader of the two
+//! files, `save` is the only writer.
 
 mod load;
+mod save;
 pub mod schema;
 pub mod transaction;
 
 pub use load::{load_secrets, load_settings};
+pub use save::save_settings;
 pub use schema::{
     ApprovalMode, CustodianSettings, DaemonSettings, McpServerState, ModalCredentials,
     ProviderModelSpec, ProviderSecrets, ProviderState, RoleBinding, ScheduleState, ScheduleTrigger,
@@ -23,6 +25,43 @@ pub use schema::{
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct SettingsError(pub String);
+
+/// A loaded settings copy. Write authority comes from reading the file
+/// first: the revision records what this copy saw, and `save_settings`
+/// refuses to replace configuration the copy never read — the guard that
+/// stops a defaults object from wiping a live store.
+#[derive(Debug)]
+pub struct LoadedSettings {
+    pub store: SettingsStore,
+    /// `Some(revision)` after a load; `None` only for a store built from
+    /// defaults that has never touched disk.
+    pub(crate) revision: Option<String>,
+}
+
+impl LoadedSettings {
+    /// A store with no write history: it may create an empty machine but
+    /// must never replace files it did not read.
+    pub fn never_loaded(store: SettingsStore) -> Self {
+        Self {
+            store,
+            revision: None,
+        }
+    }
+}
+
+impl std::ops::Deref for LoadedSettings {
+    type Target = SettingsStore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
+    }
+}
+
+impl std::ops::DerefMut for LoadedSettings {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.store
+    }
+}
 
 impl From<std::io::Error> for SettingsError {
     fn from(error: std::io::Error) -> Self {

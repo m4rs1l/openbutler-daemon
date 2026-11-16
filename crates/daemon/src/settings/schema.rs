@@ -320,34 +320,50 @@ impl ApprovalMode {
 }
 
 /// Team membership role (`hub` | `member`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TeamRole {
     Hub,
     Member,
 }
 
 /// One provider entry — the schema owns the field list (`KNOWN_PROVIDER_KEYS`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderState {
     pub enabled: bool,
     pub keys: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub npm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub routing: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model_routing: Option<BTreeMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model_specs: Option<BTreeMap<String, ProviderModelSpec>>,
 }
 
 /// Settings-side description of one custom model.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderModelSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_efforts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
 }
 
@@ -368,8 +384,47 @@ pub enum McpServerState {
     },
 }
 
+/// The wire form is one flat object with a `transport` discriminator; the
+/// `http` variant carries its own `http`/`sse` value, so the tag cannot be
+/// derived and the encoder is written out.
+impl serde::Serialize for McpServerState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        match self {
+            McpServerState::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => {
+                let mut map = serializer.serialize_map(Some(4 + usize::from(cwd.is_some())))?;
+                map.serialize_entry("transport", "stdio")?;
+                map.serialize_entry("command", command)?;
+                map.serialize_entry("args", args)?;
+                map.serialize_entry("env", env)?;
+                if let Some(cwd) = cwd {
+                    map.serialize_entry("cwd", cwd)?;
+                }
+                map.end()
+            }
+            McpServerState::Http {
+                transport,
+                url,
+                headers,
+            } => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("transport", transport)?;
+                map.serialize_entry("url", url)?;
+                map.serialize_entry("headers", headers)?;
+                map.end()
+            }
+        }
+    }
+}
+
 /// One scheduled instruction (`{adapter, options}` trigger).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScheduleState {
     pub id: String,
     pub name: String,
@@ -380,7 +435,8 @@ pub struct ScheduleState {
     pub trigger: ScheduleTrigger,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScheduleTrigger {
     pub adapter: String,
     pub options: Value,
@@ -388,29 +444,36 @@ pub struct ScheduleTrigger {
 
 /// Telegram channel settings. `token_env` is an environment-variable *name*;
 /// a literal token in the document is rejected at parse.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TelegramSettings {
     pub enabled: bool,
     pub token_env: String,
     pub workspace_root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
 }
 
 /// Non-secret team membership. The bearer ticket lives in `config.yaml`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamSettings {
     pub role: TeamRole,
     pub team_name: String,
     pub member_name: String,
     pub hub_host: String,
     pub hub_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hub_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub team_id: Option<String>,
 }
 
 /// Worker caps of the custodian, filled per field when the block is present.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerCaps {
     pub per_session: u64,
     pub per_worker_parent: u64,
@@ -420,18 +483,26 @@ pub struct WorkerCaps {
 
 /// The head's settings, validated where they are read: a wrong value is
 /// refused by name and range instead of silently becoming the default.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CustodianSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_limit_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub report_line: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub report_turn_gap_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub worker_caps: Option<WorkerCaps>,
 }
 
 /// A role → provider/model binding; whole pairs only.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoleBinding {
     pub provider: String,
     pub model: String,
@@ -465,7 +536,7 @@ pub struct SettingsStore {
 
 /// The saved remote-listener preference, validated by the same rule the
 /// daemon binds by.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DaemonSettings {
     pub listen: String,
 }
@@ -506,12 +577,13 @@ pub struct SecretsStore {
     pub modal: Option<ModalCredentials>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ProviderSecrets {
     pub keys: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModalCredentials {
     pub token_id: String,
     pub token_secret: String,
@@ -1545,11 +1617,23 @@ pub fn parse_secrets(doc: &Map<String, Value>) -> Result<SecretsStore, SettingsE
         }
     }
     let mut secrets = SecretsStore::default();
-    if let Some(raw_providers) = doc.get("providers").and_then(as_record) {
-        for (id, raw) in raw_providers {
-            secrets
-                .providers
-                .insert(id.clone(), parse_provider_secrets(raw, id)?);
+    match doc.get("providers") {
+        None => {}
+        Some(value) => {
+            // Unlike the public half (which skips a non-record providers
+            // block), the secret half reads it strictly: `Object.entries`
+            // over a non-record either throws or walks the wrong shape, and
+            // an unreadable store must never count as an empty one.
+            let Some(raw_providers) = as_record(value) else {
+                return Err(SettingsError(
+                    "config providers must be a mapping".to_owned(),
+                ));
+            };
+            for (id, raw) in raw_providers {
+                secrets
+                    .providers
+                    .insert(id.clone(), parse_provider_secrets(raw, id)?);
+            }
         }
     }
     if let Some(value) = doc.get("teamTicket") {
