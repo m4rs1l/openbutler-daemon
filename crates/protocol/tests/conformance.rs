@@ -39,6 +39,12 @@ fn fixture(name: &str) -> &'static str {
         "entries-all-kinds" => include_str!("../conformance/entries-all-kinds.json"),
         "attach-result" => include_str!("../conformance/attach-result.json"),
         "entries-range" => include_str!("../conformance/entries-range.json"),
+        "ledger-event" => include_str!("../conformance/ledger-event.json"),
+        "ledger-event-nulls" => include_str!("../conformance/ledger-event-nulls.json"),
+        "ledger-action" => include_str!("../conformance/ledger-action.json"),
+        "ledger-action-fallbacks" => {
+            include_str!("../conformance/ledger-action-fallbacks.json")
+        }
         "auth-first-frame" => include_str!("../conformance/auth-first-frame.json"),
         other => panic!("unknown fixture {other}"),
     }
@@ -485,4 +491,36 @@ fn auth_first_frame_classification() {
         serde_json::to_value(pair_result).expect("pair success serializes"),
         success["pair"]
     );
+}
+
+// --- Activity ledger ----------------------------------------------------------
+
+#[test]
+fn ledger_feed_rows_round_trip() {
+    use openbutler_protocol::ledger::{LedgerAction, LedgerEvent};
+
+    let event: LedgerEvent = roundtrip(fixture("ledger-event"));
+    assert_eq!(event.id, "evt-01");
+    assert_eq!(event.dedupe_key, "schedule:nightly:manual:aaaabbbb");
+    assert_eq!(event.attempts, 2);
+    assert_eq!(event.error.as_deref(), Some("boom"));
+
+    let sparse: LedgerEvent = roundtrip(fixture("ledger-event-nulls"));
+    assert_eq!(sparse.workspace_root, None);
+    assert_eq!(sparse.error, None);
+    assert_eq!(sparse.payload, serde_json::json!({}));
+
+    let action: LedgerAction = roundtrip(fixture("ledger-action"));
+    assert_eq!(action.request_id, "req-01");
+    assert_eq!(action.name, "shell");
+    assert_eq!(action.event_id, None);
+    assert_eq!(action.effect["change"], "execute");
+
+    // The source casts parse-failure fallbacks straight through; the wire
+    // must keep them as empty values rather than refusing the row.
+    let fallbacks: LedgerAction = roundtrip(fixture("ledger-action-fallbacks"));
+    assert_eq!(fallbacks.effect, serde_json::json!({}));
+    assert_eq!(fallbacks.input, serde_json::json!({}));
+    assert_eq!(fallbacks.result, None);
+    assert_eq!(fallbacks.event_id.as_deref(), Some("evt-01"));
 }

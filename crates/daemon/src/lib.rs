@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod config;
 pub mod dispatch;
+pub mod ledger;
 pub mod listen_target;
 pub mod server;
 pub mod settings;

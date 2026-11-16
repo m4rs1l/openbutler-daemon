@@ -1,0 +1,13 @@
+{
+  "id": "evt-02",
+  "source": "notification",
+  "kind": "telegram.pair",
+  "dedupeKey": "telegram:pair:xyz",
+  "workspaceRoot": null,
+  "occurredAt": "2026-11-16T03:00:00.000Z",
+  "receivedAt": "2026-11-16T03:00:00.500Z",
+  "status": "delivered",
+  "attempts": 0,
+  "payload": {},
+  "error": null
+}

@@ -22,6 +22,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use crate::auth::PairingCodes;
+use crate::ledger;
 use crate::settings::{LoadedSettings, SettingsError, load_settings};
 use crate::state::{self, WorkspaceFilter};
 
@@ -295,6 +296,34 @@ pub fn handle(
             Err(error) => failure(request, error.to_string()),
         },
         "schedule.manage" => schedule::handle_schedule_manage(host, data_dir, request),
+        "ledger.events" => match ledger::list_events(data_dir, request.get("limit")) {
+            Ok(rows) => success(
+                request,
+                serde_json::to_value(rows).unwrap_or_else(|_| json!([])),
+            ),
+            Err(error) => failure(request, error.to_string()),
+        },
+        "ledger.actions" => match ledger::list_actions(data_dir, request.get("limit")) {
+            Ok(rows) => success(
+                request,
+                serde_json::to_value(rows).unwrap_or_else(|_| json!([])),
+            ),
+            Err(error) => failure(request, error.to_string()),
+        },
+        "events.retry" => {
+            let event_id = match openbutler_protocol::payload::require_string(
+                request.get("eventId"),
+                "eventId",
+                64,
+            ) {
+                Ok(id) => id,
+                Err(error) => return failure(request, error.to_string()),
+            };
+            match ledger::retry_event(data_dir, &event_id) {
+                Ok(queued) => success(request, json!({ "queued": queued })),
+                Err(error) => failure(request, error.to_string()),
+            }
+        }
         other => failure(request, format!("Unknown action: {other}")),
     }
 }
