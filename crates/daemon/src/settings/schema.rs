@@ -201,7 +201,7 @@ fn is_header_name(value: &str) -> bool {
 }
 
 /// `path.isAbsolute` on the host platform (the daemon loads its own file).
-fn is_absolute_path(value: &str) -> bool {
+pub(crate) fn is_absolute_path(value: &str) -> bool {
     #[cfg(windows)]
     {
         let bytes = value.as_bytes();
@@ -1259,7 +1259,7 @@ fn environment_references(
     Ok(out)
 }
 
-fn parse_schedule_state(raw: &Value) -> Result<ScheduleState, SettingsError> {
+pub(crate) fn parse_schedule_state(raw: &Value) -> Result<ScheduleState, SettingsError> {
     let Some(record) = as_record(raw) else {
         return Err(SettingsError("A Schedule must be a mapping.".to_owned()));
     };

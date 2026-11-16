@@ -1,0 +1,578 @@
+//! `schedule.manage`: the settings-only half of the schedule actions.
+//!
+//! Source: `daemon-host.ts` `schedule.manage` → `schedule-service.ts`
+//! `executeBackground` (read 2026-11-16). This slice owns `capabilities`
+//! and the CRUD that persists through settings; `run`, `list` and `log`
+//! need the ledger and scheduler runtime and are not implemented here.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use serde_json::{Map, Value, json};
+
+use crate::dispatch::{envelope_failure, envelope_success};
+use crate::settings::{LoadedSettings, SettingsError, load_settings, save_settings, schema};
+
+use openbutler_protocol::payload::require_string;
+use openbutler_protocol::{DaemonRequest, DaemonResponse};
+
+/// The capability list, verbatim: adapter ids, descriptions, option
+/// shapes — what a client shows before offering a trigger form.
+const CAPABILITIES: [&str; 7] = [
+    "manual",
+    "interval",
+    "at",
+    "window",
+    "daily",
+    "filesystem",
+    "memory_pressure",
+];
+
+/// The single dispatch point for `schedule.manage`.
+pub(crate) fn handle_schedule_manage(
+    host: &crate::dispatch::Host,
+    data_dir: &Path,
+    request: &DaemonRequest,
+) -> DaemonResponse {
+    let Some(input) = request.get("input").and_then(Value::as_object) else {
+        return fail(request, "input must be an object.".to_owned());
+    };
+    let action = input_action(input);
+    if action == "capabilities" {
+        return success(request, json!({ "adapters": capabilities() }));
+    }
+    // The runtime half needs the ledger and scheduler; refusing by name
+    // keeps the gap visible instead of answering with a wrong shape.
+    if matches!(action.as_str(), "run" | "list" | "log") {
+        return fail(
+            request,
+            format!("Schedule action `{action}` needs the scheduler runtime (not implemented)."),
+        );
+    }
+
+    let mut loaded = match load_settings(data_dir) {
+        Ok(loaded) => loaded,
+        Err(error) => return fail(request, error.to_string()),
+    };
+
+    match action.as_str() {
+        "add" | "update" => match add_or_update(&mut loaded, input, data_dir) {
+            Ok(schedule) => {
+                if let Err(error) = persist(host, data_dir, &mut loaded) {
+                    return fail(request, error.to_string());
+                }
+                success(
+                    request,
+                    json!({ "status": "completed", "schedule": schedule, "saved": true }),
+                )
+            }
+            Err(error) => fail(request, error),
+        },
+        "remove" | "enable" | "disable" => {
+            let schedule_id = match require_string(input.get("scheduleId"), "scheduleId", 64) {
+                Ok(id) => id,
+                Err(error) => return fail(request, error.to_string()),
+            };
+            let Some(index) = loaded
+                .store
+                .schedules
+                .iter()
+                .position(|candidate| candidate.id == schedule_id)
+            else {
+                return fail(request, "Schedule does not exist.".to_owned());
+            };
+            match action.as_str() {
+                "remove" => {
+                    loaded.store.schedules.remove(index);
+                }
+                "enable" => loaded.store.schedules[index].enabled = true,
+                _ => loaded.store.schedules[index].enabled = false,
+            }
+            if let Err(error) = persist(host, data_dir, &mut loaded) {
+                return fail(request, error.to_string());
+            }
+            success(
+                request,
+                json!({ "status": "completed", "scheduleId": schedule_id, "saved": true }),
+            )
+        }
+        other => fail(request, format!("Unknown schedule action: {other}")),
+    }
+}
+
+/// `String(input.action ?? '')` — a missing action is the empty string,
+/// which falls through every branch below and names itself.
+fn input_action(input: &Map<String, Value>) -> String {
+    match input.get("action") {
+        None => String::new(),
+        Some(Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// The seven adapters with their verbatim descriptions and option shapes.
+fn capabilities() -> Vec<Value> {
+    vec![
+        json!({
+            "adapter": "manual",
+            "description": "Run only on an explicit request; no automatic observations.",
+            "options": {}
+        }),
+        json!({
+            "adapter": "interval",
+            "description": "Run at a recurring fixed period. True periods only, never wall-clock times.",
+            "options": { "everySeconds": "integer, 10-31536000" }
+        }),
+        json!({
+            "adapter": "at",
+            "description": "Run once at a server-local wall time.",
+            "options": { "at": "ISO timestamp, server-local (an explicit offset is converted at creation)" }
+        }),
+        json!({
+            "adapter": "window",
+            "description": "Run once at the earliest server-local time in a window; a missed window runs late, never skipped.",
+            "options": {
+                "from": "server-local ISO timestamp",
+                "to": "server-local ISO timestamp, later than from"
+            }
+        }),
+        json!({
+            "adapter": "daily",
+            "description": "Run at a wall-clock time, optionally on selected weekdays. The never-drifting way to say \"every night at 02:00\".",
+            "options": {
+                "at": "\"HH:MM\", server-local",
+                "days": "optional list of mon,tue,wed,thu,fri,sat,sun; absent means every day"
+            }
+        }),
+        json!({
+            "adapter": "filesystem",
+            "description": "Observe metadata changes in an explicitly selected file or directory; file content is not collected.",
+            "options": {
+                "path": "absolute path",
+                "recursive": "optional boolean, default true",
+                "debounceSeconds": "optional integer, 1-60, default 5"
+            }
+        }),
+        json!({
+            "adapter": "memory_pressure",
+            "description": "Observe a sustained free-memory threshold only when this schedule is explicitly added.",
+            "options": {
+                "usedPercent": "integer, 50-99",
+                "sampleSeconds": "optional integer, 10-3600, default 30",
+                "durationSeconds": "optional integer, 10-86400, default 60"
+            }
+        }),
+    ]
+    .into_iter()
+    .zip(CAPABILITIES)
+    .map(|(entry, adapter)| {
+        assert_eq!(
+            entry["adapter"], adapter,
+            "capability order stays aligned with the contract"
+        );
+        entry
+    })
+    .collect()
+}
+
+/// add/update: parse, validate, canonicalise, insert or replace — the
+/// source order, so the first failing rule is the message the client sees.
+fn add_or_update(
+    loaded: &mut LoadedSettings,
+    input: &Map<String, Value>,
+    data_dir: &Path,
+) -> Result<Value, String> {
+    let _ = data_dir;
+    let Some(schedule_input) = input.get("schedule").and_then(Value::as_object) else {
+        return Err("schedule must be an object.".to_owned());
+    };
+    let workspace_root = input.get("workspaceRoot").and_then(Value::as_str);
+    let mut raw = schedule_input.clone();
+    if raw.get("workspaceRoot").is_none() {
+        let Some(root) = workspace_root else {
+            return Err(
+                "Choose a workspace with --workspace or set workspaceRoot in the schedule."
+                    .to_owned(),
+            );
+        };
+        raw.insert("workspaceRoot".to_owned(), Value::String(root.to_owned()));
+    }
+
+    let action_is_add = input.get("action").and_then(Value::as_str) == Some("add");
+    let has_id = raw
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty());
+    if action_is_add && !has_id {
+        let name = raw
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let taken: BTreeSet<String> = loaded
+            .store
+            .schedules
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect();
+        raw.insert(
+            "id".to_owned(),
+            Value::String(generate_schedule_id(&name, &taken)?),
+        );
+    }
+    if raw.get("originSessionId").is_none() {
+        let existing = if action_is_add {
+            None
+        } else {
+            raw.get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| loaded.store.schedules.iter().find(|c| c.id == id))
+        };
+        // No sender session on the wire in this build: the source falls
+        // back to `senderSessionId ?? ''`, and there is no sender here.
+        let origin = existing
+            .map(|schedule| schedule.origin_session_id.clone())
+            .unwrap_or_default();
+        raw.insert("originSessionId".to_owned(), Value::String(origin));
+    }
+
+    let record: Map<String, Value> = raw;
+    let mut schedule =
+        schema::parse_schedule_state(&Value::Object(record)).map_err(|error| error.0)?;
+    schedule.trigger = normalize_schedule_trigger(schedule.trigger);
+    validate_schedule_trigger(&schedule.trigger)?;
+    schedule.workspace_root = canonical_scope_root(&schedule.workspace_root)?;
+
+    let index = loaded
+        .store
+        .schedules
+        .iter()
+        .position(|candidate| candidate.id == schedule.id);
+    match (action_is_add, index) {
+        (true, Some(_)) => return Err("A schedule with that id already exists.".to_owned()),
+        (false, None) => return Err("Schedule does not exist.".to_owned()),
+        (true, None) => loaded.store.schedules.push(schedule.clone()),
+        (false, Some(at)) => loaded.store.schedules[at] = schedule.clone(),
+    }
+    serde_json::to_value(&schedule).map_err(|error| error.to_string())
+}
+
+/// Save through the transaction boundary, then refresh the host's live
+/// copy — the same pairing the `permissions.set-mode` action uses.
+fn persist(
+    host: &crate::dispatch::Host,
+    data_dir: &Path,
+    loaded: &mut LoadedSettings,
+) -> Result<(), SettingsError> {
+    save_settings(data_dir, loaded)?;
+    host.reload_settings(data_dir)
+}
+
+/// `generateScheduleId`: readable slug plus four hex characters, never
+/// colliding with a taken id.
+fn generate_schedule_id(name: &str, taken: &BTreeSet<String>) -> Result<String, String> {
+    let mut slug = String::new();
+    let mut last_dash = true;
+    for ch in name.to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    slug.truncate(32);
+    let slug = if slug.is_empty() { "schedule" } else { &slug };
+    loop {
+        let mut bytes = [0u8; 2];
+        // An OS randomness failure propagates instead of inventing an id
+        // from a weaker source.
+        getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+        let id = format!("{slug}-{:04x}", u16::from_be_bytes(bytes));
+        if !taken.contains(&id) {
+            return Ok(id);
+        }
+    }
+}
+
+/// Normalise a submitted trigger to its stored form: an ISO value that
+/// carries an explicit offset becomes a server-local `YYYY-MM-DDTHH:MM`,
+/// so every later reader compares like with like.
+fn normalize_schedule_trigger(mut trigger: schema::ScheduleTrigger) -> schema::ScheduleTrigger {
+    if let Value::Object(options) = &mut trigger.options {
+        for key in ["at", "from", "to"] {
+            let Some(Value::String(text)) = options.get(key).cloned() else {
+                continue;
+            };
+            if !has_offset(text.as_str()) {
+                continue;
+            }
+            let Some(parsed) = parse_instant(text.as_str()) else {
+                continue;
+            };
+            let local = parsed.with_timezone(&Local);
+            options.insert(
+                key.to_owned(),
+                Value::String(local.format("%Y-%m-%dT%H:%M").to_string()),
+            );
+        }
+    }
+    trigger
+}
+
+/// The source regex `(?:Z|[+-]\d{2}:?\d{2})$`.
+fn has_offset(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.last() == Some(&b'Z') {
+        return true;
+    }
+    bytes.len() >= 6
+        && matches!(bytes[bytes.len() - 6], b'+' | b'-')
+        && bytes[bytes.len() - 5..].iter().all(u8::is_ascii_digit)
+}
+
+/// `Date.parse` for the formats a schedule actually carries: RFC 3339
+/// with an offset, or a naive local datetime. Anything else is not a
+/// timestamp here.
+fn parse_instant(value: &str) -> Option<DateTime<Local>> {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.with_timezone(&Local));
+    }
+    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M"] {
+        if let Ok(parsed) = NaiveDateTime::parse_from_str(value, format) {
+            return Local.from_local_datetime(&parsed).single();
+        }
+    }
+    None
+}
+
+/// Adapter-specific trigger validation with the source's exact messages.
+fn validate_schedule_trigger(trigger: &schema::ScheduleTrigger) -> Result<(), String> {
+    let options = match &trigger.options {
+        Value::Object(options) => options.clone(),
+        _ => {
+            return Err(format!(
+                "Unknown background trigger adapter: {}",
+                trigger.adapter
+            ));
+        }
+    };
+    let allowed: &[&[&str]] = match trigger.adapter.as_str() {
+        "manual" => &[&[]],
+        "interval" => &[&["everySeconds"]],
+        "at" => &[&["at"]],
+        "window" => &[&["from", "to"]],
+        "daily" => &[&["at", "days"]],
+        "filesystem" => &[&["path", "recursive", "debounceSeconds"]],
+        "memory_pressure" => &[&["usedPercent", "sampleSeconds", "durationSeconds"]],
+        _ => {
+            return Err(format!(
+                "Unknown background trigger adapter: {}",
+                trigger.adapter
+            ));
+        }
+    };
+    let fields = allowed[0];
+    for key in options.keys() {
+        if !fields.contains(&key.as_str()) {
+            return Err(format!(
+                "{}.{key} is not a trigger option.",
+                trigger.adapter
+            ));
+        }
+    }
+
+    match trigger.adapter.as_str() {
+        "interval" => {
+            integer_in_range(&options, "everySeconds", 10, 31_536_000)?;
+        }
+        "at" => {
+            if !options
+                .get("at")
+                .and_then(Value::as_str)
+                .is_some_and(|value| parse_instant(value).is_some())
+            {
+                return Err(
+                    "at must be a server-local ISO timestamp (an explicit offset is converted at creation)."
+                        .to_owned(),
+                );
+            }
+        }
+        "window" => {
+            let from = options.get("from").and_then(Value::as_str);
+            let to = options.get("to").and_then(Value::as_str);
+            let from_ms = from
+                .and_then(parse_instant)
+                .map(|value| value.timestamp_millis());
+            let to_ms = to
+                .and_then(parse_instant)
+                .map(|value| value.timestamp_millis());
+            if from_ms.is_none() {
+                return Err("window.from must be a server-local ISO timestamp.".to_owned());
+            }
+            if to_ms.is_none() {
+                return Err("window.to must be a server-local ISO timestamp.".to_owned());
+            }
+            if to_ms <= from_ms {
+                return Err("window.to must be later than window.from.".to_owned());
+            }
+        }
+        "daily" => {
+            let at_ok = options
+                .get("at")
+                .and_then(Value::as_str)
+                .is_some_and(is_hh_mm);
+            if !at_ok {
+                return Err("daily.at must be \"HH:MM\" in server-local wall time.".to_owned());
+            }
+            if let Some(days) = options.get("days") {
+                let list = days.as_array().filter(|list| !list.is_empty());
+                let weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+                let all_valid = list.is_some_and(|list| {
+                    list.iter().all(|day| {
+                        day.as_str()
+                            .is_some_and(|day| weekdays.contains(&day.to_lowercase().as_str()))
+                    })
+                });
+                if !all_valid {
+                    return Err(
+                        "daily.days must be a non-empty list of mon,tue,wed,thu,fri,sat,sun."
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        "filesystem" => {
+            let path_ok = options
+                .get("path")
+                .and_then(Value::as_str)
+                .is_some_and(schema::is_absolute_path);
+            if !path_ok {
+                return Err("filesystem.path must be an absolute path.".to_owned());
+            }
+            if let Some(recursive) = options.get("recursive")
+                && !recursive.is_boolean()
+            {
+                return Err("filesystem.recursive must be a boolean.".to_owned());
+            }
+            if options.contains_key("debounceSeconds") {
+                integer_in_range(&options, "debounceSeconds", 1, 60)?;
+            }
+        }
+        "memory_pressure" => {
+            integer_in_range(&options, "usedPercent", 50, 99)?;
+            if options.contains_key("sampleSeconds") {
+                integer_in_range(&options, "sampleSeconds", 10, 3_600)?;
+            }
+            if options.contains_key("durationSeconds") {
+                integer_in_range(&options, "durationSeconds", 10, 86_400)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// `requireInteger` with the source's single message shape.
+fn integer_in_range(
+    options: &Map<String, Value>,
+    name: &str,
+    min: u64,
+    max: u64,
+) -> Result<(), String> {
+    let ok = options.get(name).is_some_and(|value| {
+        value
+            .as_u64()
+            .is_some_and(|number| (min..=max).contains(&number))
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name} must be an integer between {min} and {max}."
+        ))
+    }
+}
+
+/// `^([01]\d|2[0-3]):[0-5]\d$`
+fn is_hh_mm(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 5
+        && bytes[2] == b':'
+        && bytes.iter().filter(|byte| byte.is_ascii_digit()).count() == 4
+        && (bytes[0] == b'0' || bytes[0] == b'1' || bytes[0] == b'2')
+        && (bytes[0] != b'2' || bytes[1] <= b'3')
+        && bytes[1].is_ascii_digit()
+        && bytes[3] <= b'5'
+        && bytes[4] <= b'9'
+}
+
+/// `canonicalScopeRoot`: expand `~`, resolve against the process
+/// directory, follow symlinks, require a directory. The single path
+/// normalizer for schedule roots.
+fn canonical_scope_root(path: &str) -> Result<String, String> {
+    let requested = path.trim();
+    if requested.is_empty() {
+        return Err("Workspace path cannot be empty.".to_owned());
+    }
+    let home = home_dir();
+    let expanded = if requested == "~" {
+        home.clone()
+    } else if let Some(rest) = requested
+        .strip_prefix("~/")
+        .or_else(|| requested.strip_prefix("~\\"))
+    {
+        format!("{home}{rest}")
+    } else {
+        requested.to_owned()
+    };
+    let absolute = if schema::is_absolute_path(&expanded) {
+        std::path::PathBuf::from(expanded)
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(expanded)
+    };
+    let real = std::fs::canonicalize(&absolute).map_err(|error| error.to_string())?;
+    let real = strip_windows_prefix(&real);
+    if !real.is_dir() {
+        return Err(format!(
+            "Workspace path is not a directory: {}",
+            real.display()
+        ));
+    }
+    Ok(real.to_string_lossy().into_owned())
+}
+
+/// The home directory the source gets from `os.homedir()`.
+fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
+}
+
+/// `fs::canonicalize` on Windows returns the `\\?\` extended form;
+/// the source's `realpathSync` never does.
+fn strip_windows_prefix(path: &Path) -> std::path::PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return std::path::PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+fn success(request: &DaemonRequest, result: Value) -> DaemonResponse {
+    envelope_success(&request.id, result)
+}
+
+fn fail(request: &DaemonRequest, error: String) -> DaemonResponse {
+    envelope_failure(&request.id, &error)
+}

@@ -7,6 +7,8 @@
 //! the envelope rules, and answered as one protocol response — no other
 //! module constructs responses.
 
+mod schedule;
+
 use std::path::Path;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -251,12 +253,48 @@ pub fn handle(
             ),
             Err(error) => failure(request, error.to_string()),
         },
+        "permissions.set-mode" => {
+            // One message covers every rejected value, like the source
+            // check: no typeof branch, four accepted spellings.
+            let mode = request.get("mode").and_then(|value| value.as_str());
+            let canonical = match mode {
+                Some("workspace") => Some(crate::settings::ApprovalMode::Workspace),
+                Some("auto-review") => Some(crate::settings::ApprovalMode::AutoReview),
+                Some("full-access") => Some(crate::settings::ApprovalMode::FullAccess),
+                // The original v1 value migrates to the folder-scoped
+                // default on the way into the store.
+                Some("ask") => Some(crate::settings::ApprovalMode::Workspace),
+                _ => None,
+            };
+            let Some(canonical) = canonical else {
+                return failure(
+                    request,
+                    "mode must be workspace, auto-review, or full-access.".to_owned(),
+                );
+            };
+            // `applyApprovalMode(mode, persist)`: load → mutate → save,
+            // then push to the live runtimes — this build has no runtimes
+            // yet, so the live half is the host's settings copy.
+            let mut loaded = match crate::settings::load_settings(data_dir) {
+                Ok(loaded) => loaded,
+                Err(error) => return failure(request, error.to_string()),
+            };
+            loaded.store.approval_mode = canonical;
+            if let Err(error) = crate::settings::save_settings(data_dir, &mut loaded) {
+                return failure(request, error.to_string());
+            }
+            if let Err(error) = host.reload_settings(data_dir) {
+                return failure(request, error.to_string());
+            }
+            success(request, json!({ "mode": canonical.as_str() }))
+        }
         "pair.create" => match host.pairing().issue(crate::auth::now_ms()) {
             Ok((code, expires_at)) => {
                 success(request, json!({ "code": code, "expiresAt": expires_at }))
             }
             Err(error) => failure(request, error.to_string()),
         },
+        "schedule.manage" => schedule::handle_schedule_manage(host, data_dir, request),
         other => failure(request, format!("Unknown action: {other}")),
     }
 }
