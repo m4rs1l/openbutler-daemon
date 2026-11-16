@@ -20,7 +20,7 @@ pub const DEFAULT_ENTRIES_LIMIT: u64 = 50;
 
 /// `before` accepts 0..=Number.MAX_SAFE_INTEGER (2^53-1).
 const MAX_BEFORE: u64 = 9_007_199_254_740_991;
-/// Byte caps from the legacy `requireString` calls.
+/// Byte caps of the payload ids.
 const SESSION_ID_MAX_BYTES: usize = 64;
 const ATTACHMENT_ID_MAX_BYTES: usize = 128;
 
@@ -39,15 +39,14 @@ pub fn find_attachment_id(payload: &Map<String, Value>) -> Result<String, Valida
 }
 
 /// `session.entries-range` payload after validation: `before` is `None` when
-/// the client asked for the tail (the answer substitutes `total`, as in the
-/// legacy `Math.min`).
+/// the client asked for the tail (the answer substitutes `total`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntriesRangeRequest {
     pub before: Option<u64>,
     pub limit: u64,
 }
 
-/// Parses the range payload with the legacy rules and defaults. Extra keys
+/// Parses the range payload with the fixed rules and defaults. Extra keys
 /// are ignored, like the TypeScript index signature.
 pub fn entries_range(payload: &Map<String, Value>) -> Result<EntriesRangeRequest, ValidationError> {
     let before = match payload.get("before") {
@@ -83,7 +82,7 @@ pub struct InlineAttachment {
 }
 
 /// The host-side attachment lookup: user entries only, exact id, and only a
-/// type the browser can render inline (the legacy flatMap + find over
+/// type the browser can render inline (the flatMap + find over
 /// `INLINE_IMAGE_MEDIA_TYPES` — a pdf never resolves whatever its id).
 pub fn find_inline_attachment<'a>(
     entries: &'a [SessionEntry],

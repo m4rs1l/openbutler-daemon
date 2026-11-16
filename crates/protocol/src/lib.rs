@@ -34,10 +34,7 @@ pub use runtime::status;
 pub use session::{attach, entry};
 
 pub use auth::{AUTH_FAILED, PAIR_FAILED, REMOTE_FIRST_FRAME_REFUSED};
-pub use constants::{
-    DAEMON_PROTOCOL_VERSION, INLINE_IMAGE_MEDIA_TYPES, MAX_DAEMON_FRAME_BYTES,
-    PREVIOUS_DAEMON_PROTOCOL_VERSION,
-};
+pub use constants::{DAEMON_PROTOCOL_VERSION, INLINE_IMAGE_MEDIA_TYPES, MAX_DAEMON_FRAME_BYTES};
 pub use entry::{SessionEntry, SessionEntryMeta, SessionProject};
 pub use envelope::{
     DaemonEvent, DaemonNotification, DaemonRequest, DaemonResponse, validate_request,

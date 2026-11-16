@@ -5,13 +5,7 @@
 //! production.
 
 /// Wire version carried by every frame (TS `DAEMON_PROTOCOL_VERSION`).
-///
-/// Version 1 is the pre-chat protocol: the control client still probes it
-/// against an older host and synthesizes a `legacy` status from the answer.
 pub const DAEMON_PROTOCOL_VERSION: u32 = 2;
-
-/// The only previous version worth probing (`daemon.ts` legacy probe).
-pub const PREVIOUS_DAEMON_PROTOCOL_VERSION: u32 = 1;
 
 /// Hard frame cap in both directions (TS `MAX_DAEMON_FRAME_BYTES`).
 /// Exceeding it destroys the connection with a named error; frames are never

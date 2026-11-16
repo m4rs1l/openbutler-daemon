@@ -2,9 +2,9 @@
 //! State-layer contract tests: session paths, header-only reads, listing.
 //!
 //! Fail-before: these run against fixture directories built per test, so the
-//! legacy on-disk protocol (pretty JSON, boundary marker, id verification,
-//! denormalised-field derivation, legacy flat fallback, custodian exclusion,
-//! ordering, damage tolerance) is pinned without touching any real install.
+//! record protocol (pretty JSON, boundary marker, id verification,
+//! denormalised-field derivation, custodian exclusion, ordering, damage
+//! tolerance) is pinned without touching any real install.
 
 use std::fs;
 use std::path::PathBuf;
@@ -88,19 +88,20 @@ fn list_reads_headers_orders_and_filters() {
 }
 
 #[test]
-fn legacy_flat_file_is_listed_as_fallback() {
-    let root = temp_root("legacy");
+fn a_flat_layout_file_is_not_a_session() {
+    let root = temp_root("flat");
     let id = uuid(5);
     fs::write(
         root.join("sessions").join(format!("{id}.json")),
-        pretty_session(&id, None, "Legacy chat", true),
+        pretty_session(&id, None, "Stray file", true),
     )
     .unwrap();
 
-    let sessions = state::list_sessions(&root, &WorkspaceFilter::Any).expect("legacy listing");
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].id, id);
-    assert_eq!(sessions[0].title, "Legacy chat");
+    let sessions = state::list_sessions(&root, &WorkspaceFilter::Any).expect("listing");
+    assert!(
+        sessions.is_empty(),
+        "one layout only: sessions/<id>/<id>.json"
+    );
 
     fs::remove_dir_all(&root).ok();
 }

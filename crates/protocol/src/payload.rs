@@ -1,4 +1,4 @@
-//! Payload key rules shared by every dispatched action: the legacy
+//! Payload key rules shared by every dispatched action: the fixed
 //! `requireString` / `requireInteger` helpers from `daemon-host.ts` L4210 and
 //! L4216 (read 2026-11-16).
 //!

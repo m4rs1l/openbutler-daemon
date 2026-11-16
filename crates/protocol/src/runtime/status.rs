@@ -35,7 +35,6 @@ pub enum TelegramState {
 /// Answer to a `status` request on a current host (TS `DaemonStatus`).
 ///
 /// Field semantics worth keeping:
-/// - `legacy`: a newer client discovered an older still-running host.
 /// - `unresponsive`: the pid is alive but IPC is dead — counts are unknown,
 ///   they are *not* zero.
 /// - `entry`: the host's entry script (source or bundle) for vintage checks.
@@ -52,9 +51,6 @@ pub struct DaemonStatus {
     pub schedules: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram: Option<TelegramStatus>,
-    /// Present only as `true` when a newer client found an older host.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy: Option<bool>,
     /// Present only as `true`; counts are unknown in this state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unresponsive: Option<bool>,
@@ -66,34 +62,4 @@ pub struct DaemonStatus {
         skip_serializing_if = "trio_absent"
     )]
     pub build_id: Option<Option<String>>,
-}
-
-/// The pre-chat (protocol v1) status shape, accepted by the legacy probe and
-/// folded into a [`DaemonStatus`] with `legacy: true`
-/// (`daemon.ts` `legacyStatusFromResponse`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyV1Status {
-    pub pid: u32,
-    pub started_at: String,
-    pub workspace_root: String,
-    pub session_id: String,
-}
-
-impl LegacyV1Status {
-    /// Folds the v1 answer into the current status shape.
-    pub fn into_status(self) -> DaemonStatus {
-        DaemonStatus {
-            pid: self.pid,
-            started_at: self.started_at,
-            workspace_count: 1,
-            connected_clients: 0,
-            schedules: None,
-            telegram: None,
-            legacy: Some(true),
-            unresponsive: None,
-            entry: None,
-            build_id: None,
-        }
-    }
 }

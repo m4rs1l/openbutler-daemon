@@ -6,5 +6,5 @@
 pub mod status;
 pub mod view;
 
-pub use status::{DaemonStatus, LegacyV1Status, TelegramStatus};
+pub use status::{DaemonStatus, TelegramStatus};
 pub use view::{ApprovalMode, LocalClientKind, ReasoningLabel, ReasoningSupport, RuntimeViewData};

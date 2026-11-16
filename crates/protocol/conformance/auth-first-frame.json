@@ -16,7 +16,7 @@
       "expect": { "kind": "refused", "id": "s1" }
     },
     {
-      "name": "legacy version refused",
+      "name": "wrong version refused",
       "frame": { "version": 1, "id": "a2", "action": "auth", "token": "obt_x" },
       "expect": { "kind": "refused", "id": "a2" }
     },

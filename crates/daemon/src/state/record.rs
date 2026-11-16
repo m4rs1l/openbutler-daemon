@@ -1,10 +1,10 @@
 //! Where a saved record lives and how it is read whole.
 //!
-//! One authority for the two on-disk layouts (the current per-directory file
-//! and the legacy flat file — the `savedSessionFilePath` rule), for parsing a
-//! complete record with its id verified against the file's own contents, and
-//! for deriving the denormalised fields a record predating them lacks. The
-//! windowed front-of-file read lives in `header`; the picker query in `list`.
+//! One authority for the single on-disk layout (`sessions/<id>/<id>.json`),
+//! for parsing a complete record with its id verified against the file's own
+//! contents, and for deriving the denormalised fields a record predating them
+//! lacks. The windowed front-of-file read lives in `header`; the picker query
+//! in `list`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use openbutler_protocol::SessionView;
 use openbutler_protocol::entry::SessionEntry;
 use openbutler_protocol::session::SessionMeta;
 
-use super::paths::{session_directory, sessions_directory};
+use super::paths::session_directory;
 
 /// A record on disk: header fields plus the transcript. The `conversation`
 /// arrays stay an AI-SDK concern and are ignored on read.
@@ -36,7 +36,7 @@ pub(crate) fn parse_record(text: &str) -> Option<SessionRecord> {
 }
 
 /// Fills the four denormalised fields from `entries` when the record
-/// predates them — the legacy preview derivation, in one place for the header
+/// predates them — the preview derivation, in one place for the header
 /// read and the full view alike.
 pub(crate) fn derive_meta(meta: SessionMeta, entries: &[SessionEntry]) -> SessionMeta {
     let has_user_message = meta
@@ -84,19 +84,13 @@ pub fn read_session_view(path: &Path, id: &str) -> Option<SessionView> {
 }
 
 /// The record's file for an id — `None` for an invalid id, a missing file,
-/// or a symlink (the escape rule). One location rule for both eras: the
-/// current per-directory file when it is a regular file, otherwise the
-/// legacy flat file; a symlinked candidate counts as absent so a valid
-/// fallback still wins.
+/// or a symlink (the escape rule). One layout, one rule: the record lives at
+/// `sessions/<id>/<id>.json` and nowhere else.
 pub fn record_path(data_root: &Path, id: &str) -> Option<PathBuf> {
     let current = session_directory(data_root, id)
         .ok()?
         .join(format!("{id}.json"));
-    if is_regular_file(&current) {
-        return Some(current);
-    }
-    let flat = sessions_directory(data_root).join(format!("{id}.json"));
-    is_regular_file(&flat).then_some(flat)
+    is_regular_file(&current).then_some(current)
 }
 
 /// Regular files only: symlinks are refused (the escape rule).
@@ -104,7 +98,7 @@ fn is_regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
-// --- Denormalised-field derivation (the legacy preview helpers) -------------
+// --- Denormalised-field derivation (the preview helpers) ---------------------
 
 fn is_user_entry(entry: &SessionEntry) -> bool {
     matches!(entry, SessionEntry::User { .. })
@@ -125,7 +119,7 @@ fn normalize_preview(raw: &str, limit: usize) -> String {
     slice_utf16(&collapsed, limit)
 }
 
-/// Slices by UTF-16 units so the limit matches the legacy `String.slice`
+/// Slices by UTF-16 units so the limit matches the `String.slice`
 /// boundary without splitting an astral character.
 fn slice_utf16(value: &str, units: usize) -> String {
     let mut out = String::new();

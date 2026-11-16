@@ -28,14 +28,14 @@ pub enum ValidationError {
     #[error("Response carries neither a result nor an error.")]
     MalformedResponse,
     /// A payload string failed `requireString`: missing, empty, not a string,
-    /// or over the byte cap — one legacy message for all four.
+    /// or over the byte cap — one fixed message for all four.
     #[error("{name} must be a non-empty string under {max_bytes} bytes.")]
     PayloadString {
         name: &'static str,
         max_bytes: usize,
     },
     /// A payload number failed `requireInteger`: not a JS integer or outside
-    /// the inclusive range — one legacy message for every failure mode.
+    /// the inclusive range — one fixed message for every failure mode.
     #[error("{name} must be an integer between {min} and {max}.")]
     PayloadInteger {
         name: &'static str,

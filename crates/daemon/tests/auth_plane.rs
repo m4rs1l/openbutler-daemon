@@ -3,7 +3,7 @@
 //! `pair.create` action, and the remote TCP admission gate.
 //!
 //! Fail-before: these run against scratch data directories and loopback
-//! listeners, so the legacy rules (salted-hash store that never holds the
+//! listeners, so the rules (salted-hash store that never holds the
 //1 plaintext, fail-closed verification, single-use pairing codes, the three
 //! fixed refusals, the 10 s silent-socket deadline) are pinned without
 //! touching any real install or port.

@@ -10,16 +10,16 @@ use super::header::{SessionHeader, read_session_header};
 use super::paths::{CUSTODIAN_SESSION_ID, is_session_id, same_path, sessions_directory};
 use super::record::record_path;
 
-/// Workspace scoping of the list, mirroring the legacy argument triple:
+/// Workspace scoping of the list, the argument triple:
 /// no filter / only sessions without a workspace / exact path match.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum WorkspaceFilter {
     /// No scope: every chat in the data directory.
     #[default]
     Any,
-    /// Legacy `null`: only sessions that never declared a workspace.
+    /// The null variant: only sessions that never declared a workspace.
     Rootless,
-    /// Legacy string: path-equal workspace (case-insensitive on Windows).
+    /// The string variant: path-equal workspace (case-insensitive on Windows).
     Exactly(String),
 }
 
@@ -87,9 +87,9 @@ struct SessionCandidate {
     path: PathBuf,
 }
 
-/// Session records on disk: current `sessions/<id>/<id>.json` with the legacy
-/// flat `sessions/<id>.json` as read-only fallback. Directory entries are
-/// accepted only as real, non-symlink files inside the sessions root.
+/// Session records on disk: `sessions/<id>/<id>.json`, one layout. Directory
+/// entries are accepted only as real, non-symlink files inside the sessions
+/// root; anything else in the directory is not a session.
 fn session_file_candidates(data_root: &Path) -> Result<Vec<SessionCandidate>, StateError> {
     let sessions_root = sessions_directory(data_root);
     let entries = match fs::read_dir(&sessions_root) {
@@ -104,8 +104,6 @@ fn session_file_candidates(data_root: &Path) -> Result<Vec<SessionCandidate>, St
         let name = entry.file_name().to_string_lossy().into_owned();
         if is_session_id(&name) {
             ids.push(name);
-        } else if let Some(id) = name.strip_suffix(".json").filter(|id| is_session_id(id)) {
-            ids.push(id.to_owned());
         }
     }
     ids.sort();

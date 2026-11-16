@@ -13,10 +13,8 @@ use base64::Engine;
 
 use crate::auth::{ct_eq, write_private};
 
-/// The cookie that marks a browser as paired, and the pre-rename name
-/// still accepted so existing browsers stay paired.
+/// The cookie that marks a browser as paired.
 pub const SESSION_COOKIE: &str = "openbutler_web";
-pub const LEGACY_SESSION_COOKIE: &str = "ranite_web";
 
 /// 30 days, in seconds — the cookie's `Max-Age`.
 pub const SESSION_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -68,8 +66,7 @@ impl PairToken {
 
 /// The persistent browser session token: loaded from the data dir when one
 /// exists, minted and stored otherwise. A read-only data directory still
-/// works — it just forgets pairings on restart, exactly like the legacy
-/// server.
+/// works — it just forgets pairings on restart.
 pub fn persistent_session_token(data_dir: &Path) -> std::io::Result<String> {
     let file = data_dir.join("web-session-token");
     if let Ok(existing) = std::fs::read_to_string(&file) {
@@ -90,11 +87,11 @@ pub fn persistent_session_token(data_dir: &Path) -> std::io::Result<String> {
 
 /// The paired-browser cookie from a `Cookie` header. The token is base64url
 /// — every character survives `encodeURIComponent` unchanged — so the raw
-/// value is what the legacy decoder would have produced; no decode needed.
+/// value is the stored token; no decode needed.
 pub fn session_cookie(header_value: &str) -> Option<&str> {
     header_value.split(';').map(str::trim).find_map(|pair| {
         let (name, value) = pair.split_once('=')?;
-        (name == SESSION_COOKIE || name == LEGACY_SESSION_COOKIE).then_some(value)
+        (name == SESSION_COOKIE).then_some(value)
     })
 }
 

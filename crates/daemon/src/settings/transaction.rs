@@ -21,11 +21,11 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-/// The lock file name the legacy layer also uses.
+/// The lock file name.
 const LOCK_FILE: &str = "settings.lock";
 /// The journal that carries a pending pair commit.
 const JOURNAL_FILE: &str = "settings-transaction.json";
-/// How long an acquisition waits before giving up (the legacy value).
+/// How long an acquisition waits before giving up.
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 /// Poll interval while waiting for a foreign holder.
 const LOCK_POLL: Duration = Duration::from_millis(25);
@@ -75,7 +75,7 @@ pub fn acquire(data_dir: &Path, wait: Duration) -> Result<SettingsLock, Transact
     std::fs::create_dir_all(data_dir)?;
     let file = OpenOptions::new()
         .create(true)
-        // Never truncate: the legacy layer stores the owner PID here, and
+        // Never truncate: the content names an owner process, and
         // this side only needs the lock the handle holds.
         .truncate(false)
         .write(true)
@@ -153,7 +153,7 @@ impl SettingsLock {
     }
 }
 
-/// Writes `bytes` to `path` the way the legacy layer does: a brand-new
+/// Writes `bytes` to `path` atomically: a brand-new
 /// temporary file beside the target (exclusive create, so a stale one can
 /// never be silently reused), flushed to disk, then renamed into place. An
 /// interrupted write can only ever leave the previous file behind.

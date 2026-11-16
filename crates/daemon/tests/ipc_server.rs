@@ -20,7 +20,7 @@ use serde_json::Value;
 
 #[cfg(windows)]
 #[test]
-fn endpoint_matches_the_legacy_pipe_name_formula() {
+fn endpoint_matches_the_pipe_name_formula() {
     use sha2::{Digest, Sha256};
 
     // `daemon.ts getDaemonEndpoint`: sha256 of the lowercased resolved data

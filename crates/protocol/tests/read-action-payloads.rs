@@ -1,7 +1,7 @@
 //! Payload rules for the three disk-authoritative session reads
 //! (`session.load`, `session.entries-range`, `session.find-attachment`).
 //!
-//! Fail-before pins: the legacy validation wording (`requireString` /
+//! Fail-before pins: the fixed validation wording (`requireString` /
 //! `requireInteger` — byte limits, JS `Number.isInteger` range semantics), the
 //! absolute-index page math with its defaults and clamps, and the
 //! inline-attachment filter. Source anchors: `daemon-host.ts` `requireString`
@@ -55,8 +55,8 @@ fn require_string_rejects_empty_and_non_strings_with_one_wording() {
 
 #[test]
 fn require_string_limits_utf8_bytes_not_utf16_units() {
-    // 33 × é = 66 bytes but only 33 UTF-16 units: the legacy check is
-    // Buffer.byteLength, so this fails on bytes while a UTF-16 count passes.
+    // 33 × é = 66 bytes but only 33 UTF-16 units: the cap counts bytes,
+    // so this fails while a UTF-16 count would pass.
     let over_bytes = "é".repeat(33);
     let error = require_string(Some(&Value::String(over_bytes)), "sessionId", 64)
         .map_err(|e| e.to_string())
@@ -129,7 +129,7 @@ fn require_integer_bounds_are_inclusive() {
 // ---------------------------------------------------------------- typed payloads
 
 #[test]
-fn load_payload_reads_session_id_with_legacy_rules() {
+fn load_payload_reads_session_id_with_the_payload_rules() {
     let map = payload(&[("sessionId", json!("abc-123"))]);
     assert_eq!(load_session_id(&map).unwrap(), "abc-123");
 
@@ -143,7 +143,7 @@ fn load_payload_reads_session_id_with_legacy_rules() {
 }
 
 #[test]
-fn attachment_payload_reads_id_with_legacy_rules() {
+fn attachment_payload_reads_id_with_the_payload_rules() {
     let map = payload(&[("attachmentId", json!("att-1"))]);
     assert_eq!(find_attachment_id(&map).unwrap(), "att-1");
 
@@ -244,7 +244,7 @@ fn inline_filter_matches_id_and_inline_media_type_only() {
 }
 
 #[test]
-fn inline_attachment_result_serialises_with_legacy_keys() {
+fn inline_attachment_result_serialises_with_the_wire_keys() {
     let result = InlineAttachment {
         path: "/w/shot.png".to_owned(),
         media_type: "image/png".to_owned(),

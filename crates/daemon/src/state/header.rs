@@ -2,8 +2,7 @@
 //!
 //! A saved session is pretty-printed with two-space indentation and every
 //! header field serialises before `entries`, so the header alone is a few
-//! hundred bytes at the front of the file. The read strategy mirrors the
-//! legacy `readSessionHeader`:
+//! hundred bytes at the front of the file. The read strategy:
 //!
 //! 1. take an 8 KiB prefix;
 //! 2. cut at the structural marker `\n  "entries":` — a JSON string can never
@@ -119,7 +118,7 @@ fn full_header(path: &Path, id: &str) -> Option<SessionHeader> {
 }
 
 /// Reads at most `bytes` from the front of a file. `complete` mirrors the
-/// legacy rule: only a short read proves end-of-file (the window is measured
+/// read rule: only a short read proves end-of-file (the window is measured
 /// in bytes, the text in characters).
 fn read_prefix(path: &Path, bytes: usize) -> Option<Prefix> {
     use std::io::Read;

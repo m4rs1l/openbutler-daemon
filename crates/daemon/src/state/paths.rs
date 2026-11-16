@@ -22,7 +22,7 @@ pub fn session_directory(data_root: &Path, id: &str) -> Result<PathBuf, StateErr
     Ok(sessions_directory(data_root).join(id))
 }
 
-/// UUID shape as the legacy `SESSION_ID` regex accepts it: 8-4-4-4-12 hex,
+/// Session id shape: 8-4-4-4-12 hex,
 /// version nibble 1–8, variant `[89ab]`, case-insensitive.
 pub fn is_session_id(value: &str) -> bool {
     let bytes = value.as_bytes();
@@ -49,7 +49,7 @@ pub fn is_session_id(value: &str) -> bool {
         && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a'..=b'b')
 }
 
-/// Path equality as the legacy `samePath` defines it: lexical resolution of
+/// Path equality: lexical resolution of
 /// `.`/`..`, then a case-insensitive compare on Windows.
 pub fn same_path(left: &str, right: &str) -> bool {
     let left = normalize_lexical(Path::new(left));

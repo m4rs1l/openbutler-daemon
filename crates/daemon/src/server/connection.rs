@@ -1,7 +1,7 @@
 //! One accepted connection: decode frames in, dispatch, write frames out.
 //!
 //! The write path is a bounded queue drained by its own task, so a slow or
-//! absent reader can never grow host memory (the legacy contract: queued
+//! absent reader can never grow host memory (the contract: queued
 //! bytes beyond the frame cap disconnect the socket). Read-side failures —
 //! malformed JSON, a breached frame cap, EOF — close this connection only.
 //!
@@ -30,7 +30,7 @@ const MAX_QUEUED_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 
 /// How a connection earns the right to reach dispatch.
 pub(crate) enum Admission {
-    /// Local pipe/socket: no gate, exactly the legacy behavior.
+    /// Local pipe/socket: no gate, exactly as a local client.
     Local,
     /// Remote TCP: the first frame must pass the admission plane within the
     /// deadline; silence closes the connection.
@@ -170,8 +170,8 @@ where
     }
 }
 
-/// The admission verdict for one remote opening frame: answer exactly as the
-/// legacy host does, and report whether dispatch may run.
+/// The admission verdict for one remote opening frame: answer with the fixed
+/// wording, and report whether dispatch may run.
 async fn admit(host: &Host, data_dir: &Path, frame: &[u8], outbound: &Outbound) -> bool {
     let value: Value = serde_json::from_slice(frame).unwrap_or(Value::Null);
 

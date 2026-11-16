@@ -1,7 +1,7 @@
 //! The three disk-authoritative session reads at the dispatch surface.
 //!
 //! Fail-before pins for `session.load`, `session.entries-range`, and
-//! `session.find-attachment`: the legacy wording (custodian refusal, not
+//! `session.find-attachment`: the fixed wording (custodian refusal, not
 //! found, validation messages), the connection-scoped chat the paging and
 //! attachment actions address, and the wire shapes. Source anchors:
 //! `daemon-host.ts` cases L3594-L3640 (read 2026-11-16).
@@ -117,7 +117,7 @@ fn load_returns_the_saved_record_with_meta_and_entries() {
 }
 
 #[test]
-fn load_refuses_the_machine_custodian_with_the_legacy_sentence() {
+fn load_refuses_the_machine_custodian_with_the_fixed_sentence() {
     let dir = temp_data_dir("load-custodian");
     let host = Host::new();
     let mut state = DispatchState::new();
@@ -157,7 +157,7 @@ fn load_reports_an_unknown_chat_as_not_found() {
 }
 
 #[test]
-fn load_validates_the_payload_with_legacy_wording() {
+fn load_validates_the_payload_with_the_fixed_wording() {
     let dir = temp_data_dir("load-validate");
     let host = Host::new();
     let mut state = DispatchState::new();
@@ -200,7 +200,7 @@ fn range_pages_the_chat_this_connection_loaded() {
 
     let host = Host::new();
     let mut state = DispatchState::new();
-    // Legacy clients page the chat they just opened: load first, then ask.
+    // A client pages the chat it just opened: load first, then ask.
     call(
         &host,
         &dir,
@@ -237,7 +237,7 @@ fn range_pages_the_chat_this_connection_loaded() {
     assert_eq!(result["to"], json!(30));
     assert_eq!(result["total"], json!(120));
 
-    // `before` beyond the transcript clamps to total (legacy Math.min).
+    // `before` beyond the transcript clamps to total.
     let result = success_result(call(
         &host,
         &dir,
@@ -263,7 +263,7 @@ fn range_without_a_loaded_chat_is_not_found() {
 }
 
 #[test]
-fn range_validates_limit_and_before_with_legacy_wording() {
+fn range_validates_limit_and_before_with_the_fixed_wording() {
     let dir = temp_data_dir("range-validate");
     let id = uuid(3);
     let texts: Vec<String> = (0..5).map(|index| format!("m{index}")).collect();
@@ -412,8 +412,8 @@ fn find_attachment_validates_the_payload_and_needs_a_loaded_chat() {
         "attachmentId must be a non-empty string under 128 bytes."
     );
 
-    // Valid id, no chat on this connection → not found (legacy reaches its
-    // controller only after a load/attach, so this state is Rust-side only).
+    // Valid id, no chat on this connection → not found: this build records
+    // a chat only through a successful load on the same connection.
     let error = failure_text(call(
         &host,
         &dir,

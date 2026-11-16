@@ -1,6 +1,6 @@
 //! The HTTP server: router, handlers, lifecycle.
 //!
-//! Route order mirrors the legacy handler: the pairing link first (it is
+//! Route order: the pairing link first (it is
 //! the only unauthenticated browser route), then the gated `/api/*` tree,
 //! then static serving, then a plain 404. Session-backed routes arrive
 //! with the runtime slice; nothing here invents data the host owns.
@@ -21,7 +21,7 @@ use serde_json::json;
 use super::assets::{AssetsSource, resolve_static};
 use super::auth::{self, PairToken, persistent_session_token};
 
-/// The legacy default bind: loopback only, the port every installer and
+/// The default bind: loopback only, the port every installer and
 /// docstring already names.
 pub const DEFAULT_WEB_BIND: &str = "127.0.0.1:45278";
 
@@ -48,8 +48,8 @@ struct AppState {
     started: Instant,
 }
 
-/// A running web server. Dropping it leaves the task running (like the
-/// legacy process model); [`WebServer::close`] stops it.
+/// A running web server. Dropping it leaves the task running;
+/// [`WebServer::close`] stops it.
 pub struct WebServer {
     addr: SocketAddr,
     pair: Arc<PairToken>,
@@ -216,7 +216,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-/// Static serving with the legacy headers; anything else is a plain 404 —
+/// Static serving with the caching headers; anything else is a plain 404 —
 /// this server carries no page of its own.
 async fn static_file(State(state): State<AppState>, request: Request) -> Response {
     let method_allows_static =

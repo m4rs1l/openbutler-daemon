@@ -61,10 +61,10 @@ pub(crate) struct StaticFile {
 
 /// Maps a request path onto the bundle, or `None` when it does not exist.
 ///
-/// The legacy server never sees a `..` segment (URL parsing normalizes it
+/// A `..` segment never reaches the filesystem (URL parsing normalizes it
 /// before the handler runs); this one refuses `..` components outright
 /// because the raw request target arrives here. Percent sequences stay
-/// literal, exactly like the legacy pathname — a file named `%2e%2e` would
+/// literal, exactly like the URL pathname — a file named `%2e%2e` would
 /// have to exist inside the bundle to be served.
 pub(crate) fn resolve_static(assets_dir: &Path, url_path: &str) -> Option<StaticFile> {
     let relative = if url_path == "/" {

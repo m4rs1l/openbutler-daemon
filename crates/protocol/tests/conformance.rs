@@ -39,7 +39,6 @@ fn fixture(name: &str) -> &'static str {
         "entries-all-kinds" => include_str!("../conformance/entries-all-kinds.json"),
         "attach-result" => include_str!("../conformance/attach-result.json"),
         "entries-range" => include_str!("../conformance/entries-range.json"),
-        "legacy-v1-status" => include_str!("../conformance/legacy-v1-status.json"),
         "auth-first-frame" => include_str!("../conformance/auth-first-frame.json"),
         other => panic!("unknown fixture {other}"),
     }
@@ -347,16 +346,6 @@ fn absent_build_id_stays_absent() {
 fn entries_range_round_trip() {
     let range: SessionEntriesRange = roundtrip(fixture("entries-range"));
     assert_eq!((range.from, range.to, range.total), (0, 2, 40));
-}
-
-#[test]
-fn legacy_v1_status_folds_into_current_shape() {
-    let legacy: openbutler_protocol::status::LegacyV1Status =
-        roundtrip(fixture("legacy-v1-status"));
-    let status = legacy.into_status();
-    assert_eq!(status.legacy, Some(true));
-    assert_eq!(status.pid, 4321);
-    assert!(status.entry.is_none());
 }
 
 // --- Required-key strictness --------------------------------------------------

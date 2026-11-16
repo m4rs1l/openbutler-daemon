@@ -23,7 +23,7 @@ use crate::state::{self, WorkspaceFilter};
 
 /// The chat this connection has opened. `session.load` records it; the
 /// paging and attachment reads address it — the per-connection stand-in for
-/// the legacy host's current controller (there is no runtime in this build,
+/// a host-wide current controller (there is no runtime in this build,
 /// so the record on disk is the whole truth).
 #[derive(Debug, Default)]
 pub struct DispatchState {
@@ -42,7 +42,7 @@ impl DispatchState {
     }
 }
 
-/// Legacy sentences (verbatim): the custodian refusal on load and the miss
+/// Fixed sentences (verbatim): the custodian refusal on load and the miss
 /// every read of an unopened or vanished chat reports.
 const CHAT_NOT_FOUND: &str = "Chat not found.";
 const CUSTODIAN_LOAD_ERROR: &str =
@@ -88,7 +88,6 @@ impl Host {
             connected_clients: self.connected_clients.load(Ordering::SeqCst),
             schedules: None,
             telegram: None,
-            legacy: None,
             unresponsive: None,
             entry: None,
             // A source run reports an explicit null (contract: null = source
@@ -162,7 +161,7 @@ pub fn handle(
                         )
                     }
                     // A failed load leaves the connection's chat untouched,
-                    // as a failed attachChat leaves the legacy controller.
+                    // as a failed chat switch leaves the current chat.
                     None => failure(request, CHAT_NOT_FOUND.to_owned()),
                 }
             }
@@ -209,7 +208,7 @@ pub fn handle(
                         .unwrap_or_else(|_| json!({})),
                     ),
                     // Present-but-not-inline and absent ids both answer an
-                    // explicit null, never a failure (legacy `found ?? null`).
+                    // explicit null, never a failure.
                     None => success(request, serde_json::Value::Null),
                 },
             },

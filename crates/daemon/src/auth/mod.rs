@@ -16,7 +16,7 @@ pub use pair::PairingCodes;
 pub use store::{Minted, TokenStore};
 
 /// Everything a credential operation can fail with. The messages are the
-/// legacy wordings, verbatim — they are part of the wire contract.
+/// fixed wordings, verbatim — they are part of the wire contract.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     /// An I/O failure underneath (the message is the OS's own).

@@ -249,10 +249,6 @@ async fn the_api_gate_checks_origin_then_cookie() {
     assert_eq!(health["ok"], true);
     assert!(health["uptimeMs"].as_u64().is_some(), "uptime is reported");
 
-    let legacy = format!("ranite_web={session}");
-    let (status, _, _) = get(addr, "/api/health", &[("Cookie", &legacy)]).await;
-    assert_eq!(status, 200, "the legacy cookie name still pairs");
-
     server.close().await;
 }
 

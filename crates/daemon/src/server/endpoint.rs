@@ -1,6 +1,6 @@
 //! Endpoint derivation — the single authority for how clients find us.
 //!
-//! Mirrors the legacy `getDaemonEndpoint`: on Windows the pipe name is
+//! Endpoint discovery: on Windows the pipe name is
 //! `\\.\pipe\openbutler-<sha256 prefix>` of the lowercased resolved data
 //! directory (so every client on this machine derives the same name); on
 //! POSIX it is `<data>/daemon.sock`. The data directory travels with the
