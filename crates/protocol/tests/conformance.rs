@@ -39,6 +39,7 @@ fn fixture(name: &str) -> &'static str {
         "attach-result" => include_str!("../conformance/attach-result.json"),
         "entries-range" => include_str!("../conformance/entries-range.json"),
         "legacy-v1-status" => include_str!("../conformance/legacy-v1-status.json"),
+        "auth-first-frame" => include_str!("../conformance/auth-first-frame.json"),
         other => panic!("unknown fixture {other}"),
     }
 }
@@ -435,4 +436,63 @@ fn decoder_keeps_empty_frames_between_newlines() {
     let frames = decoder.append(b"a\n\nb\n").unwrap();
     assert_eq!(frames.len(), 3);
     assert_eq!(frames[1], b"");
+}
+
+// --- Connection admission plane ----------------------------------------------
+
+/// Every case the remote first-frame gate must classify exactly like the
+/// TypeScript host, plus the fixed refusal/consent wordings it emits.
+#[test]
+fn auth_first_frame_classification() {
+    use openbutler_protocol::auth::{self, FirstFrame};
+
+    let vector: Value =
+        serde_json::from_str(fixture("auth-first-frame")).expect("vector must be valid JSON");
+    let cases = vector["cases"]
+        .as_array()
+        .expect("vector needs a cases array");
+    assert!(!cases.is_empty(), "vector must carry cases");
+
+    for case in cases {
+        let name = case["name"].as_str().expect("case needs a name");
+        let frame = case["frame"].clone();
+        let classified = auth::classify_first_frame(&frame);
+        let (kind, id) = match &classified {
+            FirstFrame::Auth { id, token } => {
+                assert!(!token.is_empty(), "case {name}: auth token must be kept");
+                ("auth", *id)
+            }
+            FirstFrame::Pair { id, code } => {
+                assert!(!code.is_empty(), "case {name}: pair code must be kept");
+                ("pair", *id)
+            }
+            FirstFrame::Refused { id } => ("refused", *id),
+        };
+        assert_eq!(kind, case["expect"]["kind"], "case {name}");
+        assert_eq!(id, case["expect"]["id"], "case {name}");
+    }
+
+    let messages = &vector["messages"];
+    assert_eq!(
+        auth::REMOTE_FIRST_FRAME_REFUSED,
+        messages["firstFrameRefused"]
+    );
+    assert_eq!(auth::AUTH_FAILED, messages["authFailed"]);
+    assert_eq!(auth::PAIR_FAILED, messages["pairFailed"]);
+
+    let success = &vector["success"];
+    let auth_result = auth::AuthSuccess {
+        authenticated: true,
+    };
+    assert_eq!(
+        serde_json::to_value(auth_result).expect("auth success serializes"),
+        success["auth"]
+    );
+    let pair_result = auth::PairSuccess {
+        token: "obt_example_minted_token".to_owned(),
+    };
+    assert_eq!(
+        serde_json::to_value(pair_result).expect("pair success serializes"),
+        success["pair"]
+    );
 }

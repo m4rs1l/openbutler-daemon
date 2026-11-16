@@ -10,13 +10,14 @@
 //! runtime. Both the Rust daemon and the Rust CLI depend on it, and the
 //! TypeScript implementation is cross-checked against the same vectors.
 //!
-//! Layout: shared leaves live at the root (`constants`, `util`, `error`,
-//! `frame`, `envelope`); domains that carry several authorities live in
+//! Layout: shared leaves live at the root (`auth`, `constants`, `util`,
+//! `error`, `frame`, `envelope`); domains that carry several authorities live in
 //! their own folder — [`session`] (record, run state, patches, transcript
 //! entries, attach) and [`runtime`] (status, runtime view).
 //!
 //! Documentation index: `docs/index.md`.
 
+pub mod auth;
 pub mod constants;
 pub mod envelope;
 pub mod error;
