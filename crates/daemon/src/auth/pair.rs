@@ -53,7 +53,7 @@ impl PairingCodes {
     /// redemption consumes the code; expiry and wrong guesses leave the
     /// pending code in place for the client the owner is about to hand it to.
     pub fn redeem(&self, code: &str, now_ms: u64) -> bool {
-        let Ok(pending) = self.pending.lock() else {
+        let Ok(mut pending) = self.pending.lock() else {
             return false;
         };
         let Some(current) = pending.as_ref() else {
@@ -69,11 +69,11 @@ impl PairingCodes {
             .zip(issued.iter())
             .fold(0u8, |acc, (a, b)| acc | (a ^ b))
             == 0;
+        // The lock stays held through the clear: releasing it first would let
+        // a concurrent issue() land between the match and the consume, and
+        // this redemption would wipe the freshly issued code.
         if matches {
-            drop(pending);
-            if let Ok(mut pending) = self.pending.lock() {
-                *pending = None;
-            }
+            *pending = None;
         }
         matches
     }
