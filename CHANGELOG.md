@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `state/save.rs`: the session write path — recompute-on-save (display
+  fields rebuilt from `entries`, `updatedAt` refreshed), the meta-before-  `entries` header order, skip-without-user (`allow_empty` to override),
+  the `Cannot save an invalid session.` gate, and the atomic `0600`
+  temp-plus-rename write; `conversation`/`conversationArchive` round-trip
+  untouched (`session_save`, 5 tests).
 - `sidecar/`: the real Node model transport — `ai@7.0.173` exact plus
   eleven provider packages exact on the `provider@4.0.38` line, a lazy
   provider registry keyed by allowlist names, single-step streaming

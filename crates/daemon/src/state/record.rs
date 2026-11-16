@@ -12,17 +12,22 @@ use std::path::{Path, PathBuf};
 use openbutler_protocol::SessionView;
 use openbutler_protocol::entry::SessionEntry;
 use openbutler_protocol::session::SessionMeta;
+use serde_json::Value;
 
 use super::paths::session_directory;
 
 /// A record on disk: header fields plus the transcript. The `conversation`
-/// arrays stay an AI-SDK concern and are ignored on read.
+/// arrays are part of the record — a load-then-save round trip must carry   /// them through untouched, so they are parsed (and only parsed; the door   /// treats their contents as an opaque AI-SDK payload).
 #[derive(Debug, serde::Deserialize)]
-pub(crate) struct SessionRecord {
+pub struct SessionRecord {
     #[serde(flatten)]
-    pub(crate) meta: SessionMeta,
+    pub meta: SessionMeta,
     #[serde(default)]
-    pub(crate) entries: Vec<SessionEntry>,
+    pub entries: Vec<SessionEntry>,
+    #[serde(default)]
+    pub conversation: Vec<Value>,
+    #[serde(default, rename = "conversationArchive")]
+    pub conversation_archive: Option<Vec<Value>>,
 }
 
 /// Bound on a full read; a larger record is treated as unreadable rather
@@ -31,7 +36,7 @@ pub(crate) struct SessionRecord {
 const FULL_READ_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Parses a record body — partial or whole. Callers verify the id.
-pub(crate) fn parse_record(text: &str) -> Option<SessionRecord> {
+pub fn parse_record(text: &str) -> Option<SessionRecord> {
     serde_json::from_str(text).ok()
 }
 
@@ -76,7 +81,7 @@ pub fn read_session_view(path: &Path, id: &str) -> Option<SessionView> {
     if record.meta.id != id {
         return None;
     }
-    let SessionRecord { meta, entries } = record;
+    let SessionRecord { meta, entries, .. } = record;
     Some(SessionView {
         meta: derive_meta(meta, &entries),
         entries,
@@ -135,7 +140,7 @@ fn slice_utf16(value: &str, units: usize) -> String {
     out
 }
 
-fn entry_preview(entries: &[SessionEntry]) -> String {
+pub(crate) fn entry_preview(entries: &[SessionEntry]) -> String {
     let last_user = entries.iter().rev().find_map(user_parts);
     let Some((text, image_count)) = last_user else {
         return String::new();
@@ -148,7 +153,7 @@ fn entry_preview(entries: &[SessionEntry]) -> String {
     }
 }
 
-fn first_user_text(entries: &[SessionEntry]) -> String {
+pub(crate) fn first_user_text(entries: &[SessionEntry]) -> String {
     let Some((text, image_count)) = entries.iter().find_map(user_parts) else {
         return String::new();
     };
@@ -160,7 +165,7 @@ fn first_user_text(entries: &[SessionEntry]) -> String {
     }
 }
 
-fn last_assistant_text(entries: &[SessionEntry]) -> String {
+pub(crate) fn last_assistant_text(entries: &[SessionEntry]) -> String {
     entries
         .iter()
         .rev()
