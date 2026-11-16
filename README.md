@@ -28,6 +28,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+The suite includes the idle memory ceiling (`tests/ram_budget.rs`): a real
+daemon binary must keep its working set under 32 MiB while idle — the
+number that justifies the rewrite.
+
 CI runs the same gates on Linux and Windows.
 
 ## Documentation
