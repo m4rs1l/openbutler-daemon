@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `sidecar/`: the real Node model transport — `ai@7.0.173` exact plus
+  eleven provider packages exact on the `provider@4.0.38` line, a lazy
+  provider registry keyed by allowlist names, single-step streaming
+  (`stopWhen: isStepCount(1)`, `maxRetries: 0`, schema-only tools), the
+  door's error taxonomy, and console/stdout ownership. Acceptance suite
+  (`sidecar_real`, 7 tests) runs the real SDK against a local mock:
+  tool-call stops after exactly one model request, unknown keys refused
+  with keys kept off stdout, 429 → rate-limit taxonomy, and per-call
+  lazy loading proven from `NODE_DEBUG` traces.
 - `openbutler-protocol`: wire contract types, the newline frame codec with a
   32 MB cap, envelope validation, and 14 conformance vectors (one captured
   from a live host).

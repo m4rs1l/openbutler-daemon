@@ -1,5 +1,17 @@
 {
   "protocolVersion": 1,
-  "aiSdkVersion": "6.0.332",
-  "providers": ["openai", "openai-compatible", "anthropic"]
+  "aiSdkVersion": "7.0.173",
+  "providers": [
+    "anthropic",
+    "cerebras",
+    "cohere",
+    "deepinfra",
+    "google",
+    "groq",
+    "mistral",
+    "openai",
+    "openai-compatible",
+    "togetherai",
+    "xai"
+  ]
 }

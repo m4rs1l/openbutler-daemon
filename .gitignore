@@ -1,4 +1,6 @@
 /target
 *.log
 .env
+sidecar/node_modules/
+sidecar/dist/
 

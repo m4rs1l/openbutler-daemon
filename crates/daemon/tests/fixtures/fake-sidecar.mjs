@@ -17,7 +17,7 @@ if (MODE !== "no-ready") {
   if (MODE === "wrong-version") {
     emit({ type: "ready", protocolVersion: 99, aiSdkVersion: "0.0.0", providers: PROVIDERS });
   } else {
-    emit({ type: "ready", protocolVersion: 1, aiSdkVersion: "6.0.332", providers: PROVIDERS });
+    emit({ type: "ready", protocolVersion: 1, aiSdkVersion: "7.0.173", providers: PROVIDERS });
   }
 }
 

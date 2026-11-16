@@ -586,10 +586,22 @@ fn sidecar_handshake_round_trips() {
 
     let ready: SidecarReady = roundtrip(fixture("sidecar-handshake"));
     assert_eq!(ready.protocol_version, SIDECAR_PROTOCOL_VERSION);
-    assert_eq!(ready.ai_sdk_version, "6.0.332");
+    assert_eq!(ready.ai_sdk_version, "7.0.173");
     assert_eq!(
         ready.providers,
-        vec!["openai", "openai-compatible", "anthropic"]
+        vec![
+            "anthropic",
+            "cerebras",
+            "cohere",
+            "deepinfra",
+            "google",
+            "groq",
+            "mistral",
+            "openai",
+            "openai-compatible",
+            "togetherai",
+            "xai"
+        ]
     );
 }
 

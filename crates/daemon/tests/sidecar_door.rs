@@ -82,7 +82,7 @@ async fn wait_for_state(door: &SidecarDoor, target: DoorState, cap: Duration) ->
 async fn handshake_reports_version_and_validates_the_provider_allowlist() {
     let (door, ready) = spawn("ok").await.expect("healthy handshake");
     assert_eq!(ready.protocol_version, 1);
-    assert_eq!(ready.ai_sdk_version, "6.0.332");
+    assert_eq!(ready.ai_sdk_version, "7.0.173");
     assert_eq!(ready.providers, vec!["ok"]);
     assert_eq!(door.state(), DoorState::Ready);
 
