@@ -29,25 +29,56 @@ pub async fn serve(
     mut shutdown: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let data_dir = endpoint.data_dir().to_path_buf();
-    loop {
-        let server = bind(&endpoint)?;
-        // `NamedPipeServer::connect` is the accept-equivalent: it waits for a
-        // client. The future owns the server so the branch can hand the
-        // connected stream to a task.
-        let wait_for_client = async move { server.connect().await.map(|()| server) };
-        tokio::select! {
-            changed = shutdown.changed() => {
-                // Either the host asked to stop, or the sender is gone.
-                let _ = changed;
-                return Ok(());
+
+    // The platforms wait for a client differently, so the wait is split
+    // here: Windows creates a fresh pipe instance per wait (the connected
+    // instance is handed to a task, and the next client needs a new one),
+    // while Unix keeps a single listener alive across accepts so a
+    // connection being served never hides the next one. The spawn and the
+    // shutdown branch are identical on both sides.
+    #[cfg(windows)]
+    {
+        loop {
+            let server = bind(&endpoint)?;
+            // `NamedPipeServer::connect` is the accept-equivalent: it waits
+            // for a client. The future owns the instance so the branch can
+            // hand the connected stream to a task.
+            let wait_for_client = async move { server.connect().await.map(|()| server) };
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    // Either the host asked to stop, or the sender is gone.
+                    let _ = changed;
+                    return Ok(());
+                }
+                connected = wait_for_client => {
+                    let stream = connected?;
+                    let host = host.clone();
+                    let data_dir = data_dir.clone();
+                    tokio::spawn(async move {
+                        connection::run(stream, host, data_dir, connection::Admission::Local).await;
+                    });
+                }
             }
-            connected = wait_for_client => {
-                let stream = connected?;
-                let host = host.clone();
-                let data_dir = data_dir.clone();
-                tokio::spawn(async move {
-                    connection::run(stream, host, data_dir, connection::Admission::Local).await;
-                });
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let listener = bind(&endpoint)?;
+        loop {
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    let _ = changed;
+                    return Ok(());
+                }
+                accepted = listener.accept() => {
+                    let (stream, _peer) = accepted?;
+                    let host = host.clone();
+                    let data_dir = data_dir.clone();
+                    tokio::spawn(async move {
+                        connection::run(stream, host, data_dir, connection::Admission::Local).await;
+                    });
+                }
             }
         }
     }
