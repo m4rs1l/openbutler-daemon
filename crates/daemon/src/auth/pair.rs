@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
-use super::{PAIRING_CODE_TTL_MS, hex_encode};
+use super::{AuthError, PAIRING_CODE_TTL_MS, hex_encode};
 
 /// Shared by `pair.create` (dispatch) and the admission gate; lives on the
 /// host record so every connection sees the same pending code.
@@ -31,15 +31,14 @@ impl PairingCodes {
 
     /// Issues a fresh 12-hex-character code valid for five minutes,
     /// replacing any previous code. Returns `(code, expiresAt)`.
-    pub fn issue(&self, now_ms: u64) -> Result<(String, u64), String> {
+    pub fn issue(&self, now_ms: u64) -> Result<(String, u64), AuthError> {
         let mut bytes = [0u8; 6];
-        getrandom::fill(&mut bytes).map_err(|error| {
-            format!("Could not read system entropy for a pairing code: {error}")
-        })?;
+        getrandom::fill(&mut bytes)
+            .map_err(|error| AuthError::PairingEntropy(error.to_string()))?;
         let code = hex_encode(&bytes);
         let expires_at_ms = now_ms.saturating_add(PAIRING_CODE_TTL_MS);
         let Ok(mut pending) = self.pending.lock() else {
-            return Err("The pairing state is unavailable.".to_owned());
+            return Err(AuthError::PairingUnavailable);
         };
         *pending = Some(Pending {
             code: code.clone(),

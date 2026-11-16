@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! IPC server contract tests: endpoint derivation, framing, dispatch.
 //!
 //! Fail-before: every test runs its own server on a scratch endpoint (never

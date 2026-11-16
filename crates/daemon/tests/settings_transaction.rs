@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! The settings durability boundary: the lock, the journal, and the atomic
 //! pair commit.
 //!

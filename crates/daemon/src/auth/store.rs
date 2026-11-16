@@ -15,7 +15,7 @@ use base64::Engine;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::{ct_eq, hex_encode, write_private};
+use super::{AuthError, ct_eq, hex_encode, write_private};
 
 /// One minted token: the id lands in the store, the token never does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,13 +37,13 @@ impl TokenStore {
     }
 
     /// Mints a token, stores its salted hash, and returns the plaintext once.
-    pub fn mint(&self) -> Result<Minted, String> {
+    pub fn mint(&self) -> Result<Minted, AuthError> {
         let mut id_bytes = [0u8; 8];
-        getrandom::fill(&mut id_bytes).map_err(entropy_error)?;
+        getrandom::fill(&mut id_bytes).map_err(|error| AuthError::Entropy(error.to_string()))?;
         let mut token_bytes = [0u8; 24];
-        getrandom::fill(&mut token_bytes).map_err(entropy_error)?;
+        getrandom::fill(&mut token_bytes).map_err(|error| AuthError::Entropy(error.to_string()))?;
         let mut salt_bytes = [0u8; 16];
-        getrandom::fill(&mut salt_bytes).map_err(entropy_error)?;
+        getrandom::fill(&mut salt_bytes).map_err(|error| AuthError::Entropy(error.to_string()))?;
 
         let id = hex_encode(&id_bytes);
         let token = format!(
@@ -67,7 +67,7 @@ impl TokenStore {
 
     /// Timing-safe check against every minted token. An absent store is a
     /// plain `false`; a broken store is an error, never an admit.
-    pub fn verify(&self, token: &str) -> Result<bool, String> {
+    pub fn verify(&self, token: &str) -> Result<bool, AuthError> {
         if token.is_empty() {
             return Ok(false);
         }
@@ -94,34 +94,33 @@ impl TokenStore {
 
     /// Reads and validates the store, matching the TypeScript error texts.
     /// An absent file is an empty store.
-    fn read(&self) -> Result<Store, String> {
+    fn read(&self) -> Result<Store, AuthError> {
         let raw = match fs::read_to_string(&self.path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 return Ok(Store { tokens: Vec::new() });
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(AuthError::Io(error)),
         };
-        let parsed: Value = serde_json::from_str(&raw).map_err(|_| {
-            invalid(
-                &self.path,
-                "not valid JSON. Fix or delete it to mint a new token.",
-            )
-        })?;
+        let path = self.path.display().to_string();
+        let parsed: Value = serde_json::from_str(&raw)
+            .map_err(|_| AuthError::StoreNotJson { path: path.clone() })?;
         let object = parsed
             .as_object()
-            .ok_or_else(|| invalid(&self.path, "must be a JSON object."))?;
+            .ok_or_else(|| AuthError::StoreNotObject { path: path.clone() })?;
         let tokens = object
             .get("tokens")
             .and_then(Value::as_array)
-            .ok_or_else(|| invalid(&self.path, "needs a \"tokens\" array."))?;
+            .ok_or_else(|| AuthError::StoreMissingTokens { path: path.clone() })?;
 
         let mut records = Vec::with_capacity(tokens.len());
         for value in tokens {
-            let record = value.as_object().ok_or_else(|| malformed(&self.path))?;
+            let record = value
+                .as_object()
+                .ok_or_else(|| AuthError::StoreMalformedRecord { path: path.clone() })?;
             for field in ["id", "salt", "hash", "createdAt"] {
                 if !record.get(field).is_some_and(Value::is_string) {
-                    return Err(malformed(&self.path));
+                    return Err(AuthError::StoreMalformedRecord { path });
                 }
             }
             records.push(record.clone());
@@ -131,7 +130,7 @@ impl TokenStore {
 
     /// Writes beside the store and renames into place: an interrupted write
     /// can only leave the previous store behind, never half of the new one.
-    fn write(&self, tokens: &[Map<String, Value>]) -> Result<(), String> {
+    fn write(&self, tokens: &[Map<String, Value>]) -> Result<(), AuthError> {
         let file = Value::Object(Map::from_iter([
             ("version".to_owned(), Value::from(1)),
             (
@@ -139,21 +138,22 @@ impl TokenStore {
                 Value::Array(tokens.iter().cloned().map(Value::Object).collect()),
             ),
         ]));
-        let mut body = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
+        let mut body = serde_json::to_string_pretty(&file)
+            .map_err(|error| AuthError::Io(std::io::Error::other(error.to_string())))?;
         body.push('\n');
 
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            fs::create_dir_all(parent)?;
         }
         let tmp = self.path.with_file_name(format!(
             "{}.{}.tmp",
             self.path.file_name().unwrap_or_default().to_string_lossy(),
             std::process::id()
         ));
-        write_private(&tmp, body.as_bytes()).map_err(|error| error.to_string())?;
+        write_private(&tmp, body.as_bytes())?;
         fs::rename(&tmp, &self.path).map_err(|error| {
             let _ = fs::remove_file(&tmp);
-            error.to_string()
+            AuthError::Io(error)
         })?;
         Ok(())
     }
@@ -204,19 +204,4 @@ fn creation_stamp() -> String {
         now.second(),
         now.millisecond()
     )
-}
-
-fn invalid(path: &Path, detail: &str) -> String {
-    format!("The auth token store at {} is {detail}", path.display())
-}
-
-fn malformed(path: &Path) -> String {
-    format!(
-        "The auth token store at {} has a malformed token record.",
-        path.display()
-    )
-}
-
-fn entropy_error(error: getrandom::Error) -> String {
-    format!("Could not read system entropy for a credential: {error}")
 }

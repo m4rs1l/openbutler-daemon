@@ -1,0 +1,5 @@
+# Clippy configuration for the workspace.
+#
+# The no-unwrap rule applies to library code only: tests build fixtures with
+# unwrap/expect everywhere, and that is intentional.
+allow-unwrap-in-tests = true

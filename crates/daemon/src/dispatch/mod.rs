@@ -118,7 +118,7 @@ pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> DaemonRe
             Ok((code, expires_at)) => {
                 success(request, json!({ "code": code, "expiresAt": expires_at }))
             }
-            Err(error) => failure(request, error),
+            Err(error) => failure(request, error.to_string()),
         },
         other => failure(request, format!("Unknown action: {other}")),
     }

@@ -15,6 +15,38 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub use pair::PairingCodes;
 pub use store::{Minted, TokenStore};
 
+/// Everything a credential operation can fail with. The messages are the
+/// legacy wordings, verbatim — they are part of the wire contract.
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    /// An I/O failure underneath (the message is the OS's own).
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// The store exists but is not JSON.
+    #[error(
+        "The auth token store at {path} is not valid JSON. Fix or delete it to mint a new token."
+    )]
+    StoreNotJson { path: String },
+    /// The store parses but is not a mapping.
+    #[error("The auth token store at {path} must be a JSON object.")]
+    StoreNotObject { path: String },
+    /// The mapping has no `tokens` array.
+    #[error("The auth token store at {path} needs a \"tokens\" array.")]
+    StoreMissingTokens { path: String },
+    /// A record inside `tokens` is missing a required string field.
+    #[error("The auth token store at {path} has a malformed token record.")]
+    StoreMalformedRecord { path: String },
+    /// The OS would not provide entropy for a stored credential.
+    #[error("Could not read system entropy for a credential: {0}")]
+    Entropy(String),
+    /// The OS would not provide entropy for a pairing code.
+    #[error("Could not read system entropy for a pairing code: {0}")]
+    PairingEntropy(String),
+    /// The pairing state lock is unavailable (a holder panicked).
+    #[error("The pairing state is unavailable.")]
+    PairingUnavailable,
+}
+
 /// The remote admission deadline: a socket that sends nothing is closed, so
 /// an open port never holds an unauthenticated connection alive.
 /// (TypeScript `REMOTE_AUTH_TIMEOUT_MS = 10_000`.)

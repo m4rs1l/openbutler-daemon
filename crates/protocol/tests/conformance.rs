@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Conformance suite: every JSON vector under `conformance/` must decode into
 //! its contract type and serialize back to the identical wire value, and the
 //! decoder/validation semantics must match the TypeScript implementation.

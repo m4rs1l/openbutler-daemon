@@ -31,37 +31,17 @@ const LOCK_WAIT: Duration = Duration::from_secs(10);
 const LOCK_POLL: Duration = Duration::from_millis(25);
 
 /// Everything this boundary can fail with, in the words callers surface.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TransactionError {
     /// The lock stayed held past the wait.
+    #[error("Timed out waiting for the settings transaction lock.")]
     Timeout,
     /// The journal exists but does not describe a valid pending commit.
+    #[error("The settings transaction journal is invalid. No configuration was overwritten.")]
     InvalidJournal,
-    /// An I/O failure underneath.
-    Io(std::io::Error),
-}
-
-impl std::fmt::Display for TransactionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Timeout => {
-                write!(f, "Timed out waiting for the settings transaction lock.")
-            }
-            Self::InvalidJournal => write!(
-                f,
-                "The settings transaction journal is invalid. No configuration was overwritten."
-            ),
-            Self::Io(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for TransactionError {}
-
-impl From<std::io::Error> for TransactionError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
-    }
+    /// An I/O failure underneath (the message is the OS's own).
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 /// Where the pending pair commit lives.

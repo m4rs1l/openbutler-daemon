@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Web/pair surface contract: the bundle guard, static serving rules, the
 //! one-shot pairing link, the cookie + origin API gate, and the persistent
 //! session token.

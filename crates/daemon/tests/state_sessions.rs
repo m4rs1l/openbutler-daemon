@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! State-layer contract tests: session paths, header-only reads, listing.
 //!
 //! Fail-before: these run against fixture directories built per test, so the

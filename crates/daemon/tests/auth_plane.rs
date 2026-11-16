@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Auth plane contract: the token store, the one-shot pairing state, the
 //! `pair.create` action, and the remote TCP admission gate.
 //!
@@ -95,7 +96,7 @@ fn verification_fails_closed() {
         .mint()
         .expect_err("minting into a corrupt store must fail");
     assert!(
-        error.contains("auth-tokens.json"),
+        error.to_string().contains("auth-tokens.json"),
         "the mint error names the path: {error}"
     );
 

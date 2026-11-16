@@ -214,7 +214,8 @@ async fn admit(host: &Host, data_dir: &Path, frame: &[u8], outbound: &Outbound) 
                         .is_ok()
                 }
                 Err(error) => {
-                    let _ = reply(outbound, dispatch::envelope_failure(id, &error)).await;
+                    let _ =
+                        reply(outbound, dispatch::envelope_failure(id, &error.to_string())).await;
                     false
                 }
             }
