@@ -14,13 +14,14 @@ use openbutler_daemon::dispatch::Host;
 use openbutler_daemon::server;
 use openbutler_protocol::{DAEMON_PROTOCOL_VERSION, DaemonResponse, validate_response};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 // --- Endpoint derivation ----------------------------------------------------
 
 #[cfg(windows)]
 #[test]
 fn endpoint_matches_the_legacy_pipe_name_formula() {
+    use sha2::{Digest, Sha256};
+
     // `daemon.ts getDaemonEndpoint`: sha256 of the lowercased resolved data
     // directory, first 24 hex chars, `\\.\pipe\openbutler-<suffix>`.
     let data_dir = r"C:\ob-endpoint-fixture";
