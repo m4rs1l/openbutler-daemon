@@ -58,6 +58,20 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         }
     }
 
+    // One rule for the flag and for a saved `daemon.listen`: an IPv4 literal
+    // in the tailnet or loopback range, port 1-65535 — refused here with the
+    // documented message instead of surfacing as a bind failure.
+    let listen = match listen {
+        Some(spec) => match openbutler_daemon::listen_target::parse_listen_target(&spec) {
+            Ok(target) => Some(format!("{}:{}", target.host, target.port)),
+            Err(error) => {
+                eprintln!("openbutler-daemon: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
