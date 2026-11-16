@@ -1,0 +1,5 @@
+{
+  "protocolVersion": 1,
+  "aiSdkVersion": "6.0.332",
+  "providers": ["openai", "openai-compatible", "anthropic"]
+}

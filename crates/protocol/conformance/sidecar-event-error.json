@@ -1,0 +1,9 @@
+{
+  "type": "error",
+  "id": "call-01",
+  "kind": "rate-limit",
+  "retryable": true,
+  "status": 429,
+  "retryAfterMs": 2000,
+  "message": "slow down"
+}

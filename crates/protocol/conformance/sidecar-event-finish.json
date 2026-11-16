@@ -1,0 +1,8 @@
+{
+  "type": "finish",
+  "id": "call-01",
+  "finishReason": "tool-calls",
+  "providerMetadata": {
+    "openai": { "cachedPromptTokens": 1024, "reasoning": { "id": "rs_abc" } }
+  }
+}

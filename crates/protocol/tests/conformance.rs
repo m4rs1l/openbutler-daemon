@@ -45,6 +45,25 @@ fn fixture(name: &str) -> &'static str {
         "ledger-action-fallbacks" => {
             include_str!("../conformance/ledger-action-fallbacks.json")
         }
+        "sidecar-command-call" => {
+            include_str!("../conformance/sidecar-command-call.json")
+        }
+        "sidecar-command-cancel" => {
+            include_str!("../conformance/sidecar-command-cancel.json")
+        }
+        "sidecar-handshake" => include_str!("../conformance/sidecar-handshake.json"),
+        "sidecar-event-text-delta" => {
+            include_str!("../conformance/sidecar-event-text-delta.json")
+        }
+        "sidecar-event-reasoning-delta" => {
+            include_str!("../conformance/sidecar-event-reasoning-delta.json")
+        }
+        "sidecar-event-tool-call" => {
+            include_str!("../conformance/sidecar-event-tool-call.json")
+        }
+        "sidecar-event-usage" => include_str!("../conformance/sidecar-event-usage.json"),
+        "sidecar-event-finish" => include_str!("../conformance/sidecar-event-finish.json"),
+        "sidecar-event-error" => include_str!("../conformance/sidecar-event-error.json"),
         "auth-first-frame" => include_str!("../conformance/auth-first-frame.json"),
         other => panic!("unknown fixture {other}"),
     }
@@ -523,4 +542,139 @@ fn ledger_feed_rows_round_trip() {
     assert_eq!(fallbacks.input, serde_json::json!({}));
     assert_eq!(fallbacks.result, None);
     assert_eq!(fallbacks.event_id.as_deref(), Some("evt-01"));
+}
+
+// --- Sidecar door -------------------------------------------------------------
+
+#[test]
+fn sidecar_commands_round_trip() {
+    use openbutler_protocol::sidecar::{SidecarCall, SidecarCommand};
+
+    let SidecarCommand::Call(call) = roundtrip(fixture("sidecar-command-call")) else {
+        panic!("the call vector decodes as a call command");
+    };
+    let SidecarCall {
+        id,
+        provider,
+        model,
+        tools,
+        ..
+    } = call;
+    assert_eq!(id, "call-01");
+    assert_eq!(provider.key, "openai-compatible");
+    assert_eq!(provider.url.as_deref(), Some("https://gateway.example/v1"));
+    assert_eq!(provider.api_key.as_deref(), Some("sk-live-not-logged"));
+    assert_eq!(model, "mimo-v2.6-flash");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "shell");
+    // No execute channel exists in the contract: the schema is all the
+    // SDK ever receives, and the vector's key set proves it.
+    let value = serde_json::to_value(&tools[0]).expect("tool serializes");
+    let object = value.as_object().expect("tool is an object");
+    assert_eq!(object.len(), 3, "name, description, parameters only");
+    assert!(!object.contains_key("execute"), "no execute channel");
+
+    let SidecarCommand::Cancel { id } = roundtrip(fixture("sidecar-command-cancel")) else {
+        panic!("the cancel vector decodes as a cancel command");
+    };
+    assert_eq!(id, "call-01");
+}
+
+#[test]
+fn sidecar_handshake_round_trips() {
+    use openbutler_protocol::sidecar::{SIDECAR_PROTOCOL_VERSION, SidecarReady};
+
+    let ready: SidecarReady = roundtrip(fixture("sidecar-handshake"));
+    assert_eq!(ready.protocol_version, SIDECAR_PROTOCOL_VERSION);
+    assert_eq!(ready.ai_sdk_version, "6.0.332");
+    assert_eq!(
+        ready.providers,
+        vec!["openai", "openai-compatible", "anthropic"]
+    );
+}
+
+#[test]
+fn sidecar_events_round_trip() {
+    use openbutler_protocol::sidecar::{SidecarErrorKind, SidecarEvent};
+
+    let SidecarEvent::TextDelta { id, delta } = roundtrip(fixture("sidecar-event-text-delta"))
+    else {
+        panic!("text vector decodes as text-delta");
+    };
+    assert_eq!((id.as_str(), delta.as_str()), ("call-01", "Hel"));
+
+    let SidecarEvent::ReasoningDelta {
+        id,
+        delta,
+        signature,
+    } = roundtrip(fixture("sidecar-event-reasoning-delta"))
+    else {
+        panic!("reasoning vector decodes as reasoning-delta");
+    };
+    assert_eq!(id, "call-01");
+    assert_eq!(delta, "The user wants");
+    let signature = signature.expect("the provider signature must survive");
+    assert!(
+        signature.starts_with("EqQB"),
+        "signatures pass through untouched"
+    );
+
+    let SidecarEvent::ToolCall {
+        id,
+        name,
+        call_id,
+        arguments,
+    } = roundtrip(fixture("sidecar-event-tool-call"))
+    else {
+        panic!("tool vector decodes as tool-call");
+    };
+    assert_eq!((id.as_str(), name.as_str()), ("call-01", "shell"));
+    assert_eq!(call_id.as_deref(), Some("toolu_01"));
+    assert_eq!(arguments["command"], "ls -la");
+
+    let SidecarEvent::Usage {
+        id,
+        prompt_tokens,
+        reasoning_tokens,
+        total_tokens,
+        ..
+    } = roundtrip(fixture("sidecar-event-usage"))
+    else {
+        panic!("usage vector decodes as usage");
+    };
+    assert_eq!(id, "call-01");
+    assert_eq!(prompt_tokens, Some(1204));
+    assert_eq!(reasoning_tokens, Some(40));
+    assert_eq!(total_tokens, Some(1292));
+
+    let SidecarEvent::Finish {
+        id,
+        finish_reason,
+        provider_metadata,
+    } = roundtrip(fixture("sidecar-event-finish"))
+    else {
+        panic!("finish vector decodes as finish");
+    };
+    assert_eq!(id, "call-01");
+    assert_eq!(finish_reason.as_deref(), Some("tool-calls"));
+    let metadata = provider_metadata.expect("provider metadata must survive");
+    assert_eq!(metadata["openai"]["cachedPromptTokens"], 1024);
+
+    let SidecarEvent::Error {
+        id,
+        kind,
+        retryable,
+        status,
+        retry_after_ms,
+        message,
+    } = roundtrip(fixture("sidecar-event-error"))
+    else {
+        panic!("error vector decodes as error");
+    };
+    assert_eq!(id, "call-01");
+    assert_eq!(kind, SidecarErrorKind::RateLimit);
+    assert!(retryable);
+    assert_eq!(status, Some(429));
+    assert_eq!(retry_after_ms, Some(2000));
+    assert_eq!(message.as_deref(), Some("slow down"));
 }

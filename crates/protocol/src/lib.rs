@@ -27,6 +27,7 @@ pub mod ledger;
 pub mod payload;
 pub mod runtime;
 pub mod session;
+pub mod sidecar;
 pub mod util;
 
 // Historical module paths stay valid: these now live inside their domain

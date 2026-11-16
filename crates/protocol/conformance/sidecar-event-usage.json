@@ -1,0 +1,8 @@
+{
+  "type": "usage",
+  "id": "call-01",
+  "promptTokens": 1204,
+  "completionTokens": 88,
+  "reasoningTokens": 40,
+  "totalTokens": 1292
+}

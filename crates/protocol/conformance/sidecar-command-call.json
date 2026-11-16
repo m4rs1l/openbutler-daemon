@@ -1,0 +1,12 @@
+{
+  "type": "call",
+  "id": "call-01",
+  "provider": { "key": "openai-compatible", "url": "https://gateway.example/v1", "apiKey": "sk-live-not-logged" },
+  "model": "mimo-v2.6-flash",
+  "messages": [
+    { "role": "user", "content": [{ "type": "text", "text": "hello" }] }
+  ],
+  "tools": [
+    { "name": "shell", "description": "Run a shell command", "parameters": { "type": "object", "properties": { "command": { "type": "string" } }, "required": ["command"] } }
+  ]
+}
