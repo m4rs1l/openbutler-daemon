@@ -15,7 +15,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`sidecar_real`, 7 tests) runs the real SDK against a local mock:
   tool-call stops after exactly one model request, unknown keys refused
   with keys kept off stdout, 429 → rate-limit taxonomy, and per-call
-  lazy loading proven from `NODE_DEBUG` traces.
+  lazy loading proven from `NODE_DEBUG` traces. A build step
+  (`sidecar/build.mjs`, esbuild with per-provider lazy chunks) and the
+  bundle acceptance test (`sidecar_bundle`, 1 test) prove the split
+  survives bundling: the metafile covers all eleven provider graphs and
+  loader traces touch strictly fewer dist files than exist.
 - `openbutler-protocol`: wire contract types, the newline frame codec with a
   32 MB cap, envelope validation, and 14 conformance vectors (one captured
   from a live host).
