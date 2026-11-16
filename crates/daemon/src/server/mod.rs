@@ -10,7 +10,9 @@ mod endpoint;
 
 pub use endpoint::{Endpoint, ResolvedEndpoint, endpoint_for};
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::watch;
 
@@ -44,11 +46,52 @@ pub async fn serve(
                 let host = host.clone();
                 let data_dir = data_dir.clone();
                 tokio::spawn(async move {
-                    connection::run(stream, host, data_dir).await;
+                    connection::run(stream, host, data_dir, connection::Admission::Local).await;
                 });
             }
         }
     }
+}
+
+/// Binds a TCP listener and serves it behind the admission gate until the
+/// host requests shutdown. Returns the bound address (pass `:0` to pick a
+/// free port). Every accepted socket is remote: its first frame must pass
+/// the `auth` / `pair` gate or the connection is closed.
+pub async fn serve_tcp(
+    addr: &str,
+    host: Arc<Host>,
+    data_dir: PathBuf,
+    auth_timeout: Duration,
+) -> std::io::Result<std::net::SocketAddr> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let local = listener.local_addr()?;
+    let mut shutdown = host.subscribe_shutdown();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    // Either the host asked to stop, or the sender is gone.
+                    let _ = changed;
+                    break;
+                }
+                accepted = listener.accept() => {
+                    let Ok((stream, _peer)) = accepted else { break; };
+                    let host = host.clone();
+                    let data_dir = data_dir.clone();
+                    tokio::spawn(async move {
+                        connection::run(
+                            stream,
+                            host,
+                            data_dir,
+                            connection::Admission::Remote { auth_timeout },
+                        )
+                        .await;
+                    });
+                }
+            }
+        }
+    });
+    Ok(local)
 }
 
 /// Binds one listener instance for the endpoint (platform transport lives

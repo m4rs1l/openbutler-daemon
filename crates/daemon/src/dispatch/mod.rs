@@ -15,6 +15,7 @@ use openbutler_protocol::{
 use serde_json::json;
 use tokio::sync::watch;
 
+use crate::auth::PairingCodes;
 use crate::state::{self, WorkspaceFilter};
 
 /// What the daemon reports about itself and what keeps it alive.
@@ -22,6 +23,7 @@ pub struct Host {
     started_at: String,
     connected_clients: AtomicU32,
     shutdown: watch::Sender<bool>,
+    pairing: PairingCodes,
 }
 
 impl Host {
@@ -35,7 +37,14 @@ impl Host {
             started_at,
             connected_clients: AtomicU32::new(0),
             shutdown,
+            pairing: PairingCodes::new(),
         }
+    }
+
+    /// The shared pairing state: `pair.create` issues through it, the
+    /// admission gate redeems through it.
+    pub fn pairing(&self) -> &PairingCodes {
+        &self.pairing
     }
 
     /// The current status view (`status` action).
@@ -105,26 +114,44 @@ pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> DaemonRe
             host.request_shutdown();
             success(request, json!({ "stopping": true }))
         }
+        "pair.create" => match host.pairing().issue(crate::auth::now_ms()) {
+            Ok((code, expires_at)) => {
+                success(request, json!({ "code": code, "expiresAt": expires_at }))
+            }
+            Err(error) => failure(request, error),
+        },
         other => failure(request, format!("Unknown action: {other}")),
     }
 }
 
 /// Success envelope at the current protocol version, echoing the request id.
-fn success(request: &DaemonRequest, result: serde_json::Value) -> DaemonResponse {
+/// Shared by the dispatcher and the admission gate: every response frame in
+/// the daemon is built here.
+pub(crate) fn envelope_success(id: &str, result: serde_json::Value) -> DaemonResponse {
     DaemonResponse::Success {
         version: DAEMON_PROTOCOL_VERSION,
-        id: request.id.clone(),
+        id: id.to_owned(),
         ok: true,
         result,
     }
 }
 
 /// Failure envelope at the current protocol version, echoing the request id.
-fn failure(request: &DaemonRequest, error: String) -> DaemonResponse {
+pub(crate) fn envelope_failure(id: &str, error: &str) -> DaemonResponse {
     DaemonResponse::Failure {
         version: DAEMON_PROTOCOL_VERSION,
-        id: request.id.clone(),
+        id: id.to_owned(),
         ok: false,
-        error,
+        error: error.to_owned(),
     }
+}
+
+/// Success envelope for a dispatched request.
+fn success(request: &DaemonRequest, result: serde_json::Value) -> DaemonResponse {
+    envelope_success(&request.id, result)
+}
+
+/// Failure envelope for a dispatched request.
+fn failure(request: &DaemonRequest, error: String) -> DaemonResponse {
+    envelope_failure(&request.id, &error)
 }

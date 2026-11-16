@@ -31,6 +31,7 @@ pub mod util;
 pub use runtime::status;
 pub use session::{attach, entry};
 
+pub use auth::{AUTH_FAILED, PAIR_FAILED, REMOTE_FIRST_FRAME_REFUSED};
 pub use constants::{
     DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, PREVIOUS_DAEMON_PROTOCOL_VERSION,
 };

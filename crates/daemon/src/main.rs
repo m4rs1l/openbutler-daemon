@@ -11,7 +11,7 @@ use openbutler_daemon::{config, dispatch::Host, server};
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
-        Some("run") => run(),
+        Some("run") => run(&mut args),
         _ => {
             println!(
                 "openbutler-daemon protocol v{}",
@@ -22,7 +22,26 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> ExitCode {
+/// `run [--listen <addr:port>]`: serve the local IPC endpoint, and the
+/// remote TCP listener (behind the admission gate) when asked for.
+fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let mut listen: Option<String> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--listen" => match args.next() {
+                Some(addr) => listen = Some(addr),
+                None => {
+                    eprintln!("openbutler-daemon: --listen needs an address, e.g. 127.0.0.1:45278");
+                    return ExitCode::FAILURE;
+                }
+            },
+            other => {
+                eprintln!("openbutler-daemon: unknown run option `{other}`");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -36,6 +55,24 @@ fn run() -> ExitCode {
     runtime.block_on(async {
         let host = Arc::new(Host::new());
         let shutdown = host.subscribe_shutdown();
+
+        if let Some(addr) = listen {
+            let bound = server::serve_tcp(
+                &addr,
+                host.clone(),
+                config::data_dir(),
+                openbutler_daemon::auth::REMOTE_AUTH_TIMEOUT,
+            )
+            .await;
+            match bound {
+                Ok(bound) => println!("remote listener: {bound}"),
+                Err(error) => {
+                    eprintln!("openbutler-daemon: could not listen on {addr}: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+
         let endpoint = server::endpoint_for(&config::data_dir());
         let served = server::serve(endpoint, host.clone(), shutdown);
 
