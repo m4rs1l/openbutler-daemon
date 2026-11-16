@@ -7,5 +7,6 @@ pub mod auth;
 pub mod config;
 pub mod dispatch;
 pub mod server;
+pub mod settings;
 pub mod state;
 pub mod web;
