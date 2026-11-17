@@ -7,6 +7,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tools/shell.rs`: shell resolution for `execute_command` — one
+  setting, three shapes (auto walks the source's preference order, a
+  preset names a program, a path runs as given), dialect from the
+  executable's own filename, per-dialect launcher flags, WSL-stub
+  skipping for `git-bash`, environment-stated install roots only, and
+  the three exact error sentences. Platform, environment and the
+  existence probe are injected, so tests never consult the host
+  (`shell_resolution`, 8 tests).
 - Attachment store (`state/attachments.rs`): base64 decode with the
   source's character-class and size rules (padding-lenient like
   `Buffer.from`), magic-byte typing, content-addressed
