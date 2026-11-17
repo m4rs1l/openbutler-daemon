@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 use crate::ledger::{LedgerWriter, ToolActionState, ToolActionUpdate};
 use crate::settings::ApprovalMode;
 use crate::state::slice_utf16;
-use crate::tools::tool_output::{ToolOutputWriter, tool_output_notice, tool_output_root_in};
-use crate::tools::workspace_scope::WorkspaceScope;
+use crate::tool_runtime::tool_output::{ToolOutputWriter, tool_output_notice, tool_output_root_in};
+use crate::tool_runtime::workspace_scope::WorkspaceScope;
 
 /// Host control metadata: stripped before execution — a host option is never
 /// a tool or server argument (timeout.ts L1).

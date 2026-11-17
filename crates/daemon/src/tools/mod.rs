@@ -1,12 +1,9 @@
-//! Host tools: the single path from a model tool call to an effect.
+//! The model's tools: one file (or folder) per tool, and nothing else.
 //!
-//! One definition per tool, one gate every call passes through — the
-//! pipeline lands with each tool (legacy `src/tools/`).
+//! The machinery every call passes through — catalog wiring, the gate /
+//! ledger / timeout pipeline, workspace scope classification, output
+//! bounding and transcript formatting — lives in `crate::tool_runtime`.
+//! A tool here holds only its own logic; adding a tool means one folder
+//! in this module and one definition in the catalog.
 
-pub mod catalog;
 pub mod execute_command;
-pub mod format;
-pub mod pipeline;
-pub mod shell;
-pub mod tool_output;
-pub mod workspace_scope;

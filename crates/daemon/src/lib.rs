@@ -13,4 +13,5 @@ pub mod server;
 pub mod settings;
 pub mod sidecar;
 pub mod state;
+pub mod tool_runtime;
 pub mod tools;

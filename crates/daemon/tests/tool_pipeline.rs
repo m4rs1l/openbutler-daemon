@@ -15,14 +15,14 @@ mod common;
 use common::temp_data_dir;
 use openbutler_daemon::ledger::LedgerWriter;
 use openbutler_daemon::settings::ApprovalMode;
-use openbutler_daemon::tools::catalog::{create_execute_command_tool, sidecar_tool};
-use openbutler_daemon::tools::pipeline::{
+use openbutler_daemon::tool_runtime::catalog::{create_execute_command_tool, sidecar_tool};
+use openbutler_daemon::tool_runtime::pipeline::{
     ApprovalOutcome, DEFAULT_TOOL_TIMEOUT_SECONDS, GateDecision, TOOL_TIMEOUT_FIELD,
     ToolCallContext, ToolDefinition, ToolFuture, approval_failure, assess, denial_message,
     denial_result, policy_failure, proposal_failure, run_tool_call, stop_result,
     tool_timeout_seconds,
 };
-use openbutler_daemon::tools::workspace_scope::WorkspaceScope;
+use openbutler_daemon::tool_runtime::workspace_scope::WorkspaceScope;
 use serde_json::json;
 use std::path::Path;
 

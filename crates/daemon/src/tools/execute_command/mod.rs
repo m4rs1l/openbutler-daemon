@@ -7,6 +7,8 @@
 //! are the registry's job and land with the batch loop; this module is
 //! the tool itself: what may run, where, and what comes back.
 
+pub mod shell;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,9 +19,11 @@ use regex::Regex;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 
-use super::shell::{self, ResolvedShell};
-use super::tool_output::{TOOL_OUTPUT_COMMAND_CHARS, ToolOutputWriter, tool_output_notice};
-use super::workspace_scope::{WorkspaceScope, classify_trusted_path};
+use self::shell::ResolvedShell;
+use crate::tool_runtime::tool_output::{
+    TOOL_OUTPUT_COMMAND_CHARS, ToolOutputWriter, tool_output_notice,
+};
+use crate::tool_runtime::workspace_scope::{WorkspaceScope, classify_trusted_path};
 
 const MAX_COMMAND_CHARS: usize = 10_000;
 pub const DEFAULT_TOOL_TIMEOUT_SECONDS: u64 = 60;

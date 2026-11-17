@@ -47,9 +47,9 @@ use uuid::Uuid;
 use crate::ledger::LedgerWriter;
 use crate::sidecar::{DoorError, Lane, SidecarDoor, sidecar_call};
 use crate::state::{self, SaveOutcome, SessionRecord, StateError, save_session};
-use crate::tools::catalog::native_definition;
-use crate::tools::format::format_tool_result;
-use crate::tools::pipeline::{
+use crate::tool_runtime::catalog::native_definition;
+use crate::tool_runtime::format::format_tool_result;
+use crate::tool_runtime::pipeline::{
     ApprovalOutcome, AskFuture, AskPort, GateDecision, ToolCallContext, assess, proposal_failure,
     run_tool_call, stop_result,
 };
@@ -451,7 +451,7 @@ impl TurnRunner {
             .filter_map(|name| {
                 native_definition(name, &tool_workspace, request.command_shell.as_deref())
             })
-            .filter_map(|definition| crate::tools::catalog::sidecar_tool(&definition).ok())
+            .filter_map(|definition| crate::tool_runtime::catalog::sidecar_tool(&definition).ok())
             .collect();
         let mut steps = 0usize;
         let (outcome, final_reply) = loop {

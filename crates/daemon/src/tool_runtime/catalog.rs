@@ -10,14 +10,14 @@ use std::path::Path;
 use openbutler_protocol::sidecar::SidecarTool;
 use serde_json::{Value, json};
 
+use crate::tool_runtime::pipeline::{
+    MAX_TOOL_TIMEOUT_SECONDS, TOOL_TIMEOUT_FIELD, ToolCallContext, ToolDefinition,
+};
+use crate::tool_runtime::workspace_scope::WorkspaceScope;
+use crate::tools::execute_command::shell::resolve_shell;
 use crate::tools::execute_command::{
     ExecuteEnvironment, command_scope, execute_command, resolve_command_directory,
 };
-use crate::tools::pipeline::{
-    MAX_TOOL_TIMEOUT_SECONDS, TOOL_TIMEOUT_FIELD, ToolCallContext, ToolDefinition,
-};
-use crate::tools::shell::resolve_shell;
-use crate::tools::workspace_scope::WorkspaceScope;
 
 /// The `question` tool's bounds (question.ts L4-6): UTF-16 units, like
 /// the source's `string.length`.

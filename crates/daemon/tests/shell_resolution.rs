@@ -5,7 +5,7 @@
 //! Source: legacy `src/tools/shell.ts`, read 2026-11-17.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use openbutler_daemon::tools::shell::{
+use openbutler_daemon::tools::execute_command::shell::{
     ResolvedShell, ShellDialect, ShellEnvironment, is_shell_preset, is_shell_setting_value,
     resolve_shell_with,
 };
