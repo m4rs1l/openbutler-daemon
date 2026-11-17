@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `session.select-model`: the two `requireString` checks (256/512),
+  the accept-immediately answer, and the pick's journey to the next
+  turn boundary — `Host::queue_model_pick` records it, `prepare_send`
+  reads it for the request (URL/key resolve for the picked provider),
+  and the runner takes it into the record before the admission save.
+  The settings half is best effort like the source: `rememberProviderModel`
+  (`settings/remember.rs`, including the 512-model cap sentence),
+  save through the transaction, host copy refreshed; a failure logs
+  `Could not record the picked model …` and still answers accepted.
+  Effort variants (`describeModelReasoning`) need the runtime catalog
+  and are not in this slice. 9 tests (5 remember, 4 dispatch/e2e).
 - The door now carries the tool catalog per turn (`sidecar_tool`
   shapes each native definition with the denotation suffix and the
   timeout field): a real provider sees the tools the batch loop can

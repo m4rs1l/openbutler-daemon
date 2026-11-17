@@ -108,6 +108,12 @@ pub struct Host {
     /// is prepared (`session.send`) until the full `toRuntimeView` port
     /// lands with `session.attach`.
     runtime_view: RwLock<Option<RuntimeViewData>>,
+    /// Model picks waiting for their turn boundary
+    /// (`session.select-model`): the arm records here, `prepare_send`
+    /// reads it for the request, and the runner takes it into the
+    /// record when the turn starts. Std mutex — every section is a map
+    /// touch, never spanning an await.
+    model_picks: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
 }
 
 impl Host {
@@ -126,6 +132,7 @@ impl Host {
             executor: RwLock::new(None),
             fanout: Fanout::new(),
             runtime_view: RwLock::new(None),
+            model_picks: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -153,6 +160,36 @@ impl Host {
     /// admission gate redeems through it.
     pub fn pairing(&self) -> &PairingCodes {
         &self.pairing
+    }
+
+    /// Queues a model pick for the session's next turn boundary
+    /// (`session.select-model` — accepted while a run is going; it
+    /// never lands under the running request).
+    pub fn queue_model_pick(&self, session_id: &str, provider_id: String, model_id: String) {
+        self.model_picks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(session_id.to_owned(), (provider_id, model_id));
+    }
+
+    /// The pick waiting for the session's next turn, if any. Read by
+    /// `prepare_send`, which must not consume it — the runner takes it
+    /// at the boundary.
+    pub fn peek_model_pick(&self, session_id: &str) -> Option<(String, String)> {
+        self.model_picks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .cloned()
+    }
+
+    /// Consumes the pick exactly once, at the turn boundary (legacy
+    /// `selectModel` adopting the session's state).
+    pub fn take_model_pick(&self, session_id: &str) -> Option<(String, String)> {
+        self.model_picks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(session_id)
     }
 
     /// The event roster runners publish to.
@@ -640,6 +677,48 @@ pub fn handle(
             }
             success(request, json!({ "accepted": true }))
         }
+        "session.select-model" => {
+            // Source (daemon-host L3559-3581): requireString(providerId,
+            // 256) + requireString(modelId, 512), the pick waits at the
+            // turn boundary, and the settings record is best effort — a
+            // failed remember logs and still answers accepted.
+            let provider_id = match request.get("providerId").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() && value.len() <= 256 => value.to_owned(),
+                _ => {
+                    return failure(
+                        request,
+                        "providerId must be a non-empty string under 256 bytes.".to_owned(),
+                    );
+                }
+            };
+            let model_id = match request.get("modelId").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() && value.len() <= 512 => value.to_owned(),
+                _ => {
+                    return failure(
+                        request,
+                        "modelId must be a non-empty string under 512 bytes.".to_owned(),
+                    );
+                }
+            };
+            if let Some(session_id) = state.current_session.clone() {
+                host.queue_model_pick(&session_id, provider_id.clone(), model_id.clone());
+            }
+            match record_pick_in_settings(data_dir, &provider_id, &model_id) {
+                Ok(()) => {
+                    // Refresh the host copy so the next read sees the
+                    // remembered list (the source reloads lazily).
+                    if let Err(error) = host.reload_settings(data_dir) {
+                        eprintln!(
+                            "Could not record the picked model {provider_id}/{model_id}: {error}"
+                        );
+                    }
+                }
+                Err(message) => eprintln!(
+                    "Could not record the picked model {provider_id}/{model_id}: {message}"
+                ),
+            }
+            success(request, json!({ "accepted": true }))
+        }
         "stop" => {
             host.request_shutdown();
             success(request, json!({ "stopping": true }))
@@ -804,6 +883,19 @@ fn failure(request: &DaemonRequest, error: String) -> DaemonResponse {
 /// Resolves everything an accepted send needs: the chat's record, the
 /// live settings (provider url, team, default workspace), the provider
 /// secret, and the assembled system prompt.
+/// The source's remember half (daemon-host L3574-3580): load fresh,
+/// remember the pick, save through the write transaction — best effort;
+/// the caller logs and still answers accepted.
+fn record_pick_in_settings(
+    data_dir: &Path,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
+    let mut loaded = crate::settings::load_settings(data_dir).map_err(|error| error.to_string())?;
+    crate::settings::remember_provider_model(&mut loaded.store, provider_id, model_id)?;
+    crate::settings::save_settings(data_dir, &mut loaded).map_err(|error| error.to_string())
+}
+
 fn prepare_send(
     host: &Host,
     data_dir: &Path,
@@ -815,7 +907,14 @@ fn prepare_send(
     let path = state::record_path(data_dir, session_id).ok_or_else(|| CHAT_NOT_FOUND.to_owned())?;
     let record =
         state::read_session_record(&path, session_id).ok_or_else(|| CHAT_NOT_FOUND.to_owned())?;
-    let meta = record.meta;
+    let mut meta = record.meta;
+    // The pick waits at the turn boundary: `prepare_send` reads it for
+    // this request, and the runner takes it into the record when the
+    // turn starts (legacy `selectModel` — never under a running request).
+    if let Some((provider_id, model_id)) = host.peek_model_pick(session_id) {
+        meta.provider_id = provider_id;
+        meta.model_id = model_id;
+    }
     let settings = host.settings();
     let loaded = settings
         .as_ref()

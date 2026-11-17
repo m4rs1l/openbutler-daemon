@@ -1312,6 +1312,43 @@ async fn the_question_tool_queues_publishes_and_resolves_during_a_turn() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The queued pick lands on the record at the turn boundary: the runner
+/// takes it before the admission save, so the chat's saved model is the
+/// picked one after one turn (legacy `selectModel` → session model).
+#[tokio::test]
+async fn a_queued_pick_lands_on_the_record_at_the_turn_boundary() {
+    let root = temp_root("pick-boundary");
+    seed_session(&root);
+    let (addr, _mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    host.queue_model_pick(SESSION_ID, "mock".to_owned(), "picked-model".to_owned());
+
+    let runner = TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+        .await
+        .expect("open");
+    let turn = runner
+        .send(request("basic", addr, UserEntrySource::Terminal))
+        .await
+        .expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    let record = saved(&root);
+    assert_eq!(
+        record.meta.model_id, "picked-model",
+        "the take writes the pick into the record"
+    );
+    assert_eq!(record.meta.provider_id, "mock");
+    assert!(
+        host.peek_model_pick(SESSION_ID).is_none(),
+        "the pick is consumed, not reused"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[tokio::test]
 async fn a_queued_approval_reaches_the_roster_before_the_decision() {
     let root = temp_root("approval-publish");

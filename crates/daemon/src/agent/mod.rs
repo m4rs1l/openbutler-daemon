@@ -363,6 +363,16 @@ impl TurnRunner {
     /// and the user entry is stamped `completed`/`cancelled`/`failed`.
     pub async fn send(&self, request: TurnRequest) -> Result<TurnReport, TurnError> {
         let mut state = self.state.lock().await;
+        // Turn boundary: a queued model pick lands on the record before
+        // anything of this turn is built — legacy `selectModel` adopting
+        // the session's state; the admission save writes it to disk.
+        if let Some(host) = self.host.upgrade()
+            && let Some((provider_id, model_id)) = host.take_model_pick(&self.session_id)
+        {
+            state.record.meta.provider_id = provider_id;
+            state.record.meta.model_id = model_id;
+            state.dirty = true;
+        }
         self.stop.store(false, Ordering::SeqCst);
         let turn_id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp_millis();
