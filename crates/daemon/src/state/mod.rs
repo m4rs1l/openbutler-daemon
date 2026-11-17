@@ -17,6 +17,8 @@ pub use list::{WorkspaceFilter, list_sessions};
 pub use paths::{
     CUSTODIAN_SESSION_ID, is_session_id, same_path, session_directory, sessions_directory,
 };
+/// The one UTF-16 preview slice — shared with the ledger's envelope.
+pub(crate) use record::slice_utf16;
 pub use record::{
     SessionRecord, parse_record, read_session_record, read_session_view, record_path,
 };

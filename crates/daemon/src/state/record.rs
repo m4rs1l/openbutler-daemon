@@ -140,7 +140,7 @@ fn normalize_preview(raw: &str, limit: usize) -> String {
 
 /// Slices by UTF-16 units so the limit matches the `String.slice`
 /// boundary without splitting an astral character.
-fn slice_utf16(value: &str, units: usize) -> String {
+pub(crate) fn slice_utf16(value: &str, units: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
     for ch in value.chars() {

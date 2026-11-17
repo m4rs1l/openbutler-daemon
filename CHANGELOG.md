@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `ledger` writer: the tool-action write path (c2a) — idempotent
+  `proposed` record as the write-ahead gate before execution, one
+  transaction per transition chain, boot recovery to `failed` with the
+  source's wording, schema CHECK generated from `TOOL_ACTION_STATES`, and
+  the 32 000-char JSON envelope (`ledger_actions`, 7 tests).
 - `agent/`: the turn loop (M2c c1) — admission save before the model is
   asked, model-only host-context labels, one-assistant-entry streaming with
   the reasoning splice and block duration, settled tool entries, turn
