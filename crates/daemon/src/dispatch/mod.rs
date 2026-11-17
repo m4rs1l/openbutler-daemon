@@ -7,6 +7,7 @@
 //! the envelope rules, and answered as one protocol response — no other
 //! module constructs responses.
 
+pub mod fanout;
 mod schedule;
 pub mod session_send;
 

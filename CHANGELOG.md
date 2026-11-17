@@ -7,6 +7,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Fan-out roster (`dispatch/fanout.rs`): session subscriptions behind an
+  `EventSink` trait (the connection's bounded write queue implements it —
+  `dispatch` never depends on `server`), `publish` builds the event via
+  `make_session_event` and queues it to every subscriber of that session;
+  a refusing sink is unsubscribed on the spot (the source's
+  `socket.destroy` for an over-limit frame). 4 tests in
+  `tests/fanout.rs`.
 - Publish unit (`agent/events.rs`): `make_session_event` / `diff_entries`
   port the source's previous/next diff (daemon-host.ts L3711/L3749) —
   id change forces a full snapshot, unchanged entries drop the
