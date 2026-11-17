@@ -69,6 +69,20 @@ pub(crate) fn derive_meta(meta: SessionMeta, entries: &[SessionEntry]) -> Sessio
 }
 
 /// Reads one record whole: bounded read, parse, verify the id against the
+/// file's own contents. `None` means unreadable, oversized, malformed, or
+/// belonging to another id — the agent loop's load path, which needs the
+/// conversation arrays the view drops.
+pub fn read_session_record(path: &Path, id: &str) -> Option<SessionRecord> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() > FULL_READ_LIMIT_BYTES {
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
+    let record = parse_record(&text)?;
+    (record.meta.id == id).then_some(record)
+}
+
+/// Reads one record whole: bounded read, parse, verify the id against the
 /// file's own contents, derive what the record predates. `None` means
 /// unreadable, oversized, malformed, or belonging to another id.
 pub fn read_session_view(path: &Path, id: &str) -> Option<SessionView> {

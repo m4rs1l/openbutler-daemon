@@ -17,7 +17,9 @@ pub use list::{WorkspaceFilter, list_sessions};
 pub use paths::{
     CUSTODIAN_SESSION_ID, is_session_id, same_path, session_directory, sessions_directory,
 };
-pub use record::{parse_record, read_session_view, record_path};
+pub use record::{
+    SessionRecord, parse_record, read_session_record, read_session_view, record_path,
+};
 pub use save::{SaveOutcome, save_session};
 
 /// Errors of the state layer. Per file, listing stays tolerant: one damaged

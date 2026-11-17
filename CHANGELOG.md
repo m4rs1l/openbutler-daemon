@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `agent/`: the turn loop (M2c c1) — admission save before the model is
+  asked, model-only host-context labels, one-assistant-entry streaming with
+  the reasoning splice and block duration, settled tool entries, turn
+  outcome stamping (`completed`/`cancelled`/`failed`) and the 1 s mid-stream
+  dirty save (`agent_loop`, 7 tests against the real sidecar).
 - `state/save.rs`: the session write path — recompute-on-save (display
   fields rebuilt from `entries`, `updatedAt` refreshed), the meta-before-  `entries` header order, skip-without-user (`allow_empty` to override),
   the `Cannot save an invalid session.` gate, and the atomic `0600`
