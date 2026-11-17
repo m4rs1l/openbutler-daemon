@@ -34,8 +34,8 @@ fn endpoint_matches_the_pipe_name_formula() {
         .map(|byte| format!("{byte:02x}"))
         .collect();
 
-    let endpoint = server::endpoint_for(Path::new(data_dir));
-    let server::Endpoint::NamedPipe(name) = endpoint.target() else {
+    let endpoint = server::socket::endpoint_for(Path::new(data_dir));
+    let server::socket::Endpoint::NamedPipe(name) = endpoint.target() else {
         panic!("expected a named pipe endpoint on Windows");
     };
     assert_eq!(*name, format!(r"\\.\pipe\openbutler-{suffix}"));
@@ -44,8 +44,8 @@ fn endpoint_matches_the_pipe_name_formula() {
 #[cfg(unix)]
 #[test]
 fn endpoint_is_the_daemon_socket_inside_the_data_dir() {
-    let endpoint = server::endpoint_for(Path::new("/tmp/ob-endpoint-fixture"));
-    let server::Endpoint::UnixSocket(path) = endpoint.target() else {
+    let endpoint = server::socket::endpoint_for(Path::new("/tmp/ob-endpoint-fixture"));
+    let server::socket::Endpoint::UnixSocket(path) = endpoint.target() else {
         panic!("expected a unix socket endpoint");
     };
     assert_eq!(
@@ -61,7 +61,7 @@ fn endpoint_is_the_daemon_socket_inside_the_data_dir() {
 mod client {
     pub type Stream = tokio::net::windows::named_pipe::NamedPipeClient;
 
-    pub async fn connect(endpoint: &openbutler_daemon::server::ResolvedEndpoint) -> Stream {
+    pub async fn connect(endpoint: &openbutler_daemon::server::socket::ResolvedEndpoint) -> Stream {
         loop {
             match tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint.socket_name())
             {
@@ -76,7 +76,7 @@ mod client {
 mod client {
     pub type Stream = tokio::net::UnixStream;
 
-    pub async fn connect(endpoint: &openbutler_daemon::server::ResolvedEndpoint) -> Stream {
+    pub async fn connect(endpoint: &openbutler_daemon::server::socket::ResolvedEndpoint) -> Stream {
         loop {
             match Stream::connect(endpoint.socket_name()).await {
                 Ok(stream) => return stream,
@@ -110,10 +110,14 @@ async fn request(client: &mut client::Stream, frame: &str) -> Value {
 #[tokio::test]
 async fn status_reports_this_process_over_the_wire() {
     let data_dir = temp_data_dir("ipc-status");
-    let endpoint = server::endpoint_for(&data_dir);
+    let endpoint = server::socket::endpoint_for(&data_dir);
     let host = Arc::new(Host::new());
     let shutdown = host.subscribe_shutdown();
-    let served = tokio::spawn(server::serve(endpoint.clone(), host.clone(), shutdown));
+    let served = tokio::spawn(server::socket::serve(
+        endpoint.clone(),
+        host.clone(),
+        shutdown,
+    ));
 
     let mut client = client::connect(&endpoint).await;
     let response: Value = request(
@@ -157,10 +161,14 @@ async fn session_list_returns_summaries_from_disk() {
         &pretty_session(&id, None, "Wire chat", true),
     );
 
-    let endpoint = server::endpoint_for(&data_dir);
+    let endpoint = server::socket::endpoint_for(&data_dir);
     let host = Arc::new(Host::new());
     let shutdown = host.subscribe_shutdown();
-    let served = tokio::spawn(server::serve(endpoint.clone(), host.clone(), shutdown));
+    let served = tokio::spawn(server::socket::serve(
+        endpoint.clone(),
+        host.clone(),
+        shutdown,
+    ));
 
     let mut client = client::connect(&endpoint).await;
     let response: Value = request(
@@ -192,10 +200,14 @@ async fn session_list_returns_summaries_from_disk() {
 #[tokio::test]
 async fn unknown_action_is_a_failure_response() {
     let data_dir = temp_data_dir("ipc-unknown");
-    let endpoint = server::endpoint_for(&data_dir);
+    let endpoint = server::socket::endpoint_for(&data_dir);
     let host = Arc::new(Host::new());
     let shutdown = host.subscribe_shutdown();
-    let served = tokio::spawn(server::serve(endpoint.clone(), host.clone(), shutdown));
+    let served = tokio::spawn(server::socket::serve(
+        endpoint.clone(),
+        host.clone(),
+        shutdown,
+    ));
 
     let mut client = client::connect(&endpoint).await;
     let response: Value = request(
@@ -223,10 +235,14 @@ async fn unknown_action_is_a_failure_response() {
 #[tokio::test]
 async fn unsupported_version_is_rejected_with_the_current_version_echoed() {
     let data_dir = temp_data_dir("ipc-version");
-    let endpoint = server::endpoint_for(&data_dir);
+    let endpoint = server::socket::endpoint_for(&data_dir);
     let host = Arc::new(Host::new());
     let shutdown = host.subscribe_shutdown();
-    let served = tokio::spawn(server::serve(endpoint.clone(), host.clone(), shutdown));
+    let served = tokio::spawn(server::socket::serve(
+        endpoint.clone(),
+        host.clone(),
+        shutdown,
+    ));
 
     let mut client = client::connect(&endpoint).await;
     let response: Value = request(
@@ -256,10 +272,14 @@ async fn unsupported_version_is_rejected_with_the_current_version_echoed() {
 async fn malformed_frame_closes_the_connection() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let data_dir = temp_data_dir("ipc-malformed");
-    let endpoint = server::endpoint_for(&data_dir);
+    let endpoint = server::socket::endpoint_for(&data_dir);
     let host = Arc::new(Host::new());
     let shutdown = host.subscribe_shutdown();
-    let served = tokio::spawn(server::serve(endpoint.clone(), host.clone(), shutdown));
+    let served = tokio::spawn(server::socket::serve(
+        endpoint.clone(),
+        host.clone(),
+        shutdown,
+    ));
 
     let mut client = client::connect(&endpoint).await;
     client.write_all(b"{not json\n").await.unwrap();
@@ -280,10 +300,14 @@ async fn malformed_frame_closes_the_connection() {
 #[tokio::test]
 async fn stop_action_shuts_the_server_down() {
     let data_dir = temp_data_dir("ipc-stop");
-    let endpoint = server::endpoint_for(&data_dir);
+    let endpoint = server::socket::endpoint_for(&data_dir);
     let host = Arc::new(Host::new());
     let shutdown = host.subscribe_shutdown();
-    let served = tokio::spawn(server::serve(endpoint.clone(), host.clone(), shutdown));
+    let served = tokio::spawn(server::socket::serve(
+        endpoint.clone(),
+        host.clone(),
+        shutdown,
+    ));
 
     let mut client = client::connect(&endpoint).await;
     let response: Value = request(

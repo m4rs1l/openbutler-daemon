@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use openbutler_daemon::web::{
+use openbutler_daemon::server::http::{
     AssetsSource, WebOptions, read_build_id, require_default_assets_dir, start_web_server,
 };
 
@@ -37,7 +37,7 @@ fn write_bundle(dir: &Path) {
     .unwrap();
 }
 
-async fn start(tag: &str) -> openbutler_daemon::web::WebServer {
+async fn start(tag: &str) -> openbutler_daemon::server::http::WebServer {
     let root = scratch(tag);
     let assets = root.join("client");
     write_bundle(&assets);
@@ -336,7 +336,7 @@ async fn the_session_token_survives_a_restart() {
 
 #[test]
 fn the_pair_link_expires_five_minutes_after_it_is_minted() {
-    use openbutler_daemon::web::auth::PairToken;
+    use openbutler_daemon::server::http::auth::PairToken;
 
     let at_mint = PairToken::mint(1_000).expect("os entropy");
     assert!(

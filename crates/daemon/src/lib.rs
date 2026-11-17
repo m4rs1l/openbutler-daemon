@@ -14,4 +14,3 @@ pub mod settings;
 pub mod sidecar;
 pub mod state;
 pub mod tools;
-pub mod web;

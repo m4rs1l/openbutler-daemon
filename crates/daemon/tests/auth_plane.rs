@@ -238,7 +238,7 @@ async fn recv_eof(lines: &mut Lines) {
 async fn a_minted_token_admits_a_remote_socket_and_status_follows() {
     let dir = scratch("gate-ok");
     let host = std::sync::Arc::new(Host::new());
-    let addr = server::serve_tcp(
+    let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
         dir.clone(),
@@ -280,7 +280,7 @@ async fn a_minted_token_admits_a_remote_socket_and_status_follows() {
 async fn a_bad_token_gets_the_fixed_refusal_and_the_connection_closes() {
     let dir = scratch("gate-bad");
     let host = std::sync::Arc::new(Host::new());
-    let addr = server::serve_tcp(
+    let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
         dir.clone(),
@@ -308,7 +308,7 @@ async fn a_bad_token_gets_the_fixed_refusal_and_the_connection_closes() {
 async fn a_well_formed_request_as_first_frame_is_refused_and_closed() {
     let dir = scratch("gate-first");
     let host = std::sync::Arc::new(Host::new());
-    let addr = server::serve_tcp(
+    let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
         dir.clone(),
@@ -337,7 +337,7 @@ async fn a_well_formed_request_as_first_frame_is_refused_and_closed() {
 async fn a_pairing_frame_over_tcp_mints_a_working_token() {
     let dir = scratch("gate-pair");
     let host = std::sync::Arc::new(Host::new());
-    let addr = server::serve_tcp(
+    let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
         dir.clone(),
@@ -386,7 +386,7 @@ async fn a_pairing_frame_over_tcp_mints_a_working_token() {
 async fn a_silent_remote_socket_is_closed_after_the_auth_deadline() {
     let dir = scratch("gate-silent");
     let host = std::sync::Arc::new(Host::new());
-    let addr = server::serve_tcp(
+    let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
         dir.clone(),

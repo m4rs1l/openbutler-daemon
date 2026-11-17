@@ -1,4 +1,4 @@
-//! The browser surface: bundle serving, pairing, and the API gate.
+//! The HTTP door: bundle serving, pairing, and the API gate.
 //!
 //! This layer is a backend-owned projection for a browser: it serves the
 //! prebuilt client bundle, exchanges a one-shot link for a persistent
@@ -8,7 +8,7 @@
 
 pub mod assets;
 pub mod auth;
-pub mod server;
+pub mod router;
 
 pub use assets::{AssetsSource, read_build_id, require_default_assets_dir};
-pub use server::{DEFAULT_WEB_BIND, WebOptions, WebServer, start_web_server};
+pub use router::{DEFAULT_WEB_BIND, WebOptions, WebServer, start_web_server};
