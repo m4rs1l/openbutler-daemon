@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tools/execute_command.rs`: the flagship native tool — input
+  validation with the source's sentences, the workspace-scope rules
+  (cd walk, install/elevation/home/fetcher/piped-interpreter regexes,
+  masked-URL path scan), the shell run with host-owned deadline,
+  whole-tree kill, streaming inline cap with spill to a capped file,
+  ANSI/control cleaning, and the exact result shapes
+  (`execute_command`, 6 tests). `tools/workspace_scope.rs` ports the
+  trusted-roots classification (missing-tolerant resolution) and
+  `tools/tool_output.rs` the spill writer + notice.
 - `tools/shell.rs`: shell resolution for `execute_command` — one
   setting, three shapes (auto walks the source's preference order, a
   preset names a program, a path runs as given), dialect from the
