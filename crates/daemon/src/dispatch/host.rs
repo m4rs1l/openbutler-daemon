@@ -1,0 +1,253 @@
+//! The shared record: what one connection carries between requests, and
+//! what the daemon reports.
+//!
+//! `DispatchState` is the per-connection stand-in for a host-wide current
+//! controller; `Host` is the authority for what `status` reports (identity,
+//! start time, live connection count, shutdown signal) and owns the live
+//! services (settings, fanout, executor, runtime view).
+
+use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
+
+use openbutler_protocol::DaemonStatus;
+use openbutler_protocol::entry::UserEntrySource;
+use openbutler_protocol::runtime::RuntimeViewData;
+use tokio::sync::watch;
+
+use super::fanout::{self, Fanout};
+use crate::agent::TurnExecutor;
+use crate::auth::PairingCodes;
+use crate::settings::{LoadedSettings, SettingsError, load_settings};
+
+/// The chat this connection has opened. `session.load` records it; the
+/// paging and attachment reads address it — the per-connection stand-in for
+/// a host-wide current controller (there is no runtime in this build,
+/// so the record on disk is the whole truth).
+#[derive(Default)]
+pub struct DispatchState {
+    pub(super) current_session: Option<String>,
+    /// The client kind the connection attached with; until `attach` sets
+    /// it, sends read as terminal (the source's default channel).
+    pub(super) client_kind: Option<UserEntrySource>,
+    /// This connection's write path, set by the server before dispatch
+    /// runs; `attach` subscribes it to the session's fan-out.
+    pub(super) sink: Option<fanout::SharedSink>,
+    /// The fan-out subscription this connection owns (dropped on a new
+    /// attach or when the connection's state is discarded).
+    pub(super) subscription: Option<u64>,
+    /// Frames an action wants sent *after* its response (the attach
+    /// snapshot event rides behind the answer, daemon-host.ts L1459).
+    pub(super) pending_events: Vec<Vec<u8>>,
+}
+
+impl DispatchState {
+    /// A fresh connection holds no chat yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The id `session.load` last succeeded with (tests and diagnostics).
+    pub fn current_session(&self) -> Option<&str> {
+        self.current_session.as_deref()
+    }
+
+    /// Hands dispatch the connection's write path (server wiring; tests
+    /// pass a recording sink).
+    pub fn set_sink(&mut self, sink: fanout::SharedSink) {
+        self.sink = Some(sink);
+    }
+
+    /// The frames queued behind the current response, drained by the
+    /// connection after it writes it.
+    pub fn take_pending_events(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.pending_events)
+    }
+}
+
+/// What the daemon reports about itself and what keeps it alive.
+pub struct Host {
+    started_at: String,
+    connected_clients: AtomicU32,
+    shutdown: watch::Sender<bool>,
+    pairing: PairingCodes,
+    /// The live settings copy every runtime read goes through. Loaded and
+    /// reloaded only by `reload_settings` — one writer for the host.
+    settings: RwLock<Option<LoadedSettings>>,
+    /// The host-wide turn executor (door + runners). Set once at boot;
+    /// `session.send` refuses without it.
+    executor: RwLock<Option<Arc<dyn TurnExecutor>>>,
+    /// Who receives a session's published events (c3): the roster lives
+    /// with the host because a runner publishes across connections.
+    fanout: Fanout,
+    /// The runtime view every published frame carries. Built when a turn
+    /// is prepared (`session.send`) until the full `toRuntimeView` port
+    /// lands with `session.attach`.
+    runtime_view: RwLock<Option<RuntimeViewData>>,
+    /// Model picks waiting for their turn boundary
+    /// (`session.select-model`): the arm records here, `prepare_send`
+    /// reads it for the request, and the runner takes it into the
+    /// record when the turn starts. Std mutex — every section is a map
+    /// touch, never spanning an await.
+    model_picks: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+}
+
+impl Host {
+    /// Identity and clock start now; the shutdown channel opens closed.
+    pub fn new() -> Self {
+        let started_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());
+        let (shutdown, _) = watch::channel(false);
+        Self {
+            started_at,
+            connected_clients: AtomicU32::new(0),
+            shutdown,
+            pairing: PairingCodes::new(),
+            settings: RwLock::new(None),
+            executor: RwLock::new(None),
+            fanout: Fanout::new(),
+            runtime_view: RwLock::new(None),
+            model_picks: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// The live settings copy, if it has been loaded yet. `None` means
+    /// nobody called `reload_settings` — the server boot path always does.
+    pub fn settings(&self) -> std::sync::RwLockReadGuard<'_, Option<LoadedSettings>> {
+        self.settings
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Refresh the live copy from disk under the same lock every reader
+    /// uses. A failed load leaves the previous copy untouched: a broken
+    /// file must never evict working settings.
+    pub fn reload_settings(&self, data_dir: &Path) -> Result<(), SettingsError> {
+        let fresh = load_settings(data_dir)?;
+        *self
+            .settings
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(fresh);
+        Ok(())
+    }
+
+    /// The shared pairing state: `pair.create` issues through it, the
+    /// admission gate redeems through it.
+    pub fn pairing(&self) -> &PairingCodes {
+        &self.pairing
+    }
+
+    /// Queues a model pick for the session's next turn boundary
+    /// (`session.select-model` — accepted while a run is going; it
+    /// never lands under the running request).
+    pub fn queue_model_pick(&self, session_id: &str, provider_id: String, model_id: String) {
+        self.model_picks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(session_id.to_owned(), (provider_id, model_id));
+    }
+
+    /// The pick waiting for the session's next turn, if any. Read by
+    /// `prepare_send`, which must not consume it — the runner takes it
+    /// at the boundary.
+    pub fn peek_model_pick(&self, session_id: &str) -> Option<(String, String)> {
+        self.model_picks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .cloned()
+    }
+
+    /// Consumes the pick exactly once, at the turn boundary (legacy
+    /// `selectModel` adopting the session's state).
+    pub fn take_model_pick(&self, session_id: &str) -> Option<(String, String)> {
+        self.model_picks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(session_id)
+    }
+
+    /// The event roster runners publish to.
+    pub fn fanout(&self) -> &Fanout {
+        &self.fanout
+    }
+
+    /// The runtime view published frames carry, until the full
+    /// `toRuntimeView` port lives with `session.attach`.
+    pub fn runtime_view(&self) -> Option<RuntimeViewData> {
+        self.runtime_view
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Sets the runtime view a prepared turn publishes with (built from
+    /// the settings `session.send` resolved).
+    pub fn set_runtime_view(&self, view: RuntimeViewData) {
+        *self
+            .runtime_view
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view);
+    }
+
+    /// Install the turn executor (boot wiring or a test double).
+    pub fn set_executor(&self, executor: Arc<dyn TurnExecutor>) {
+        *self
+            .executor
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(executor);
+    }
+
+    /// The installed executor, if any.
+    pub fn executor(&self) -> Option<Arc<dyn TurnExecutor>> {
+        self.executor
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// The current status view (`status` action).
+    pub fn status(&self) -> DaemonStatus {
+        DaemonStatus {
+            pid: std::process::id(),
+            started_at: self.started_at.clone(),
+            // Workspace runtimes are not implemented yet: an honest zero,
+            // not a fabricated count.
+            workspace_count: 0,
+            connected_clients: self.connected_clients.load(Ordering::SeqCst),
+            schedules: None,
+            telegram: None,
+            unresponsive: None,
+            entry: None,
+            // A source run reports an explicit null (contract: null = source
+            // run, absent = older host).
+            build_id: Some(None),
+        }
+    }
+
+    /// Live IPC connections are counted by RAII guards in the server.
+    pub(crate) fn client_enter(&self) {
+        self.connected_clients.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn client_exit(&self) {
+        self.connected_clients.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Subscribe to the shutdown signal (serve loop + tests).
+    pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
+        self.shutdown.subscribe()
+    }
+
+    /// Ask the serve loop to stop; idempotent.
+    pub fn request_shutdown(&self) {
+        let _ = self.shutdown.send(true);
+    }
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        Self::new()
+    }
+}
