@@ -5,6 +5,7 @@
 
 pub mod catalog;
 pub mod execute_command;
+pub mod format;
 pub mod pipeline;
 pub mod shell;
 pub mod tool_output;

@@ -140,6 +140,11 @@ pub struct TurnInputs<'a> {
     pub source: openbutler_protocol::entry::UserEntrySource,
     pub text: String,
     pub images: Vec<super::QueuedImage>,
+    /// The approval policy and shell setting from settings at the turn
+    /// boundary — the tool gate and the catalog description both read
+    /// them off the request, never off a hidden load.
+    pub approval_mode: crate::settings::ApprovalMode,
+    pub command_shell: Option<String>,
 }
 
 pub fn prepare_turn(
@@ -156,6 +161,8 @@ pub fn prepare_turn(
         source,
         text,
         images,
+        approval_mode,
+        command_shell,
     } = inputs;
     let home = home
         .map(std::path::Path::to_path_buf)
@@ -187,6 +194,8 @@ pub fn prepare_turn(
         workspace_root,
         images,
         attachments: Vec::new(),
+        approval_mode,
+        command_shell,
     })
 }
 

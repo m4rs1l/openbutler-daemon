@@ -12,9 +12,10 @@
 //!   the settlement save — plus a best-effort 1 s dirty save during the
 //!   stream (the legacy debounce's role).
 //! - **The system prompt and its context are landed** (`prompt`,
-//!   `providers`, `context`); tools/second batch (c2) and the visible
-//!   queue still belong to their own slices and are recorded in
-//!   `docs/agent-loop.md`.
+//!   `providers`, `context`); the batch loop executes tools host-side
+//!   between steps (`docs/tool-pipeline.md`), while the visible queue
+//!   and the approval API remain with their own slices and are recorded
+//!   in `docs/agent-loop.md`.
 
 pub mod context;
 pub mod executor;
@@ -36,8 +37,20 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::ledger::LedgerWriter;
 use crate::sidecar::{DoorError, Lane, SidecarDoor, sidecar_call};
 use crate::state::{self, SaveOutcome, SessionRecord, StateError, save_session};
+use crate::tools::catalog::native_definition;
+use crate::tools::format::format_tool_result;
+use crate::tools::pipeline::{
+    ApprovalOutcome, GateDecision, ToolCallContext, assess, proposal_failure, run_tool_call,
+    stop_result,
+};
+
+/// Host-authored stop: the source has no counter because its loop is
+/// SDK-owned; a runaway tool loop must not hold the turn (and the
+/// session lock) forever. At 24 steps the turn fails with a notice.
+const MAX_TOOL_STEPS: usize = 24;
 
 /// One turn's input. The provider block mirrors what the runtime resolves
 /// from settings; the transcript keeps only `text` and `source`.
@@ -59,6 +72,12 @@ pub struct TurnRequest {
     /// Stored files carried into the transcript and the model message as
     /// references.
     pub attachments: Vec<openbutler_protocol::entry::FileAttachment>,
+    /// The approval policy in force, captured at the turn boundary from
+    /// settings; the queue (`session.approve`) resolves the calls whose
+    /// gate says it needs approval.
+    pub approval_mode: crate::settings::ApprovalMode,
+    /// The shell setting baked into the execute_command description.
+    pub command_shell: Option<String>,
 }
 
 /// One validated image riding a turn until it is stored.
@@ -102,8 +121,24 @@ struct SessionState {
 pub struct TurnRunner {
     door: SidecarDoor,
     data_root: PathBuf,
+    session_id: String,
     state: Mutex<SessionState>,
     stop: Arc<AtomicBool>,
+}
+
+/// One drained step: the outcome, the streamed reply, and the tool
+/// calls collected for the host to execute between steps.
+struct DrainResult {
+    outcome: TurnOutcome,
+    reply: String,
+    calls: Vec<CollectedCall>,
+}
+
+/// A model-requested tool call awaiting host execution.
+struct CollectedCall {
+    call_id: String,
+    name: String,
+    arguments: Value,
 }
 
 impl TurnRunner {
@@ -120,6 +155,7 @@ impl TurnRunner {
         Ok(TurnRunner {
             door,
             data_root: data_root.to_owned(),
+            session_id: session_id.to_owned(),
             state: Mutex::new(SessionState {
                 record,
                 dirty: false,
@@ -172,18 +208,182 @@ impl TurnRunner {
         call.provider.url = request.provider_url.clone();
         call.provider.api_key = request.provider_api_key.clone();
         call.model = request.model.clone();
-        call.messages = Value::Array(state.record.conversation.clone());
         call.system = request.system.clone();
 
-        let outcome = self.drain(call, &mut state, &turn_id).await;
+        // The batch loop: one door call per step, tools executed by the
+        // host in between. The SDK's own loop stays off (the door runs
+        // `stopWhen: isStepCount(1)`), so a step that ends in tool calls
+        // needs a follow-up request carrying the paired messages.
+        let tool_workspace = request
+            .workspace_root
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.data_root.clone());
+        let mut steps = 0usize;
+        let (outcome, final_reply) = loop {
+            steps += 1;
+            let mut step_call = call.clone();
+            step_call.messages = Value::Array(state.record.conversation.clone());
+            let drained = self.drain(step_call, &mut state, &turn_id).await;
+            if drained.outcome != TurnOutcome::Completed {
+                break (drained.outcome, drained.reply);
+            }
+            if drained.calls.is_empty() {
+                break (TurnOutcome::Completed, drained.reply);
+            }
+            if steps >= MAX_TOOL_STEPS {
+                push_notice(
+                    &mut state,
+                    &turn_id,
+                    "The tool call loop exceeded its step limit; this run has stopped.",
+                    Some(NoticeTone::Error),
+                );
+                break (TurnOutcome::Failed, drained.reply);
+            }
+
+            // This step's assistant message: streamed text (when any) and
+            // the calls it asked for, in the SDK's own shapes.
+            let mut content: Vec<Value> = Vec::new();
+            if !drained.reply.is_empty() {
+                content.push(json!({ "type": "text", "text": drained.reply }));
+            }
+            for tool_call in &drained.calls {
+                content.push(json!({
+                    "type": "tool-call",
+                    "toolCallId": tool_call.call_id,
+                    "toolName": tool_call.name,
+                    "input": tool_call.arguments,
+                }));
+            }
+            state
+                .record
+                .conversation
+                .push(json!({ "role": "assistant", "content": content }));
+            state.dirty = true;
+
+            let (mut ledger, mut ledger_error) = match LedgerWriter::open(&self.data_root) {
+                Ok(writer) => (Some(writer), None),
+                Err(error) => (None, Some(error.to_string())),
+            };
+            let mut stopped = false;
+            let mut unknown_error: Option<String> = None;
+            for tool_call in &drained.calls {
+                let started_at = Utc::now().timestamp_millis();
+                let (result, call_stopped) = if stopped {
+                    // A prior decline refuses the rest of the batch (L237).
+                    (stop_result(), false)
+                } else if let Some(error) = ledger_error.take() {
+                    // Fail closed like the source's failed write-ahead: the
+                    // run stops and the sentence names the failure.
+                    (proposal_failure(&error), true)
+                } else if let Some(definition) = native_definition(
+                    &tool_call.name,
+                    &tool_workspace,
+                    request.command_shell.as_deref(),
+                ) {
+                    match ToolCallContext::new(
+                        tool_call.arguments.clone(),
+                        request.approval_mode,
+                        tool_workspace.clone(),
+                        crate::config::scratch_root(),
+                        self.data_root.clone(),
+                        self.session_id.clone(),
+                        request.command_shell.clone(),
+                    ) {
+                        // Invalid host metadata fails before the proposal —
+                        // no ledger row, the pair still lands (timeout.ts).
+                        Err(message) => (json!({ "status": "error", "error": message }), false),
+                        Ok(context) => {
+                            let approval = match assess(&definition, &context) {
+                                GateDecision::AutoApproved => ApprovalOutcome::Approved,
+                                // No approval queue yet: `session.approve`
+                                // (api-surface) replaces this interim with
+                                // the real resolve.
+                                GateDecision::NeedsApproval { .. } => ApprovalOutcome::Declined,
+                            };
+                            match ledger.as_mut() {
+                                None => (proposal_failure("state.db is unavailable"), true),
+                                Some(writer) => {
+                                    let call_outcome = run_tool_call(
+                                        &definition,
+                                        &context,
+                                        &tool_call.call_id,
+                                        None,
+                                        approval,
+                                        writer,
+                                    );
+                                    (call_outcome.result, call_outcome.run_stopped)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let message = format!("Unknown tool: {}.", tool_call.name);
+                    unknown_error = Some(message.clone());
+                    (json!({ "status": "error", "error": message }), false)
+                };
+                if call_stopped {
+                    stopped = true;
+                }
+
+                // The pair lands for every call — denial included — so the
+                // next request is valid whatever happened (appendResponse).
+                state.record.conversation.push(json!({
+                    "role": "tool",
+                    "content": [{
+                        "type": "tool-result",
+                        "toolCallId": tool_call.call_id,
+                        "toolName": tool_call.name,
+                        // ai v7's ModelMessage shape: the SDK reads
+                        // `output.type` while converting (downloadAssets,
+                        // ai/dist/index.js:1718); a bare `result` throws
+                        // `Cannot read properties of undefined`.
+                        "output": { "type": "json", "value": result.clone() },
+                    }],
+                }));
+                let (_, text) = format_tool_result(&tool_call.name, &result);
+                let text = if text.is_empty() {
+                    "No output".to_owned()
+                } else {
+                    text
+                };
+                settle_tool_entry(
+                    &mut state,
+                    &turn_id,
+                    &tool_call.name,
+                    &tool_call.arguments,
+                    &text,
+                    started_at,
+                    Utc::now().timestamp_millis() - started_at,
+                );
+                state.dirty = true;
+            }
+            // Persist the pairs before the next request — the admission
+            // save's twin (a crash must not orphan a tool message).
+            let _ = self.save(&mut state);
+            if stopped {
+                push_notice(
+                    &mut state,
+                    &turn_id,
+                    "The tool call was denied; this run has stopped.",
+                    Some(NoticeTone::Warn),
+                );
+                break (TurnOutcome::Completed, drained.reply);
+            }
+            if let Some(message) = unknown_error {
+                // An unknown name is an authored failure (no source
+                // counterpart): the model asked for something the catalog
+                // never sent, so the run cannot continue productively.
+                push_notice(&mut state, &turn_id, &message, Some(NoticeTone::Error));
+                break (TurnOutcome::Failed, drained.reply);
+            }
+        };
 
         finish_user_entry(&mut state.record, &turn_id, outcome);
-        if outcome == TurnOutcome::Completed
-            && let Some(reply) = merged_assistant_text(&state.record, &turn_id)
-        {
+        if outcome == TurnOutcome::Completed && !final_reply.is_empty() {
             state.record.conversation.push(json!({
                 "role": "assistant",
-                "content": [{ "type": "text", "text": reply }]
+                "content": [{ "type": "text", "text": final_reply }]
             }));
         }
         state.dirty = true;
@@ -192,18 +392,24 @@ impl TurnRunner {
         Ok(TurnReport { turn_id, outcome })
     }
 
-    /// Drains one door stream into the transcript and returns the outcome.
+    /// Drains one door stream into the transcript: the step's outcome,
+    /// its streamed reply, and the tool calls collected for the host to
+    /// execute between steps.
     async fn drain(
         &self,
         call: openbutler_protocol::sidecar::SidecarCall,
         state: &mut SessionState,
         turn_id: &str,
-    ) -> TurnOutcome {
+    ) -> DrainResult {
         let mut stream = match self.door.call(Lane::Interactive, call).await {
             Ok(stream) => stream,
             Err(error) => {
                 push_notice(state, turn_id, &error.to_string(), Some(NoticeTone::Error));
-                return TurnOutcome::Failed;
+                return DrainResult {
+                    outcome: TurnOutcome::Failed,
+                    reply: String::new(),
+                    calls: Vec::new(),
+                };
             }
         };
 
@@ -216,6 +422,7 @@ impl TurnRunner {
         let mut reply = String::new();
         let mut run_error: Option<String> = None;
         let mut cancelled = false;
+        let mut calls: Vec<CollectedCall> = Vec::new();
 
         let mut persist = tokio::time::interval(Duration::from_secs(1));
         persist.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -259,13 +466,24 @@ impl TurnRunner {
                                 turn_id,
                             );
                         }
-                        SidecarEvent::ToolCall { name, arguments, .. } => {
+                        SidecarEvent::ToolCall {
+                            name,
+                            arguments,
+                            call_id,
+                            ..
+                        } => {
                             finish_reasoning_block(
                                 state,
                                 &mut reasoning_index,
                                 &mut reasoning_started_at,
                             );
-                            push_tool_entry(state, turn_id, &name, &arguments);
+                            calls.push(CollectedCall {
+                                call_id: call_id
+                                    .filter(|id| !id.is_empty())
+                                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
+                                name,
+                                arguments,
+                            });
                         }
                         SidecarEvent::Usage { .. } => {}
                         SidecarEvent::Finish { .. } => break,
@@ -310,7 +528,7 @@ impl TurnRunner {
         // The thinking block may end at the stream's end (no later token).
         finish_reasoning_block(state, &mut reasoning_index, &mut reasoning_started_at);
 
-        if cancelled {
+        let outcome = if cancelled {
             push_notice(state, turn_id, "Run cancelled.", None);
             TurnOutcome::Cancelled
         } else if let Some(error) = run_error {
@@ -318,6 +536,11 @@ impl TurnRunner {
             TurnOutcome::Failed
         } else {
             TurnOutcome::Completed
+        };
+        DrainResult {
+            outcome,
+            reply,
+            calls,
         }
     }
 
@@ -444,24 +667,34 @@ fn push_notice(state: &mut SessionState, turn_id: &str, text: &str, tone: Option
     state.dirty = true;
 }
 
-/// The settled tool entry: the call is recorded, and without the executor
-/// (c2) it carries the legacy settle text for a call that never ran.
-fn push_tool_entry(state: &mut SessionState, turn_id: &str, name: &str, arguments: &Value) {
+/// The settled tool entry: written after execution with `running: false`,
+/// the display text and the duration — `onToolResult` (L1576-1593). The
+/// running-start row belongs to the streaming surface (c3); persistence
+/// sees the settled state.
+fn settle_tool_entry(
+    state: &mut SessionState,
+    turn_id: &str,
+    name: &str,
+    arguments: &Value,
+    text: &str,
+    at: i64,
+    duration_ms: i64,
+) {
     state.record.entries.push(SessionEntry::Tool {
         meta: SessionEntryMeta {
-            at: Some(Utc::now().timestamp_millis()),
+            at: Some(at),
             turn_id: Some(turn_id.to_owned()),
             ..SessionEntryMeta::default()
         },
         command: None,
         input: arguments.as_object().cloned(),
-        result: "The tool call was not executed.".to_owned(),
-        running: None,
+        result: text.to_owned(),
+        running: Some(false),
         preparing: None,
         tool: Some(name.to_owned()),
         tool_title: None,
         session: None,
-        duration_ms: None,
+        duration_ms: Some(duration_ms),
         outcome: None,
     });
     state.dirty = true;
@@ -558,20 +791,4 @@ fn finish_reasoning_block(
     }
     *reasoning_index = None;
     *reasoning_started_at = None;
-}
-
-/// The settled turn's model-visible reply — the merged assistant text of
-/// this turn, if any.
-fn merged_assistant_text(record: &SessionRecord, turn_id: &str) -> Option<String> {
-    let mut reply = String::new();
-    let mut found = false;
-    for entry in &record.entries {
-        if let SessionEntry::Assistant { meta, text } = entry
-            && meta.turn_id.as_deref() == Some(turn_id)
-        {
-            reply.push_str(text);
-            found = true;
-        }
-    }
-    found.then_some(reply)
 }

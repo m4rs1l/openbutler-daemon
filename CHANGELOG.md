@@ -7,6 +7,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The batch loop (`agent/mod.rs`): one door call per step, tools
+  executed host-side between steps through the shared pipeline, pairs
+  persisted before the next request, one settled tool entry per call
+  (`tools/format.rs` display text, duration over the execution), the
+  stop-only-on-plain-decline notice verbatim, and an interim immediate
+  decline for `NeedsApproval` until the approval queue lands. The
+  conversation carries the **ai v7** shapes — `tool-call.input` and
+  `tool-result.output.{type,json}` (probed against the installed SDK; a
+  bare `result` throws inside `downloadAssets`). Authored pieces:
+  `Unknown tool: <name>.` fails the run after pairing, `MAX_TOOL_STEPS
+  = 24` caps runaway loops. Plus `TurnRequest.approval_mode` /
+  `command_shell` threaded from settings, `config::scratch_root`,
+  `catalog::native_definition`. Tests: batch execution + declined batch
+  (`agent_loop`, 12 total).
 - Shared tool pipeline (`tools/pipeline.rs` + `tools/catalog.rs`): one
   `ToolDefinition` shape and one `run_tool_call` sequence every native
   tool takes — source-exact gate rules (full-access never consults

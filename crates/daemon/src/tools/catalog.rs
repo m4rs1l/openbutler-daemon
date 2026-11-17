@@ -75,6 +75,20 @@ pub fn create_execute_command_tool(
     }
 }
 
+/// The catalog lookup the batch loop runs per model call: one name, one
+/// definition built from the turn's workspace and shell setting. Unknown
+/// names return `None` and pair an authored error result.
+pub fn native_definition(
+    name: &str,
+    workspace_root: &Path,
+    command_shell: Option<&str>,
+) -> Option<ToolDefinition> {
+    match name {
+        "execute_command" => Some(create_execute_command_tool(workspace_root, command_shell)),
+        _ => None,
+    }
+}
+
 /// The execution environment a tool derives from the host context.
 fn environment(context: &ToolCallContext) -> ExecuteEnvironment {
     ExecuteEnvironment {

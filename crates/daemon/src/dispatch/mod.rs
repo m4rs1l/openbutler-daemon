@@ -462,6 +462,10 @@ fn prepare_send(
         member_name: team.member_name.clone(),
         hub: matches!(team.role, TeamRole::Hub),
     });
+    // The turn owns the policy and the shell label it runs with; both are
+    // captured here, where settings are the single read authority.
+    let approval_mode = loaded.store.approval_mode;
+    let command_shell = loaded.store.command_shell.clone();
     drop(settings);
     let secrets = crate::settings::load_secrets(data_dir).map_err(|error| error.to_string())?;
     let provider_api_key = secrets
@@ -480,6 +484,8 @@ fn prepare_send(
             source,
             text,
             images,
+            approval_mode,
+            command_shell,
         },
     )
 }

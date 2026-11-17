@@ -22,6 +22,16 @@ pub fn data_path(name: &str) -> PathBuf {
     data_dir().join(name)
 }
 
+/// The dated scratch root (`getScratchRoot`, legacy `paths.ts` L83):
+/// `<tmpdir>/openbutler/YYYY-MM-DD` — outside the data directory because
+/// it is disposable, dated so a day of scratch can be discarded, and
+/// reclaimed by the OS at any time (that is the point).
+pub fn scratch_root() -> PathBuf {
+    std::env::temp_dir()
+        .join("openbutler")
+        .join(chrono::Local::now().format("%Y-%m-%d").to_string())
+}
+
 fn default_data_dir() -> PathBuf {
     #[cfg(windows)]
     {
