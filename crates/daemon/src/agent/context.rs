@@ -139,6 +139,7 @@ pub struct TurnInputs<'a> {
     pub home: Option<&'a std::path::Path>,
     pub source: openbutler_protocol::entry::UserEntrySource,
     pub text: String,
+    pub images: Vec<super::QueuedImage>,
 }
 
 pub fn prepare_turn(
@@ -154,6 +155,7 @@ pub fn prepare_turn(
         home,
         source,
         text,
+        images,
     } = inputs;
     let home = home
         .map(std::path::Path::to_path_buf)
@@ -183,6 +185,8 @@ pub fn prepare_turn(
         model: meta.model_id.clone(),
         system,
         workspace_root,
+        images,
+        attachments: Vec::new(),
     })
 }
 

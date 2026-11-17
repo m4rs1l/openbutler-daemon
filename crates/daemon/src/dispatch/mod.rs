@@ -280,7 +280,14 @@ pub fn handle(
                 return failure(request, CHAT_NOT_FOUND.to_owned());
             };
             let source = state.client_kind.unwrap_or(UserEntrySource::Terminal);
-            let turn = match prepare_send(host, data_dir, &session_id, parsed.text, source) {
+            let turn = match prepare_send(
+                host,
+                data_dir,
+                &session_id,
+                parsed.text,
+                parsed.images,
+                source,
+            ) {
                 Ok(turn) => turn,
                 Err(error) => {
                     return failure(request, format!("Could not send the message: {error}"));
@@ -430,6 +437,7 @@ fn prepare_send(
     data_dir: &Path,
     session_id: &str,
     text: String,
+    images: Vec<crate::agent::QueuedImage>,
     source: UserEntrySource,
 ) -> Result<TurnRequest, String> {
     let path = state::record_path(data_dir, session_id).ok_or_else(|| CHAT_NOT_FOUND.to_owned())?;
@@ -471,6 +479,7 @@ fn prepare_send(
             home: None,
             source,
             text,
+            images,
         },
     )
 }

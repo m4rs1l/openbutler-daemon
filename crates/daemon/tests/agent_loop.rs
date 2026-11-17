@@ -83,6 +83,8 @@ fn request(scenario: &str, addr: SocketAddr, source: UserEntrySource) -> TurnReq
         model: "test-model".to_owned(),
         system: None,
         workspace_root: None,
+        images: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -618,6 +620,63 @@ async fn workspace_and_channel_labels_reach_the_model_only() {
             assert!(!text.contains("send_message_to_owner"));
         }
     }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn attachments_reach_the_model_as_references_and_the_entry() {
+    let root = temp_root("attach-refs");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = TurnRunner::open(&root, SESSION_ID, door)
+        .await
+        .expect("open");
+
+    let attachment = openbutler_protocol::entry::FileAttachment {
+        id: "a".repeat(64),
+        path: "/data/sessions/x/attachments/aaa.png".to_owned(),
+        name: "shot.png".to_owned(),
+        media_type: "image/png".to_owned(),
+        size_bytes: 12,
+        sha256: "a".repeat(64),
+    };
+    let mut req = request("basic", addr, UserEntrySource::Web);
+    req.workspace_root = Some("work/space".to_owned());
+    req.attachments.push(attachment.clone());
+    let turn = runner.send(req).await.expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    let body = mock.bodies.lock().unwrap()[0].clone();
+    let parsed: Value = serde_json::from_str(&body).expect("request body is JSON");
+    assert_eq!(
+        parsed["messages"][0]["content"][1]["text"].as_str(),
+        Some("[image#1=\"/data/sessions/x/attachments/aaa.png\"]"),
+        "the reference travels to the model as its own text part: {body}"
+    );
+
+    let record = saved(&root);
+    let user = record
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::User { .. } => Some(entry.clone()),
+            _ => None,
+        })
+        .expect("a user entry exists");
+    let SessionEntry::User {
+        workspace_root,
+        image_count,
+        attachments,
+        ..
+    } = user
+    else {
+        unreachable!()
+    };
+    assert_eq!(workspace_root.as_deref(), Some("work/space"));
+    assert_eq!(image_count, Some(1), "one image attachment is counted");
+    assert_eq!(attachments, Some(vec![attachment]), "stored on the entry");
 
     let _ = std::fs::remove_dir_all(&root);
 }

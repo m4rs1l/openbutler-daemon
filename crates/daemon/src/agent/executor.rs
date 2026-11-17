@@ -74,8 +74,22 @@ impl DoorExecutor {
 impl TurnExecutor for DoorExecutor {
     fn spawn_turn(self: Arc<Self>, session_id: String, request: TurnRequest) {
         // The response has already gone out; from here failures are
-        // notices on the record.
+        // notices on the record. Images are decoded and stored first —
+        // the legacy `enqueueMessage` conversion.
         Handle::current().spawn(async move {
+            let mut request = request;
+            if !request.images.is_empty() {
+                match convert_images(&self.data_dir, &session_id, &request.images) {
+                    Ok(stored) => {
+                        request.attachments.extend(stored);
+                        request.images.clear();
+                    }
+                    Err(error) => {
+                        report_turn_error(&self.data_dir, &session_id, &error);
+                        return;
+                    }
+                }
+            }
             let outcome = async {
                 let runner = self.runner_for(&session_id).await?;
                 runner.send(request).await?;
@@ -87,6 +101,33 @@ impl TurnExecutor for DoorExecutor {
             }
         });
     }
+}
+
+/// The legacy `enqueueMessage` image conversion: decode each payload
+/// against its declared type, then store it content-addressed.
+fn convert_images(
+    data_dir: &Path,
+    session_id: &str,
+    images: &[super::QueuedImage],
+) -> Result<Vec<openbutler_protocol::entry::FileAttachment>, String> {
+    images
+        .iter()
+        .enumerate()
+        .map(|(index, image)| {
+            let bytes = state::decode_base64_image(
+                &image.base64,
+                &image.media_type,
+                state::MAX_IMAGE_BYTES,
+            )?;
+            state::store_attachment(
+                data_dir,
+                session_id,
+                &bytes,
+                &format!("image-{}.png", index + 1),
+                &image.media_type,
+            )
+        })
+        .collect()
 }
 
 /// Best-effort `Could not send the message: …` notice (legacy wording).

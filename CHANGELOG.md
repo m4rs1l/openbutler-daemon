@@ -7,6 +7,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Attachment store (`state/attachments.rs`): base64 decode with the
+  source's character-class and size rules (padding-lenient like
+  `Buffer.from`), magic-byte typing, content-addressed
+  `sessions/<id>/attachments/<sha256>.<ext>` writes with the
+  idempotent re-store, name sanitisation, and hash verification.
+  `session.send` now accepts images end to end: dispatch validates the
+  shape, the executor decodes and stores them before the turn (the
+  legacy `enqueueMessage` conversion, failures as notices), the entry
+  carries `workspaceRoot`/`imageCount`/`attachments`, and the model
+  message gets the `[image#N="path"]` reference part. Pins:
+  `attachment_store` (5 tests), image pass-through in `session_send`,
+  references + entry fields in `agent_loop` (10 tests).
 - `session.send`: the accept-immediately dispatch contract — the
   `parseQueuedMessage` validation with the source's wording, the
   connection's chat requirement, `prepare_send` resolving record +

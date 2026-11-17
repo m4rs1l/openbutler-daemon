@@ -53,6 +53,19 @@ pub struct TurnRequest {
     pub system: Option<String>,
     /// The chat's workspace — model-only label, never the transcript.
     pub workspace_root: Option<String>,
+    /// Raw images from the message; the executor decodes and stores them
+    /// before the turn runs (the legacy `enqueueMessage` conversion).
+    pub images: Vec<QueuedImage>,
+    /// Stored files carried into the transcript and the model message as
+    /// references.
+    pub attachments: Vec<openbutler_protocol::entry::FileAttachment>,
+}
+
+/// One validated image riding a turn until it is stored.
+#[derive(Debug, Clone)]
+pub struct QueuedImage {
+    pub base64: String,
+    pub media_type: String,
 }
 
 /// What a settled turn did — the same stamps `finishTurn` writes.
@@ -137,9 +150,16 @@ impl TurnRunner {
                 ..SessionEntryMeta::default()
             },
             text: request.text.clone(),
-            workspace_root: None,
-            image_count: None,
-            attachments: None,
+            workspace_root: request.workspace_root.clone(),
+            image_count: {
+                let images = request
+                    .attachments
+                    .iter()
+                    .filter(|attachment| attachment.media_type.starts_with("image/"))
+                    .count();
+                u32::try_from(images).ok().filter(|count| *count > 0)
+            },
+            attachments: (!request.attachments.is_empty()).then(|| request.attachments.clone()),
             source: Some(request.source),
             event_id: None,
         });
@@ -363,7 +383,36 @@ fn user_model_message(request: &TurnRequest) -> Value {
     } else {
         vec![json!({ "type": "text", "text": text })]
     };
+    let mut content = content;
+    if !request.attachments.is_empty() {
+        content.push(json!({
+            "type": "text",
+            "text": attachment_references(&request.attachments)
+        }));
+    }
     json!({ "role": "user", "content": content })
+}
+
+/// `attachmentReferences`: `[image#N="path"]` / `[file#N="path"]`,
+/// image and file counters kept apart, joined by newlines.
+fn attachment_references(attachments: &[openbutler_protocol::entry::FileAttachment]) -> String {
+    let mut images = 0usize;
+    let mut files = 0usize;
+    attachments
+        .iter()
+        .map(|attachment| {
+            let label = if attachment.media_type.starts_with("image/") {
+                images += 1;
+                format!("image#{images}")
+            } else {
+                files += 1;
+                format!("file#{files}")
+            };
+            let path = serde_json::to_string(&attachment.path).unwrap_or_else(|_| "\"\"".into());
+            format!("[{label}={path}]")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `finishTurn`: stamp the turn's outcome onto the user entry that opened

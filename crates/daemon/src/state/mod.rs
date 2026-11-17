@@ -6,11 +6,17 @@
 //! fields without materialising transcripts, `list` runs the picker query.
 //! The on-disk contract itself is documented in `docs/state-formats.md`.
 
+mod attachments;
 mod header;
 mod list;
 mod paths;
 mod record;
 mod save;
+
+pub use attachments::{
+    MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES, decode_base64_image, image_type_from_bytes,
+    store_attachment, verify_attachment_path,
+};
 
 pub use header::{SessionHeader, read_session_header};
 pub use list::{WorkspaceFilter, list_sessions};

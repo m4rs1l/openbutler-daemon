@@ -186,25 +186,40 @@ fn each_image_must_be_a_base64_png_record() {
 }
 
 #[test]
-fn well_formed_images_are_refused_loudly_instead_of_dropped() {
-    let dir = temp_data_dir("send-image-drop");
-    let (host, _) = host_with_executor();
+fn well_formed_images_ride_the_accepted_turn() {
+    let dir = temp_data_dir("send-image-pass");
+    let session_id = seed_chat(&dir);
+    let (host, recorder) = host_with_executor();
+    host.reload_settings(&dir).expect("settings load");
     let mut state = DispatchState::new();
-    let png = json!({ "mediaType": "image/png", "base64": "aGVsbG8=" });
+    success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("load", "session.load", &[("sessionId", json!(session_id))]),
+    ));
+
+    use base64::Engine;
+    let png = base64::engine::general_purpose::STANDARD
+        .encode([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02]);
+    let image = json!({ "mediaType": "image/png", "base64": png });
     let response = call(
         &host,
         &dir,
         &mut state,
-        send_request(message("hi", json!([png]))),
+        send_request(message("with a picture", json!([image]))),
     );
-    let text = failure_text(response);
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+
+    let sent = recorder.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    let turn = &sent[0].1;
+    assert_eq!(turn.images.len(), 1, "the raw image rides the turn");
+    assert_eq!(turn.images[0].media_type, "image/png");
+    assert_eq!(turn.images[0].base64, png);
     assert!(
-        text.to_lowercase().contains("image"),
-        "the refusal names the unsupported part: {text}"
-    );
-    assert!(
-        !text.contains("dropped"),
-        "never claim acceptance for work that did not happen"
+        turn.attachments.is_empty(),
+        "decoding and storing happen in the executor, after acceptance"
     );
 }
 
