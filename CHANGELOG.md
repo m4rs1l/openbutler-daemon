@@ -7,6 +7,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `session.stop` and the pending-approval visibility: the fire-and-forget
+  stop seam (`TurnExecutor::stop` — the runner's stop flag, never
+  spawning the door), and `pendingApproval`/`pendingApprovalId` now
+  ride every published frame while the queue waits — the queue publishes
+  the moment it exists (the source's `requestManualApproval` publish).
+  `keepQueue`/`holdQueue` read as plain `=== true` checks with no
+  validation, as in the source; 2 tests (roster visibility + stop wire).
 - `attach` (chat path): the source's validation wording, the windowed
   answer (`entriesFrom`/`totalEntries`, web only), the fan-out
   subscription on the connection's own sink, and the snapshot event

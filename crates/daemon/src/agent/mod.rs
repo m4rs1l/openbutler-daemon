@@ -33,7 +33,10 @@ use std::time::Duration;
 use chrono::Utc;
 use openbutler_protocol::SessionEntryMeta;
 use openbutler_protocol::entry::{NoticeTone, SessionEntry, TurnOutcome, UserEntrySource};
-use openbutler_protocol::session::{RunState, SessionView};
+use openbutler_protocol::session::{
+    RunState, SessionView, ToolCallRequest, ToolChange, ToolData, ToolEffect, ToolNetwork,
+    ToolOutbound, ToolReversible,
+};
 use openbutler_protocol::sidecar::SidecarEvent;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -153,6 +156,8 @@ pub struct TurnRunner {
 /// A queued approval awaiting the client's decision.
 struct PendingApproval {
     request_id: String,
+    /// The wire-shaped request the roster publishes (`pendingApproval`).
+    request: openbutler_protocol::session::ToolCallRequest,
     gate_reason: &'static str,
     sender: tokio::sync::oneshot::Sender<bool>,
 }
@@ -241,19 +246,26 @@ impl TurnRunner {
     /// silence produces the timeout outcome the registry formats.
     async fn request_manual_approval(
         &self,
-        request_id: &str,
+        state: &mut SessionState,
+        turn_id: &str,
+        request: openbutler_protocol::session::ToolCallRequest,
         gate_reason: &'static str,
         timeout_seconds: u64,
     ) -> ApprovalOutcome {
+        let request_id = request.request_id.clone();
         let (sender, mut receiver) = tokio::sync::oneshot::channel();
         *self
             .approval
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PendingApproval {
-            request_id: request_id.to_owned(),
+            request_id: request_id.clone(),
+            request,
             gate_reason,
             sender,
         });
+        // The queue becomes visible the moment it exists (the source's
+        // `requestManualApproval` publishes before it resolves).
+        self.publish_now(state, turn_id, None, true);
         let mut stop_poll = tokio::time::interval(Duration::from_millis(100));
         stop_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tokio::select! {
@@ -413,9 +425,32 @@ impl TurnRunner {
                             let approval = match assess(&definition, &context) {
                                 GateDecision::AutoApproved => ApprovalOutcome::Approved,
                                 GateDecision::NeedsApproval { gate_reason } => {
+                                    let queue_request = ToolCallRequest {
+                                        request_id: tool_call.call_id.clone(),
+                                        provider_id: request.provider_key.clone(),
+                                        name: tool_call.name.clone(),
+                                        title: None,
+                                        input: tool_call
+                                            .arguments
+                                            .as_object()
+                                            .cloned()
+                                            .unwrap_or_default(),
+                                        effect: serde_json::from_str(definition.effect_json)
+                                            .unwrap_or(ToolEffect {
+                                                change: ToolChange::Unknown,
+                                                data: ToolData::Unknown,
+                                                network: ToolNetwork::Unknown,
+                                                reversible: ToolReversible::Unknown,
+                                                outbound: ToolOutbound::Unknown,
+                                            }),
+                                        timeout_seconds: Some(context.timeout_seconds),
+                                        gate_reason: Some(gate_reason.to_owned()),
+                                    };
                                     let outcome = self
                                         .request_manual_approval(
-                                            &tool_call.call_id,
+                                            &mut state,
+                                            &turn_id,
+                                            queue_request,
                                             gate_reason,
                                             request
                                                 .approval_timeout_seconds
@@ -714,6 +749,12 @@ impl TurnRunner {
         let Some(runtime) = host.runtime_view() else {
             return;
         };
+        // What the roster shows about the queue: the live request, if
+        // one waits (legacy `pendingApproval`/`pendingApprovalId`).
+        let queued = self
+            .approval
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let next = PublishSnapshot {
             session: SessionView {
                 meta: state.record.meta.clone(),
@@ -722,11 +763,8 @@ impl TurnRunner {
             run: RunState {
                 busy,
                 running_turn_id: Some(turn_id.to_owned()),
-                // The queue parks a bare id today; the full
-                // `pendingApproval` request rides with `session.attach`
-                // visibility (c3c-2).
-                pending_approval: None,
-                pending_approval_id: None,
+                pending_approval: queued.as_ref().map(|pending| pending.request.clone()),
+                pending_approval_id: queued.as_ref().map(|pending| pending.request_id.clone()),
                 pending_question: None,
                 queued_message_count: 0,
                 first_queued_message: None,
@@ -735,6 +773,7 @@ impl TurnRunner {
                 streaming_assistant_index: streaming_index.map(|index| index as i64),
             },
         };
+        drop(queued);
         let mut last = self
             .last_published
             .lock()

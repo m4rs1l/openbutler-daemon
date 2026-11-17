@@ -25,6 +25,11 @@ pub trait TurnExecutor: Send + Sync {
     /// Synchronous: the queue's locks are all short, never spanning an
     /// await, so dispatch stays a sync surface.
     fn approve(&self, session_id: &str, approval_id: &str, approved: bool) -> bool;
+    /// `session.stop`: asks the session's runner to end its turn
+    /// (id-less fire-and-forget, like the source's `controller.stop`).
+    /// Returns whether a runner existed; a chat with no live turn
+    /// reports false and the action still answers.
+    fn stop(&self, session_id: &str) -> bool;
 }
 
 /// The production executor: one shared door (spawned on first use — an
@@ -129,6 +134,24 @@ impl TurnExecutor for DoorExecutor {
             .map(Arc::clone);
         match runner {
             Some(runner) => runner.resolve_approval(approval_id, approved),
+            None => false,
+        }
+    }
+
+    fn stop(&self, session_id: &str) -> bool {
+        // Like the source: no runner, no stop (and never spawn the door
+        // just to cancel something that is not running).
+        let runner = self
+            .runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .map(Arc::clone);
+        match runner {
+            Some(runner) => {
+                runner.stop();
+                true
+            }
             None => false,
         }
     }

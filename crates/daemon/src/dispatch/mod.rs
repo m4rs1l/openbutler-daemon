@@ -592,6 +592,19 @@ pub fn handle(
             let _ = executor.approve(&session_id, &approval_id, approved);
             success(request, json!({ "accepted": true }))
         }
+        "session.stop" => {
+            // Source (daemon-host L3552): fire-and-forget `stop` with
+            // `keepQueue`/`holdQueue` as plain `=== true` checks — no
+            // validation, and the queue runtime that would honour them
+            // is not in this build (the flags are read as false).
+            let Some(executor) = host.executor() else {
+                return failure(request, "The host has no turn executor.".to_owned());
+            };
+            if let Some(session_id) = state.current_session.clone() {
+                let _ = executor.stop(&session_id);
+            }
+            success(request, json!({ "accepted": true }))
+        }
         "stop" => {
             host.request_shutdown();
             success(request, json!({ "stopping": true }))

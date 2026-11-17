@@ -1115,3 +1115,63 @@ async fn a_running_turn_publishes_live_state_to_the_fanout() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test]
+async fn a_queued_approval_reaches_the_roster_before_the_decision() {
+    let root = temp_root("approval-publish");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    let sink = Arc::new(RecordingSink::default());
+    host.fanout().subscribe(SESSION_ID, sink.clone());
+
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+    let worker = {
+        let runner = Arc::clone(&runner);
+        let mut req = request("batch_outside", addr, UserEntrySource::Terminal);
+        req.workspace_root = Some(root.display().to_string());
+        req.approval_mode = ApprovalMode::Workspace;
+        tokio::spawn(async move { runner.send(req).await })
+    };
+    // The outside-workspace call queues in workspace mode; while it waits
+    // the roster must already show the pending approval (legacy
+    // `requestManualApproval` publishes before it resolves).
+    let approval_id = await_approval(&runner).await;
+    let frames = sink.frames.lock().unwrap().clone();
+    let visible = frames.iter().any(|frame| {
+        serde_json::from_slice::<openbutler_protocol::DaemonEvent>(
+            frame.strip_suffix(b"\n").unwrap_or(frame),
+        )
+        .ok()
+        .is_some_and(|event| match event {
+            openbutler_protocol::DaemonEvent::Patch { patch, .. } => {
+                patch.run.pending_approval_id.as_deref() == Some(approval_id.as_str())
+                    && patch.run.pending_approval.is_some()
+            }
+            _ => false,
+        })
+    });
+    assert!(
+        visible,
+        "a frame carries pendingApproval with its id while the queue waits"
+    );
+
+    // Decline closes it; the run stops after the pair (no second call).
+    assert!(runner.resolve_approval(&approval_id, false));
+    let turn = worker.await.unwrap().expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+    assert_eq!(
+        mock.bodies.lock().unwrap().len(),
+        1,
+        "the stop ends the batch"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

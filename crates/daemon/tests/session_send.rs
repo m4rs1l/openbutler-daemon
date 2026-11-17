@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 struct RecordingExecutor {
     sent: Arc<Mutex<Vec<(String, TurnRequest)>>>,
     approvals: Arc<Mutex<Vec<(String, String, bool)>>>,
+    stops: Arc<Mutex<Vec<String>>>,
 }
 
 impl TurnExecutor for RecordingExecutor {
@@ -38,6 +39,11 @@ impl TurnExecutor for RecordingExecutor {
             approval_id.to_owned(),
             approved,
         ));
+        true
+    }
+
+    fn stop(&self, session_id: &str) -> bool {
+        self.stops.lock().unwrap().push(session_id.to_owned());
         true
     }
 }
@@ -369,6 +375,57 @@ fn the_approval_action_validates_and_forwards_through_the_seam() {
         )),
         "approvalId must be a non-empty string under 64 bytes."
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- session.stop --------------------------------------------------------------
+
+#[test]
+fn the_stop_action_forwards_to_the_executor() {
+    let dir = temp_data_dir("stop-wire");
+    let session_id = seed_chat(&dir);
+    let (host, recorder) = host_with_executor();
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("l1", "session.load", &[("sessionId", json!(session_id))]),
+    ));
+
+    let response = call(&host, &dir, &mut state, request("s1", "session.stop", &[]));
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+    assert_eq!(
+        recorder.stops.lock().unwrap().as_slice(),
+        [session_id.as_str()],
+        "the seam receives the chat's session id"
+    );
+
+    // Without a chat the source has nothing to stop; the action still
+    // answers (the fire-and-forget shape).
+    let mut state = DispatchState::new();
+    let response = call(&host, &dir, &mut state, request("s2", "session.stop", &[]));
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+
+    // keepQueue/holdQueue are `=== true` checks in the source — no
+    // validation, any other value simply reads as false (L3552).
+    let mut state = DispatchState::new();
+    success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("l2", "session.load", &[("sessionId", json!(session_id))]),
+    ));
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("s3", "session.stop", &[("keepQueue", json!("yes"))]),
+    );
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+    assert_eq!(recorder.stops.lock().unwrap().len(), 2, "it still stops");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
