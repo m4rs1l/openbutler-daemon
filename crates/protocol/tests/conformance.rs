@@ -48,6 +48,9 @@ fn fixture(name: &str) -> &'static str {
         "sidecar-command-call" => {
             include_str!("../conformance/sidecar-command-call.json")
         }
+        "sidecar-command-call-system" => {
+            include_str!("../conformance/sidecar-command-call-system.json")
+        }
         "sidecar-command-cancel" => {
             include_str!("../conformance/sidecar-command-cancel.json")
         }
@@ -550,17 +553,40 @@ fn ledger_feed_rows_round_trip() {
 fn sidecar_commands_round_trip() {
     use openbutler_protocol::sidecar::{SidecarCall, SidecarCommand};
 
-    let SidecarCommand::Call(call) = roundtrip(fixture("sidecar-command-call")) else {
+    let plain: SidecarCommand = roundtrip(fixture("sidecar-command-call"));
+    let without = serde_json::to_value(&plain).expect("call serializes");
+    assert!(
+        !without
+            .as_object()
+            .expect("call object")
+            .contains_key("system"),
+        "a call without a system never carries the key"
+    );
+    let SidecarCommand::Call(call) = plain else {
         panic!("the call vector decodes as a call command");
     };
     let SidecarCall {
         id,
         provider,
         model,
+        system,
         tools,
         ..
     } = call;
     assert_eq!(id, "call-01");
+    assert!(
+        system.is_none(),
+        "the original vector pins the absent optional field"
+    );
+    let SidecarCommand::Call(with_system) = roundtrip(fixture("sidecar-command-call-system"))
+    else {
+        panic!("the call vector decodes as a call command");
+    };
+    assert_eq!(
+        with_system.system.as_deref(),
+        Some("You are OpenButler, the machine custodian. Answer plainly."),
+        "the assembled system message travels with the call"
+    );
     assert_eq!(provider.key, "openai-compatible");
     assert_eq!(provider.url.as_deref(), Some("https://gateway.example/v1"));
     assert_eq!(provider.api_key.as_deref(), Some("sk-live-not-logged"));

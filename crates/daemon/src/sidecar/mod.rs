@@ -429,6 +429,7 @@ pub fn sidecar_call(id: &str, provider_key: &str) -> SidecarCall {
         },
         model: "test-model".to_owned(),
         messages: json!([]),
+        system: None,
         tools: Vec::new(),
     }
 }

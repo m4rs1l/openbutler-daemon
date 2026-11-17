@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Door contract: the assembled system prompt rides `SidecarCall.system`
+  (absent from the wire when `None`) from `TurnRequest` through
+  `streamText`, pinned by a new conformance vector (present + absent
+  states) and an end-to-end test that reads it back from the provider's
+  request body as the first `role: system` message — the transport's own
+  folding, now part of the contract.
 - `agent/providers.rs`: the system-prompt context providers — memory
   path layout (first-24-hex workspace key), bounded index/note reads with
   the line-boundary cut and the verbatim truncation notice, profile

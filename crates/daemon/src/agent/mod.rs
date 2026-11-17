@@ -44,6 +44,8 @@ pub struct TurnRequest {
     pub provider_url: Option<String>,
     pub provider_api_key: Option<String>,
     pub model: String,
+    /// The assembled system prompt for this turn; `None` sends none.
+    pub system: Option<String>,
 }
 
 /// What a settled turn did — the same stamps `finishTurn` writes.
@@ -144,6 +146,7 @@ impl TurnRunner {
         call.provider.api_key = request.provider_api_key.clone();
         call.model = request.model.clone();
         call.messages = Value::Array(state.record.conversation.clone());
+        call.system = request.system.clone();
 
         let outcome = self.drain(call, &mut state, &turn_id).await;
 

@@ -50,6 +50,10 @@ pub struct SidecarCall {
     pub provider: SidecarProvider,
     pub model: String,
     pub messages: Value,
+    /// The assembled system prompt. Absent on calls that carry none —
+    /// the key never appears on the wire then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
     #[serde(default)]
     pub tools: Vec<SidecarTool>,
 }

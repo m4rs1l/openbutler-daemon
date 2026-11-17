@@ -92,6 +92,7 @@ export async function runCall(call, { signal, emit }) {
   const result = streamText({
     model: resolved.model,
     messages: call.messages,
+    ...(call.system != null && { system: call.system }),
     ...(Object.keys(tools).length > 0 && { tools }),
     // Retries belong to the host: never inside the stream.
     maxRetries: 0,

@@ -81,6 +81,7 @@ fn request(scenario: &str, addr: SocketAddr, source: UserEntrySource) -> TurnReq
         provider_url: Some(format!("http://{addr}/{scenario}")),
         provider_api_key: Some("sk-test-not-a-real-key".to_owned()),
         model: "test-model".to_owned(),
+        system: None,
     }
 }
 
@@ -544,6 +545,40 @@ async fn a_completed_turn_persists_both_conversation_messages() {
     assert_eq!(
         record.conversation[1]["content"][0]["text"], "Hello world",
         "the assistant message carries the merged reply"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn system_prompt_reaches_the_provider() {
+    let root = temp_root("system");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = TurnRunner::open(&root, SESSION_ID, door)
+        .await
+        .expect("open");
+
+    let mut req = request("basic", addr, UserEntrySource::Terminal);
+    req.system = Some("You are OpenButler, the machine custodian.".to_owned());
+    let turn = runner.send(req).await.expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    // End-to-end: contract field → door frame → runner → streamText →
+    // the provider request body the mock recorded. The OpenAI-compatible
+    // transport folds the SDK's `system` option into the first message.
+    let body = mock.bodies.lock().unwrap()[0].clone();
+    let parsed: Value = serde_json::from_str(&body).expect("request body is JSON");
+    assert_eq!(
+        parsed["messages"][0]["role"].as_str(),
+        Some("system"),
+        "the system travels as the provider's first message: {body}"
+    );
+    assert_eq!(
+        parsed["messages"][0]["content"].as_str(),
+        Some("You are OpenButler, the machine custodian."),
+        "the assembled system message reaches the provider: {body}"
     );
 
     let _ = std::fs::remove_dir_all(&root);
