@@ -27,13 +27,24 @@ pub trait TurnExecutor: Send + Sync {
     fn approve(&self, session_id: &str, approval_id: &str, approved: bool) -> bool;
     /// `session.stop`: asks the session's runner to end its turn
     /// (id-less fire-and-forget, like the source's `controller.stop`).
-    /// Returns whether a runner existed; a chat with no live turn
-    /// reports false and the action still answers.
-    fn stop(&self, session_id: &str) -> bool;
+    /// `keep_queue` is the source's `keepQueue === true`: the queued
+    /// sends survive the stop; without it they are cancelled. Returns
+    /// whether a runner existed; a chat with no live turn reports
+    /// false and the action still answers.
+    fn stop(&self, session_id: &str, keep_queue: bool) -> bool;
     /// `session.answer`: resolves the session's waiting question
     /// (id-guarded; a stale id no-ops like the source's
     /// `answerQuestion`). `None` is the dismissal the source sends.
     fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool;
+    /// `session.queue`: steers or removes one queued message of the
+    /// session (id-guarded like the source's `manageQueuedMessage`);
+    /// the runner's refusals are the client's error text.
+    fn manage_queue(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        action: crate::agent::QueueAction,
+    ) -> Result<(), String>;
 }
 
 /// The production executor: one shared door (spawned on first use — an
@@ -116,7 +127,7 @@ impl TurnExecutor for DoorExecutor {
             }
             let outcome = async {
                 let runner = self.runner_for(&session_id).await?;
-                runner.send(request).await?;
+                runner.enqueue(request);
                 Ok::<(), TurnError>(())
             }
             .await;
@@ -142,7 +153,7 @@ impl TurnExecutor for DoorExecutor {
         }
     }
 
-    fn stop(&self, session_id: &str) -> bool {
+    fn stop(&self, session_id: &str, keep_queue: bool) -> bool {
         // Like the source: no runner, no stop (and never spawn the door
         // just to cancel something that is not running).
         let runner = self
@@ -153,7 +164,7 @@ impl TurnExecutor for DoorExecutor {
             .map(Arc::clone);
         match runner {
             Some(runner) => {
-                runner.stop();
+                runner.stop(keep_queue);
                 true
             }
             None => false,
@@ -170,6 +181,29 @@ impl TurnExecutor for DoorExecutor {
         match runner {
             Some(runner) => runner.answer_question(question_id, answer),
             None => false,
+        }
+    }
+
+    fn manage_queue(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        action: crate::agent::QueueAction,
+    ) -> Result<(), String> {
+        // Like approve/stop: an inactive session never spawns the door —
+        // no runner means no queue (and no run to steer into).
+        let runner = self
+            .runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .map(Arc::clone);
+        match runner {
+            Some(runner) => runner.manage_queue(message_id, action),
+            None if action == crate::agent::QueueAction::Steer => {
+                Err("There is no running task to steer.".to_owned())
+            }
+            None => Err("This message is no longer queued.".to_owned()),
         }
     }
 }
@@ -204,7 +238,7 @@ fn convert_images(
 /// Best-effort `Could not send the message: …` notice (legacy wording).
 /// A record that cannot be read cannot carry the notice — the legacy
 /// controller held it in memory instead, and this build has no memory.
-fn report_turn_error(data_dir: &Path, session_id: &str, error: &str) {
+pub(crate) fn report_turn_error(data_dir: &Path, session_id: &str, error: &str) {
     let Some(path) = state::record_path(data_dir, session_id) else {
         return;
     };

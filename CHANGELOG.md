@@ -7,6 +7,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The visible send queue behind `session.send`: `TurnRunner::enqueue`
+  pushes mid-run messages onto the roster (published the moment they
+  join, legacy L2130), a drain loop runs them as their own turns after
+  the run settles (duty flag flips under the queue lock — a direct
+  `send` still gets its queue drained), and `session.queue` steers or
+  removes by id with the source's refusal sentences
+  (`There is no running task to steer.` / `This message is no longer
+  queued.` / workspace and source refusals). Steering admission runs at
+  the model-step boundary (prepareStep): an admitted message lands in
+  the transcript and reopens the run for one more request; the final
+  text lands first, exactly like L2474→L2489. `session.stop` honours
+  `keepQueue` (queued sends survive only when it is true). 8 tests
+  (6 dispatch, 2 e2e: queue+drain, steer admission).
 - `session.select-model`: the two `requireString` checks (256/512),
   the accept-immediately answer, and the pick's journey to the next
   turn boundary — `Host::queue_model_pick` records it, `prepare_send`

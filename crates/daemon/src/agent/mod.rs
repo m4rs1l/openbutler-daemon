@@ -22,8 +22,10 @@ pub mod events;
 pub mod executor;
 pub mod prompt;
 pub mod providers;
+pub mod queue;
 
 pub use executor::TurnExecutor;
+pub use queue::QueueAction;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -159,6 +161,24 @@ pub struct TurnRunner {
     /// Std mutex (like `approval`): the sections are short and never
     /// span an await — `publish_now` is synchronous.
     last_published: std::sync::Mutex<Option<PublishSnapshot>>,
+    /// The send queue — one lock owns the deque; the drain duty lives
+    /// in `drain_active` (an enqueue can never race the idle check).
+    scheduler: std::sync::Mutex<Scheduler>,
+    /// A drain loop is alive: the enqueue that flips it false→true
+    /// starts the loop, so a direct `send` (no loop) still gets its
+    /// queued messages drained afterwards.
+    drain_active: AtomicBool,
+    /// The turn currently running — the admission current for
+    /// steering refusals and the busy state `session.queue` reads.
+    active_current: std::sync::Mutex<Option<TurnRequest>>,
+    /// The chat's workspace binding (the source's
+    /// `sessionWorkspaceRoot`): the steering refusal's bypass input.
+    session_workspace: std::sync::Mutex<Option<String>>,
+}
+
+/// The queue — the drain duty is the runner's `drain_active` flag.
+struct Scheduler {
+    turns: std::collections::VecDeque<queue::QueuedTurn>,
 }
 
 /// A queued approval awaiting the client's decision.
@@ -220,13 +240,21 @@ impl TurnRunner {
             publish_notify: Arc::new(tokio::sync::Notify::new()),
             host,
             last_published: std::sync::Mutex::new(None),
+            scheduler: std::sync::Mutex::new(Scheduler {
+                turns: std::collections::VecDeque::new(),
+            }),
+            drain_active: AtomicBool::new(false),
+            active_current: std::sync::Mutex::new(None),
+            session_workspace: std::sync::Mutex::new(None),
         })
     }
 
     /// Cancels the running turn (the owner's stop). A stop that arrives
     /// between turns is drained at the next admission. A pending
-    /// question is dismissed too (the source's stop handler, L1259).
-    pub fn stop(&self) {
+    /// question is dismissed too (the source's stop handler, L1259),
+    /// and the queued sends are cancelled unless `keepQueue` was set
+    /// (L1256).
+    pub fn stop(&self, keep_queue: bool) {
         self.stop.store(true, Ordering::SeqCst);
         let pending = self
             .question
@@ -235,6 +263,13 @@ impl TurnRunner {
             .take();
         if let Some(pending) = pending {
             let _ = pending.sender.send(None);
+        }
+        if !keep_queue {
+            self.scheduler
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .turns
+                .clear();
         }
     }
 
@@ -375,30 +410,19 @@ impl TurnRunner {
         }
         self.stop.store(false, Ordering::SeqCst);
         let turn_id = Uuid::new_v4().to_string();
-        let now = Utc::now().timestamp_millis();
-
-        state.record.entries.push(SessionEntry::User {
-            meta: SessionEntryMeta {
-                at: Some(now),
-                turn_id: Some(turn_id.clone()),
-                ..SessionEntryMeta::default()
-            },
-            text: request.text.clone(),
-            workspace_root: request.workspace_root.clone(),
-            image_count: {
-                let images = request
-                    .attachments
-                    .iter()
-                    .filter(|attachment| attachment.media_type.starts_with("image/"))
-                    .count();
-                u32::try_from(images).ok().filter(|count| *count > 0)
-            },
-            attachments: (!request.attachments.is_empty()).then(|| request.attachments.clone()),
-            source: Some(request.source),
-            event_id: None,
-        });
-        state.record.conversation.push(user_model_message(&request));
-        state.dirty = true;
+        // The running turn is the admission current (steering
+        // refusals compare against it) and the chat's workspace
+        // binding feeds the refusal bypass.
+        *self
+            .active_current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(request.clone());
+        *self
+            .session_workspace
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            state.record.meta.workspace_root.clone();
+        push_user_entry(&mut state, &request, &turn_id);
         // Admission save: the message on disk before any provider call.
         self.save(&mut state)?;
         self.publish_now(&state, &turn_id, None, true);
@@ -432,6 +456,9 @@ impl TurnRunner {
         let mut steps = 0usize;
         let (outcome, final_reply) = loop {
             steps += 1;
+            // The prepareStep admission (L2413): steered messages enter
+            // before this request is built.
+            self.admit_steered(&mut state, &turn_id, &request);
             let mut step_call = call.clone();
             step_call.messages = Value::Array(state.record.conversation.clone());
             let drained = self.drain(step_call, &mut state, &turn_id).await;
@@ -439,7 +466,21 @@ impl TurnRunner {
                 break (drained.outcome, drained.reply);
             }
             if drained.calls.is_empty() {
-                break (TurnOutcome::Completed, drained.reply);
+                // Legacy order: the final text lands first (L2474),
+                // then the admission check reopens the run (L2489-2496)
+                // — a queued steer starts a new request in this same
+                // turn instead of completing it.
+                if !drained.reply.is_empty() {
+                    state.record.conversation.push(json!({
+                        "role": "assistant",
+                        "content": [{ "type": "text", "text": drained.reply }]
+                    }));
+                    state.dirty = true;
+                }
+                if self.admit_steered(&mut state, &turn_id, &request) == 0 {
+                    break (TurnOutcome::Completed, String::new());
+                }
+                continue;
             }
             if steps >= MAX_TOOL_STEPS {
                 push_notice(
@@ -646,6 +687,12 @@ impl TurnRunner {
         };
 
         finish_user_entry(&mut state.record, &turn_id, outcome);
+        // The admission current ends with the turn: a later manage
+        // call sees no running task (and the next send re-sets it).
+        *self
+            .active_current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         if outcome == TurnOutcome::Completed && !final_reply.is_empty() {
             state.record.conversation.push(json!({
                 "role": "assistant",
@@ -852,7 +899,7 @@ impl TurnRunner {
             .approval
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let next = PublishSnapshot {
+        let mut next = PublishSnapshot {
             session: SessionView {
                 meta: state.record.meta.clone(),
                 entries: state.record.entries.clone(),
@@ -879,6 +926,7 @@ impl TurnRunner {
                 streaming_assistant_index: streaming_index.map(|index| index as i64),
             },
         };
+        fill_queue(&mut next.run, &self.scheduler);
         drop(queued);
         let mut last = self
             .last_published
@@ -895,6 +943,314 @@ impl TurnRunner {
             }
         }
     }
+}
+
+// --- send queue ------------------------------------------------------------
+
+impl TurnRunner {
+    /// Queues a send and starts the drain when idle (legacy
+    /// `enqueueMessage`: a busy run keeps it, an idle one runs it).
+    pub fn enqueue(self: &Arc<Self>, request: TurnRequest) {
+        let turn = queue::QueuedTurn {
+            id: Uuid::new_v4().to_string(),
+            steering: queue::steering_default(request.source),
+            entry_added: false,
+            request,
+        };
+        {
+            let mut scheduler = self
+                .scheduler
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            scheduler.turns.push_back(turn);
+        }
+        // The source publishes the moment a message joins a busy run
+        // (L2130): the roster shows the queue before any pop can take
+        // it back out.
+        self.publish_queue_now();
+        // The flip decides the duty: false→true starts the loop (a
+        // live loop pops the new arrival itself).
+        if !self.drain_active.swap(true, Ordering::SeqCst) {
+            let runner = Arc::clone(self);
+            tokio::spawn(async move {
+                runner.drain_queue().await;
+            });
+        }
+    }
+
+    /// Runs queued sends one after another until the queue is empty;
+    /// the flag flips under the same lock, so a push can never race the
+    /// idle check (legacy `runQueuedMessages`, L2177).
+    async fn drain_queue(self: Arc<Self>) {
+        loop {
+            // The queue only leaves the roster when its turn can
+            // actually start: a running turn holds the session (the
+            // source checks `busy` before shifting, L2178).
+            while self
+                .active_current
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let next = {
+                let mut scheduler = self
+                    .scheduler
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match scheduler.turns.pop_front() {
+                    Some(turn) => Some(turn),
+                    None => {
+                        // Duty ends under the queue lock, so an enqueue
+                        // either lands before the pop (seen) or after
+                        // the flip (starts the next loop).
+                        self.drain_active.store(false, Ordering::SeqCst);
+                        None
+                    }
+                }
+            };
+            let Some(turn) = next else {
+                return;
+            };
+            if let Err(error) = self.send(turn.request).await {
+                crate::agent::executor::report_turn_error(
+                    &self.data_root,
+                    &self.session_id,
+                    &error.to_string(),
+                );
+            }
+        }
+    }
+
+    /// Whether a turn currently owns the session (the `session.queue`
+    /// busy check's input — exposed for tests and visibility
+    /// surfaces).
+    pub fn is_turn_active(&self) -> bool {
+        self.active_current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
+    /// `session.queue`: steer or remove one queued message
+    /// (`manageQueuedMessage`, L2041-2060 — the source's refusal
+    /// sentences included).
+    pub fn manage_queue(&self, message_id: &str, action: QueueAction) -> Result<(), String> {
+        let mut scheduler = self
+            .scheduler
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let busy = self
+            .active_current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some();
+        if action == QueueAction::Steer && !busy {
+            return Err("There is no running task to steer.".to_owned());
+        }
+        let Some(index) = scheduler
+            .turns
+            .iter()
+            .position(|turn| turn.id == message_id && !turn.entry_added)
+        else {
+            return Err("This message is no longer queued.".to_owned());
+        };
+        if action == QueueAction::Steer && scheduler.turns[index].steering {
+            return Ok(());
+        }
+        if action == QueueAction::Steer {
+            let current = self
+                .active_current
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            if let Some(current) = current.as_ref() {
+                let session_workspace = self
+                    .session_workspace
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let runtime_workspace = self
+                    .host
+                    .upgrade()
+                    .and_then(|host| host.runtime_view())
+                    .map(|view| view.workspace_root)
+                    .unwrap_or_default();
+                let refusal = queue::steering_refusal(
+                    &scheduler.turns[index].request,
+                    session_workspace.as_deref(),
+                    current,
+                    &runtime_workspace,
+                );
+                if !refusal.is_empty() {
+                    return Err(refusal.to_owned());
+                }
+            }
+        }
+        let Some(turn) = scheduler.turns.remove(index) else {
+            return Ok(());
+        };
+        if action == QueueAction::Steer {
+            // Preserve the order of explicit steering while moving it
+            // ahead of later work (L2055-2056).
+            let turn = queue::QueuedTurn {
+                steering: true,
+                ..turn
+            };
+            let waiting = scheduler
+                .turns
+                .iter()
+                .position(|queued| !queued.steering)
+                .unwrap_or(scheduler.turns.len());
+            scheduler.turns.insert(waiting, turn);
+        }
+        drop(scheduler);
+        // The state lock lives inside a running turn; the queue's own
+        // diff publishes from the last frame instead (the record has
+        // not changed under a manage call).
+        self.publish_queue_now();
+        Ok(())
+    }
+
+    /// The prepareStep admission (L2413-2441): every steered message
+    /// that passes the refusal joins the transcript before the next
+    /// request is built. Incompatible steering is skipped, never a
+    /// blocker for later eligible messages.
+    fn admit_steered(
+        &self,
+        state: &mut SessionState,
+        turn_id: &str,
+        current: &TurnRequest,
+    ) -> usize {
+        let session_workspace = state.record.meta.workspace_root.clone();
+        let runtime_workspace = self
+            .host
+            .upgrade()
+            .and_then(|host| host.runtime_view())
+            .map(|view| view.workspace_root)
+            .unwrap_or_default();
+        let mut admitted = 0;
+        loop {
+            let candidate = {
+                let mut scheduler = self
+                    .scheduler
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                scheduler
+                    .turns
+                    .iter()
+                    .position(|turn| {
+                        turn.steering
+                            && !turn.entry_added
+                            && queue::steering_refusal(
+                                &turn.request,
+                                session_workspace.as_deref(),
+                                current,
+                                &runtime_workspace,
+                            )
+                            .is_empty()
+                    })
+                    .and_then(|index| scheduler.turns.remove(index))
+            };
+            let Some(turn) = candidate else {
+                break;
+            };
+            push_user_entry(state, &turn.request, turn_id);
+            admitted += 1;
+        }
+        admitted
+    }
+
+    /// Publishes the queue's state from the last frame (the record has
+    /// not changed, so only the run's queue fields move).
+    fn publish_queue_now(&self) {
+        let Some(host) = self.host.upgrade() else {
+            return;
+        };
+        let Some(runtime) = host.runtime_view() else {
+            return;
+        };
+        let previous = self
+            .last_published
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(previous) = previous else {
+            return;
+        };
+        let mut next = previous.clone();
+        fill_queue(&mut next.run, &self.scheduler);
+        host.fanout()
+            .publish(&self.session_id, &previous, &next, &runtime);
+        *self
+            .last_published
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(next);
+    }
+}
+
+/// Fills the run's queue fields from the live queue (the source's
+/// `makeSnapshot`, L614-639: `!entryAdded` counts, the brief first
+/// message, the full list).
+fn fill_queue(
+    run: &mut openbutler_protocol::session::RunState,
+    scheduler: &std::sync::Mutex<Scheduler>,
+) {
+    let scheduler = scheduler
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let pending: Vec<&queue::QueuedTurn> = scheduler
+        .turns
+        .iter()
+        .filter(|turn| !turn.entry_added)
+        .collect();
+    run.queued_message_count = u32::try_from(pending.len()).unwrap_or(u32::MAX);
+    run.first_queued_message =
+        pending
+            .first()
+            .map(|turn| openbutler_protocol::session::QueuedMessageBrief {
+                text: turn.request.text.clone(),
+                image_count: u32::try_from(turn.request.images.len()).unwrap_or(0),
+            });
+    run.queued_messages = pending
+        .iter()
+        .map(|turn| openbutler_protocol::session::QueuedMessage {
+            id: Some(turn.id.clone()),
+            text: turn.request.text.clone(),
+            image_count: u32::try_from(turn.request.images.len()).unwrap_or(0),
+            editable: Some(true),
+            steering: Some(turn.steering),
+        })
+        .collect();
+}
+
+/// The user entry plus its model message (`addUserEntry`), shared by
+/// turn admission and steering admission.
+fn push_user_entry(state: &mut SessionState, request: &TurnRequest, turn_id: &str) {
+    let now = Utc::now().timestamp_millis();
+    state.record.entries.push(SessionEntry::User {
+        meta: SessionEntryMeta {
+            at: Some(now),
+            turn_id: Some(turn_id.to_owned()),
+            ..SessionEntryMeta::default()
+        },
+        text: request.text.clone(),
+        workspace_root: request.workspace_root.clone(),
+        image_count: {
+            let images = request
+                .attachments
+                .iter()
+                .filter(|attachment| attachment.media_type.starts_with("image/"))
+                .count();
+            u32::try_from(images).ok().filter(|count| *count > 0)
+        },
+        attachments: (!request.attachments.is_empty()).then(|| request.attachments.clone()),
+        source: Some(request.source),
+        event_id: None,
+    });
+    state.record.conversation.push(user_model_message(request));
+    state.dirty = true;
 }
 
 // --- question channel --------------------------------------------------------

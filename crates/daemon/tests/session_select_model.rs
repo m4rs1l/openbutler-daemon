@@ -34,12 +34,21 @@ impl TurnExecutor for RecordingExecutor {
         false
     }
 
-    fn stop(&self, _session_id: &str) -> bool {
+    fn stop(&self, _session_id: &str, _keep_queue: bool) -> bool {
         false
     }
 
     fn answer(&self, _session_id: &str, _question_id: &str, _answer: Option<String>) -> bool {
         false
+    }
+
+    fn manage_queue(
+        &self,
+        _session_id: &str,
+        _message_id: &str,
+        _action: openbutler_daemon::agent::QueueAction,
+    ) -> Result<(), String> {
+        Ok(())
     }
 }
 

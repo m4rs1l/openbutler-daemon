@@ -570,7 +570,7 @@ async fn stop_cancels_the_running_turn() {
         tokio::spawn(async move { runner.send(req).await })
     };
     tokio::time::sleep(Duration::from_millis(400)).await;
-    runner.stop();
+    runner.stop(false);
     let turn = worker.await.unwrap().expect("turn settles");
 
     assert_eq!(turn.outcome, TurnOutcome::Cancelled);
@@ -1344,6 +1344,192 @@ async fn a_queued_pick_lands_on_the_record_at_the_turn_boundary() {
     assert!(
         host.peek_model_pick(SESSION_ID).is_none(),
         "the pick is consumed, not reused"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Polls the roster until `queued_message_count` reaches the target.
+async fn await_queue(sink: &Arc<RecordingSink>, count: u32) {
+    for _ in 0..500 {
+        let frames = sink.frames.lock().unwrap().clone();
+        for frame in &frames {
+            let event = serde_json::from_slice::<openbutler_protocol::DaemonEvent>(
+                frame.strip_suffix(b"\n").unwrap_or(frame),
+            )
+            .ok();
+            if let Some(openbutler_protocol::DaemonEvent::Patch { patch, .. }) = event
+                && patch.run.queued_message_count >= count
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the roster never shows {count} queued message(s)");
+}
+
+/// A message sent while a run goes queues up (visible on the roster)
+/// and drains as its own turn after the run ends (legacy
+/// `enqueueMessage` → `runQueuedMessages`).
+#[tokio::test]
+async fn messages_queue_during_a_run_and_drain_after() {
+    let root = temp_root("queue-drain");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    let sink = Arc::new(RecordingSink::default());
+    host.fanout().subscribe(SESSION_ID, sink.clone());
+
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+
+    // The slow first turn (1.5 s): wait until it owns the session
+    // (the admission), then a message that arrives mid-run.
+    let asker = Arc::clone(&runner);
+    let worker = tokio::spawn(async move {
+        asker
+            .send(request("slow", addr, UserEntrySource::Terminal))
+            .await
+    });
+    for _ in 0..500 {
+        if runner.is_turn_active() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(runner.is_turn_active(), "the turn owns the session");
+    runner.enqueue(request("basic", addr, UserEntrySource::Web));
+    await_queue(&sink, 1).await;
+
+    // The queued message runs on its own when the first turn settles.
+    let first = worker.await.unwrap().expect("first turn");
+    assert_eq!(first.outcome, TurnOutcome::Completed);
+    for _ in 0..500 {
+        if mock.bodies.lock().unwrap().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        mock.bodies.lock().unwrap().len(),
+        2,
+        "slow(1 request) then the drained basic turn"
+    );
+    // The drain settles without an external trigger and the transcript
+    // carries both user entries.
+    for _ in 0..500 {
+        if saved(&root).entries.len() >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let record = saved(&root);
+    assert!(
+        record.entries.len() >= 3,
+        "user (slow), assistant, user (drained): {}",
+        record.entries.len()
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An explicit steer admits the queued message into the running task at
+/// the next model step: the conversation carries it before the next
+/// request is built (legacy `takeQueuedMessages` at prepareStep).
+#[tokio::test]
+async fn a_steered_message_admits_into_the_running_turn() {
+    let root = temp_root("queue-steer");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    let sink = Arc::new(RecordingSink::default());
+    host.fanout().subscribe(SESSION_ID, sink.clone());
+
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+
+    let asker = Arc::clone(&runner);
+    let worker = tokio::spawn(async move {
+        asker
+            .send(request("slow", addr, UserEntrySource::Terminal))
+            .await
+    });
+    for _ in 0..500 {
+        if runner.is_turn_active() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(runner.is_turn_active(), "the turn owns the session");
+
+    // A web message never steers by default (owner decision 2026-10-31);
+    // the explicit promote admits it into the live run.
+    runner.enqueue({
+        let mut queued = request("slow", addr, UserEntrySource::Web);
+        queued.text = "steer me".to_owned();
+        queued
+    });
+    await_queue(&sink, 1).await;
+    let queued_id = {
+        // The roster carries the id the manage action addresses.
+        let frames = sink.frames.lock().unwrap().clone();
+        let mut found = None;
+        for frame in &frames {
+            let event = serde_json::from_slice::<openbutler_protocol::DaemonEvent>(
+                frame.strip_suffix(b"\n").unwrap_or(frame),
+            )
+            .ok();
+            if let Some(openbutler_protocol::DaemonEvent::Patch { patch, .. }) = event
+                && let Some(item) = patch
+                    .run
+                    .queued_messages
+                    .first()
+                    .and_then(|message| message.id.clone())
+            {
+                found = Some(item);
+                break;
+            }
+        }
+        found.expect("the queued message carries its id")
+    };
+
+    if let Err(error) =
+        runner.manage_queue(&queued_id, openbutler_daemon::agent::QueueAction::Steer)
+    {
+        panic!("the steer is refused: {error} (queued_id={queued_id})");
+    }
+
+    let turn = worker.await.unwrap().expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    // The steered message entered before the closing request: the
+    // last body carries it as a user message.
+    let bodies = mock.bodies.lock().unwrap().clone();
+    assert!(bodies.len() >= 2, "one request, one steered step");
+    assert!(
+        bodies.last().unwrap().contains("steer me"),
+        "the admission reaches the model"
+    );
+    let record = saved(&root);
+    assert!(
+        record
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, openbutler_protocol::entry::SessionEntry::User { text, .. } if text == "steer me")),
+        "the admission lands in the transcript"
     );
 
     let _ = std::fs::remove_dir_all(&root);

@@ -46,9 +46,18 @@ impl TurnExecutor for RecordingExecutor {
         true
     }
 
-    fn stop(&self, session_id: &str) -> bool {
+    fn stop(&self, session_id: &str, _keep_queue: bool) -> bool {
         self.stops.lock().unwrap().push(session_id.to_owned());
         true
+    }
+
+    fn manage_queue(
+        &self,
+        _session_id: &str,
+        _message_id: &str,
+        _action: openbutler_daemon::agent::QueueAction,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool {

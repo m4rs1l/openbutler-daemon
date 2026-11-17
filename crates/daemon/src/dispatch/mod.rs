@@ -632,15 +632,55 @@ pub fn handle(
         "session.stop" => {
             // Source (daemon-host L3552): fire-and-forget `stop` with
             // `keepQueue`/`holdQueue` as plain `=== true` checks — no
-            // validation, and the queue runtime that would honour them
-            // is not in this build (the flags are read as false).
+            // validation; `keepQueue` decides whether the queued sends
+            // survive (the source's stop handler clears them otherwise).
             let Some(executor) = host.executor() else {
                 return failure(request, "The host has no turn executor.".to_owned());
             };
             if let Some(session_id) = state.current_session.clone() {
-                let _ = executor.stop(&session_id);
+                let keep_queue = request.get("keepQueue").and_then(Value::as_bool) == Some(true);
+                let _ = executor.stop(&session_id, keep_queue);
             }
             success(request, json!({ "accepted": true }))
+        }
+        "session.queue" => {
+            // Source (daemon-host L3544-3552): requireString(sessionId,
+            // 64) + requireString(messageId, 64) + the closed
+            // `queueAction` set, then manage through the seam — the
+            // runner's refusals are this action's error text.
+            let session_id = match request.get("sessionId").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
+                _ => {
+                    return failure(
+                        request,
+                        "sessionId must be a non-empty string under 64 bytes.".to_owned(),
+                    );
+                }
+            };
+            let message_id = match request.get("messageId").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
+                _ => {
+                    return failure(
+                        request,
+                        "messageId must be a non-empty string under 64 bytes.".to_owned(),
+                    );
+                }
+            };
+            let action = match request.get("queueAction").and_then(Value::as_str) {
+                Some("steer") => crate::agent::QueueAction::Steer,
+                Some("remove") => crate::agent::QueueAction::Remove,
+                _ => return failure(request, "Invalid queue action.".to_owned()),
+            };
+            if state.current_session.as_deref() != Some(session_id.as_str()) {
+                return failure(request, "The active session has changed.".to_owned());
+            }
+            let Some(executor) = host.executor() else {
+                return failure(request, "The host has no turn executor.".to_owned());
+            };
+            match executor.manage_queue(&session_id, &message_id, action) {
+                Ok(()) => success(request, json!({ "accepted": true })),
+                Err(message) => failure(request, message),
+            }
         }
         "session.answer" => {
             // Source (daemon-host L3532-3544): requireString(questionId,
