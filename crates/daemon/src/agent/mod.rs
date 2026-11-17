@@ -16,6 +16,7 @@
 //!   to their own slices and are recorded in `docs/agent-loop.md`.
 
 pub mod prompt;
+pub mod providers;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

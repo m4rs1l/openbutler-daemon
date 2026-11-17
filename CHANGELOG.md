@@ -7,6 +7,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `agent/providers.rs`: the system-prompt context providers — memory
+  path layout (first-24-hex workspace key), bounded index/note reads with
+  the line-boundary cut and the verbatim truncation notice, profile
+  availability states, the role-exact team block, skill roots/discovery
+  (override, per-scope cap, metadata-name match) and the UTF-16 index
+  budget (`prompt_providers`, 15 tests; pinned retroactively — the
+  implementation landed before its tests, documented in the header).
 - `ledger` writer: the tool-action write path (c2a) — idempotent
   `proposed` record as the write-ahead gate before execution, one
   transaction per transition chain, boot recovery to `failed` with the
