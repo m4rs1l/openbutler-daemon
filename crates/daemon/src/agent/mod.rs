@@ -33,6 +33,7 @@ use std::time::Duration;
 use chrono::Utc;
 use openbutler_protocol::SessionEntryMeta;
 use openbutler_protocol::entry::{NoticeTone, SessionEntry, TurnOutcome, UserEntrySource};
+use openbutler_protocol::session::{RunState, SessionView};
 use openbutler_protocol::sidecar::SidecarEvent;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -47,6 +48,7 @@ use crate::tools::pipeline::{
     ApprovalOutcome, GateDecision, ToolCallContext, assess, proposal_failure, run_tool_call,
     stop_result,
 };
+use events::PublishSnapshot;
 
 /// Host-authored stop: the source has no counter because its loop is
 /// SDK-owned; a runaway tool loop must not hold the turn (and the
@@ -138,6 +140,14 @@ pub struct TurnRunner {
     /// `pendingApproval` pair). Std mutex: every critical section here
     /// is short and never spans an await — the wait rides the oneshot.
     approval: std::sync::Mutex<Option<PendingApproval>>,
+    /// The host this runner publishes live state to (c3). Weak: a runner
+    /// must never keep the host alive.
+    host: std::sync::Weak<crate::dispatch::Host>,
+    /// The last state published to the roster; `None` until the first
+    /// publish seeds it (an attach answers with a snapshot of its own).
+    /// Std mutex (like `approval`): the sections are short and never
+    /// span an await — `publish_now` is synchronous.
+    last_published: std::sync::Mutex<Option<PublishSnapshot>>,
 }
 
 /// A queued approval awaiting the client's decision.
@@ -170,6 +180,7 @@ impl TurnRunner {
         data_root: &Path,
         session_id: &str,
         door: SidecarDoor,
+        host: std::sync::Weak<crate::dispatch::Host>,
     ) -> Result<TurnRunner, TurnError> {
         let path = state::record_path(data_root, session_id).ok_or(TurnError::NotFound)?;
         let record = state::read_session_record(&path, session_id).ok_or(TurnError::Unreadable)?;
@@ -183,6 +194,8 @@ impl TurnRunner {
             }),
             stop: Arc::new(AtomicBool::new(false)),
             approval: std::sync::Mutex::new(None),
+            host,
+            last_published: std::sync::Mutex::new(None),
         })
     }
 
@@ -305,6 +318,7 @@ impl TurnRunner {
         state.dirty = true;
         // Admission save: the message on disk before any provider call.
         self.save(&mut state)?;
+        self.publish_now(&state, &turn_id, None, true);
 
         let mut call = sidecar_call(&turn_id, &request.provider_key);
         call.provider.url = request.provider_url.clone();
@@ -508,6 +522,9 @@ impl TurnRunner {
         }
         state.dirty = true;
         self.save(&mut state)?;
+        // The turn is over: the roster learns `busy: false` with the
+        // settled record (the outcome stamp, the final assistant text).
+        self.publish_now(&state, &turn_id, None, false);
 
         Ok(TurnReport { turn_id, outcome })
     }
@@ -569,6 +586,7 @@ impl TurnRunner {
                                 turn_id,
                                 &mut reply,
                             );
+                            self.publish_now(state, turn_id, assistant_index, true);
                         }
                         SidecarEvent::ReasoningDelta { delta, .. } => {
                             // A signature-only delta (empty text) is not
@@ -585,6 +603,7 @@ impl TurnRunner {
                                 &delta,
                                 turn_id,
                             );
+                            self.publish_now(state, turn_id, assistant_index, true);
                         }
                         SidecarEvent::ToolCall {
                             name,
@@ -604,6 +623,7 @@ impl TurnRunner {
                                 name,
                                 arguments,
                             });
+                            self.publish_now(state, turn_id, assistant_index, true);
                         }
                         SidecarEvent::Usage { .. } => {}
                         SidecarEvent::Finish { .. } => break,
@@ -657,6 +677,9 @@ impl TurnRunner {
         } else {
             TurnOutcome::Completed
         };
+        // The step's notices and outcome land in one publish; the stream
+        // is over, so nothing carries a streaming index any more.
+        self.publish_now(state, turn_id, None, true);
         DrainResult {
             outcome,
             reply,
@@ -670,9 +693,61 @@ impl TurnRunner {
                 state.dirty = false;
                 Ok(())
             }
-            // Unreachable after admission (the user entry anchors the
-            // record), but a skip is not a failure.
             SaveOutcome::Skipped => Ok(()),
+        }
+    }
+
+    /// Publishes the current state to the roster (c3): the first call
+    /// seeds `last_published`, later calls fan out the diff. The runtime
+    /// view comes from the host; until one is set (boot edge) there is
+    /// no legal frame to send, so the publish is skipped, not faked.
+    fn publish_now(
+        &self,
+        state: &SessionState,
+        turn_id: &str,
+        streaming_index: Option<usize>,
+        busy: bool,
+    ) {
+        let Some(host) = self.host.upgrade() else {
+            return;
+        };
+        let Some(runtime) = host.runtime_view() else {
+            return;
+        };
+        let next = PublishSnapshot {
+            session: SessionView {
+                meta: state.record.meta.clone(),
+                entries: state.record.entries.clone(),
+            },
+            run: RunState {
+                busy,
+                running_turn_id: Some(turn_id.to_owned()),
+                // The queue parks a bare id today; the full
+                // `pendingApproval` request rides with `session.attach`
+                // visibility (c3c-2).
+                pending_approval: None,
+                pending_approval_id: None,
+                pending_question: None,
+                queued_message_count: 0,
+                first_queued_message: None,
+                queued_messages: Vec::new(),
+                session_save_error: None,
+                streaming_assistant_index: streaming_index.map(|index| index as i64),
+            },
+        };
+        let mut last = self
+            .last_published
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match last.take() {
+            // The first state only seeds the baseline — an attaching
+            // client answers with a snapshot of its own.
+            None => *last = Some(next),
+            Some(previous) => {
+                host.fanout()
+                    .publish(&self.session_id, &previous, &next, &runtime);
+                *last = Some(next);
+            }
         }
     }
 }

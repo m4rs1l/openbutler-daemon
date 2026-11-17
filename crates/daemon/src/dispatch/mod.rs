@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
 use openbutler_protocol::entry::UserEntrySource;
+use openbutler_protocol::runtime::RuntimeViewData;
+use openbutler_protocol::runtime::view::{ApprovalMode, ReasoningSupport};
 use openbutler_protocol::session::{SessionView, read};
 use openbutler_protocol::{
     DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, DaemonStatus, InlineAttachment,
@@ -31,6 +33,7 @@ use crate::ledger;
 use crate::settings::schema::TeamRole;
 use crate::settings::{LoadedSettings, SettingsError, load_settings};
 use crate::state::{self, WorkspaceFilter};
+use fanout::Fanout;
 
 /// The chat this connection has opened. `session.load` records it; the
 /// paging and attachment reads address it — the per-connection stand-in for
@@ -74,6 +77,13 @@ pub struct Host {
     /// The host-wide turn executor (door + runners). Set once at boot;
     /// `session.send` refuses without it.
     executor: RwLock<Option<Arc<dyn TurnExecutor>>>,
+    /// Who receives a session's published events (c3): the roster lives
+    /// with the host because a runner publishes across connections.
+    fanout: Fanout,
+    /// The runtime view every published frame carries. Built when a turn
+    /// is prepared (`session.send`) until the full `toRuntimeView` port
+    /// lands with `session.attach`.
+    runtime_view: RwLock<Option<RuntimeViewData>>,
 }
 
 impl Host {
@@ -90,6 +100,8 @@ impl Host {
             pairing: PairingCodes::new(),
             settings: RwLock::new(None),
             executor: RwLock::new(None),
+            fanout: Fanout::new(),
+            runtime_view: RwLock::new(None),
         }
     }
 
@@ -117,6 +129,29 @@ impl Host {
     /// admission gate redeems through it.
     pub fn pairing(&self) -> &PairingCodes {
         &self.pairing
+    }
+
+    /// The event roster runners publish to.
+    pub fn fanout(&self) -> &Fanout {
+        &self.fanout
+    }
+
+    /// The runtime view published frames carry, until the full
+    /// `toRuntimeView` port lives with `session.attach`.
+    pub fn runtime_view(&self) -> Option<RuntimeViewData> {
+        self.runtime_view
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Sets the runtime view a prepared turn publishes with (built from
+    /// the settings `session.send` resolved).
+    pub fn set_runtime_view(&self, view: RuntimeViewData) {
+        *self
+            .runtime_view
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view);
     }
 
     /// Install the turn executor (boot wiring or a test double).
@@ -507,6 +542,34 @@ fn prepare_send(
         .providers
         .get(&meta.provider_id)
         .and_then(|secret| secret.keys.first().cloned());
+    // The runtime view every published frame carries, until the full
+    // `toRuntimeView` port lands with `session.attach`. Model facts come
+    // from this turn's own choice; catalog-backed fields stay empty
+    // rather than guessed (documented bootstrap in agent-loop.md).
+    host.set_runtime_view(RuntimeViewData {
+        supports_session_attachments: Some(true),
+        supports_projects: Some(false),
+        workspace_root: workspace_root.clone().unwrap_or_default(),
+        model_name: meta.model_id.clone(),
+        provider_name: None,
+        provider_id: meta.provider_id.clone(),
+        model_id: meta.model_id.clone(),
+        context_window_tokens: None,
+        custodian_context_limit_tokens: None,
+        supports_vision: false,
+        reasoning_variants: Vec::new(),
+        reasoning_metadata_source: None,
+        reasoning_support: ReasoningSupport::ModelUnsupported,
+        reasoning_default: String::new(),
+        reasoning_preference: String::new(),
+        show_reasoning_default: false,
+        reasoning_titles: None,
+        approval_mode: Some(match approval_mode {
+            crate::settings::schema::ApprovalMode::Workspace => ApprovalMode::Workspace,
+            crate::settings::schema::ApprovalMode::AutoReview => ApprovalMode::AutoReview,
+            crate::settings::schema::ApprovalMode::FullAccess => ApprovalMode::FullAccess,
+        }),
+    });
     crate::agent::context::prepare_turn(
         data_dir,
         crate::agent::context::TurnInputs {

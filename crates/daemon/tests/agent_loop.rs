@@ -301,7 +301,7 @@ async fn the_user_entry_persists_before_the_model_answers_and_carries_the_source
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
     let runner = Arc::new(
-        TurnRunner::open(&root, SESSION_ID, door)
+        TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
             .await
             .expect("open"),
     );
@@ -349,7 +349,7 @@ async fn deltas_merge_into_one_assistant_entry() {
     seed_session(&root);
     let (addr, _mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -377,7 +377,7 @@ async fn reasoning_splices_before_the_streamed_assistant_and_gets_a_duration() {
     seed_session(&root);
     let (addr, _mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -429,7 +429,7 @@ async fn an_unknown_tool_pairs_an_authored_error_and_fails_the_run() {
     seed_session(&root);
     let (addr, _mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -489,7 +489,7 @@ async fn a_provider_failure_writes_an_error_notice_and_fails_the_turn() {
     seed_session(&root);
     let (addr, _mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -538,7 +538,7 @@ async fn stop_cancels_the_running_turn() {
     let (addr, _mock) = mock_server().await;
     let door = spawn_door().await;
     let runner = Arc::new(
-        TurnRunner::open(&root, SESSION_ID, door)
+        TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
             .await
             .expect("open"),
     );
@@ -580,7 +580,7 @@ async fn a_completed_turn_persists_both_conversation_messages() {
     seed_session(&root);
     let (addr, _mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -617,7 +617,7 @@ async fn system_prompt_reaches_the_provider() {
     seed_session(&root);
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -651,7 +651,7 @@ async fn workspace_and_channel_labels_reach_the_model_only() {
     seed_session(&root);
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -688,7 +688,7 @@ async fn attachments_reach_the_model_as_references_and_the_entry() {
     seed_session(&root);
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -794,7 +794,7 @@ async fn the_batch_loop_executes_the_tool_and_pairs_both_messages() {
     seed_session(&root);
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -878,7 +878,7 @@ async fn a_declined_tool_stops_after_pairing_the_denial_result() {
     seed_session(&root);
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -935,7 +935,7 @@ async fn an_approved_queue_entry_runs_the_tool_and_continues_the_batch() {
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
     let runner = Arc::new(
-        TurnRunner::open(&root, SESSION_ID, door)
+        TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
             .await
             .expect("open"),
     );
@@ -983,7 +983,7 @@ async fn an_untouched_queue_times_out_with_both_source_sentences() {
     seed_session(&root);
     let (addr, mock) = mock_server().await;
     let door = spawn_door().await;
-    let runner = TurnRunner::open(&root, SESSION_ID, door)
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
         .await
         .expect("open");
 
@@ -1012,6 +1012,106 @@ async fn an_untouched_queue_times_out_with_both_source_sentences() {
         "the registry's denial sentence"
     );
     assert_eq!(ledger_states(&root), ["proposed", "denied"]);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// --- live publish (c3c) -------------------------------------------------------
+
+/// A sink that records every published frame.
+#[derive(Default)]
+struct RecordingSink {
+    frames: std::sync::Mutex<Vec<Vec<u8>>>,
+}
+
+impl openbutler_daemon::dispatch::fanout::EventSink for RecordingSink {
+    fn try_send(&self, frame: Vec<u8>) -> bool {
+        self.frames.lock().unwrap().push(frame);
+        true
+    }
+}
+
+/// The bootstrap runtime view a prepared turn publishes with (the
+/// conformance fixture's shape — see `runtime-view.json`).
+fn runtime_view() -> openbutler_protocol::runtime::RuntimeViewData {
+    serde_json::from_value(serde_json::json!({
+        "supportsSessionAttachments": true,
+        "supportsProjects": false,
+        "workspaceRoot": "C:\\work\\demo",
+        "modelName": "test-model",
+        "providerId": "mock",
+        "modelId": "test-model",
+        "contextWindowTokens": null,
+        "supportsVision": false,
+        "reasoningVariants": [],
+        "reasoningMetadataSource": null,
+        "reasoningSupport": "model-unsupported",
+        "reasoningDefault": "",
+        "reasoningPreference": "",
+        "showReasoningDefault": false,
+    }))
+    .expect("runtime fixture")
+}
+
+#[tokio::test]
+async fn a_running_turn_publishes_live_state_to_the_fanout() {
+    let root = temp_root("publish");
+    seed_session(&root);
+    // The `think` scenario answers in two chunks: at least two deltas
+    // cross the wire while the turn runs.
+    let (addr, _mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    let sink = Arc::new(RecordingSink::default());
+    host.fanout().subscribe(SESSION_ID, sink.clone());
+
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+    let turn = runner
+        .send(request("think", addr, UserEntrySource::Terminal))
+        .await
+        .expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    let frames = sink.frames.lock().unwrap().clone();
+    assert!(
+        frames.len() >= 3,
+        "admission seeds, deltas publish, and the turn end publishes (got {})",
+        frames.len()
+    );
+    let events: Vec<openbutler_protocol::DaemonEvent> = frames
+        .iter()
+        .map(|frame| {
+            serde_json::from_slice(frame.strip_suffix(b"\n").unwrap_or(frame))
+                .expect("frame decodes as an event")
+        })
+        .collect();
+
+    // Mid-stream frames are patches with a live streaming index; the
+    // last frame closes the turn with busy: false.
+    let mid = &events[1];
+    match mid {
+        openbutler_protocol::DaemonEvent::Patch { patch, .. } => {
+            assert!(patch.run.busy, "the stream publishes while busy");
+            assert!(
+                patch.run.streaming_assistant_index.is_some(),
+                "the streaming entry's index rides the frame"
+            );
+        }
+        other => panic!("expected a patch mid-stream, got {other:?}"),
+    }
+    let last = events.last().expect("at least one frame");
+    match last {
+        openbutler_protocol::DaemonEvent::Patch { patch, .. } => {
+            assert!(!patch.run.busy, "the turn end publishes busy: false");
+        }
+        other => panic!("expected a closing patch, got {other:?}"),
+    }
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -99,6 +99,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         host.set_executor(Arc::new(DoorExecutor::new(
             config::data_dir(),
             production_door_config(),
+            Arc::downgrade(&host),
         )));
         let shutdown = host.subscribe_shutdown();
 

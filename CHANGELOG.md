@@ -7,6 +7,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Live publish (c3 producer): `TurnRunner` carries a weak host handle
+  and a `last_published` baseline, and publishes on admission, on every
+  stream event (text/reasoning/tool-call, with the live streaming
+  index) and at the turn end (`busy: false`); `session.send` builds the
+  documented bootstrap runtime view the frames carry (catalog-backed
+  fields stay empty rather than guessed). Pinned end-to-end:
+  `a_running_turn_publishes_live_state_to_the_fanout`.
 - Fan-out roster (`dispatch/fanout.rs`): session subscriptions behind an
   `EventSink` trait (the connection's bounded write queue implements it —
   `dispatch` never depends on `server`), `publish` builds the event via

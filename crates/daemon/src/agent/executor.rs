@@ -35,15 +35,23 @@ pub struct DoorExecutor {
     config: DoorConfig,
     door: tokio::sync::Mutex<Option<SidecarDoor>>,
     runners: Mutex<HashMap<String, Arc<TurnRunner>>>,
+    /// The host runners publish live state to; weak so an executor never
+    /// pins the host's lifetime.
+    host: std::sync::Weak<crate::dispatch::Host>,
 }
 
 impl DoorExecutor {
-    pub fn new(data_dir: PathBuf, config: DoorConfig) -> Self {
+    pub fn new(
+        data_dir: PathBuf,
+        config: DoorConfig,
+        host: std::sync::Weak<crate::dispatch::Host>,
+    ) -> Self {
         Self {
             data_dir,
             config,
             door: tokio::sync::Mutex::new(None),
             runners: Mutex::new(HashMap::new()),
+            host,
         }
     }
 
@@ -68,7 +76,8 @@ impl DoorExecutor {
                 }
             }
         };
-        let runner = Arc::new(TurnRunner::open(&self.data_dir, session_id, door).await?);
+        let runner =
+            Arc::new(TurnRunner::open(&self.data_dir, session_id, door, self.host.clone()).await?);
         self.runners
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
