@@ -11,13 +11,17 @@
 //!   message must survive a crash while the model is still thinking) and
 //!   the settlement save — plus a best-effort 1 s dirty save during the
 //!   stream (the legacy debounce's role).
-//! - **No system prompt, no tools, no workspace yet**: the frozen system
-//!   prompt, tool execution/second batch (c2) and workspace labels belong
-//!   to their own slices and are recorded in `docs/agent-loop.md`.
+//! - **The system prompt and its context are landed** (`prompt`,
+//!   `providers`, `context`); tools/second batch (c2) and the visible
+//!   queue still belong to their own slices and are recorded in
+//!   `docs/agent-loop.md`.
 
 pub mod context;
+pub mod executor;
 pub mod prompt;
 pub mod providers;
+
+pub use executor::TurnExecutor;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,6 +51,8 @@ pub struct TurnRequest {
     pub model: String,
     /// The assembled system prompt for this turn; `None` sends none.
     pub system: Option<String>,
+    /// The chat's workspace — model-only label, never the transcript.
+    pub workspace_root: Option<String>,
 }
 
 /// What a settled turn did — the same stamps `finishTurn` writes.
@@ -324,12 +330,34 @@ fn user_model_message(request: &TurnRequest) -> Value {
         | UserEntrySource::Worker => "[Host context: inbox notification]",
         UserEntrySource::Schedule | UserEntrySource::Background => "",
     };
-    let text = [source_label, request.text.as_str()]
-        .iter()
-        .filter(|part| !part.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
+    // The label travels only to the model; newlines in a path would break
+    // the line structure, so the source spaces them out.
+    let workspace_label = match request.workspace_root.as_deref() {
+        Some(root) => format!(
+            "[Host context: active workspace {}]",
+            root.replace(['\r', '\n'], " ")
+        ),
+        None => String::new(),
+    };
+    // A Telegram turn has to be answered in Telegram: text kept in this
+    // session is invisible to the owner.
+    let delivery_hint = match request.source {
+        UserEntrySource::Telegram => {
+            "[Host context: reply through send_message_to_owner; text written only in this session never reaches the owner]"
+        }
+        _ => "",
+    };
+    let text = [
+        source_label,
+        workspace_label.as_str(),
+        delivery_hint,
+        request.text.as_str(),
+    ]
+    .iter()
+    .filter(|part| !part.is_empty())
+    .copied()
+    .collect::<Vec<_>>()
+    .join("\n");
     let content = if text.is_empty() {
         Vec::new()
     } else {

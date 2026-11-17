@@ -82,6 +82,7 @@ fn request(scenario: &str, addr: SocketAddr, source: UserEntrySource) -> TurnReq
         provider_api_key: Some("sk-test-not-a-real-key".to_owned()),
         model: "test-model".to_owned(),
         system: None,
+        workspace_root: None,
     }
 }
 
@@ -580,6 +581,43 @@ async fn system_prompt_reaches_the_provider() {
         Some("You are OpenButler, the machine custodian."),
         "the assembled system message reaches the provider: {body}"
     );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn workspace_and_channel_labels_reach_the_model_only() {
+    let root = temp_root("labels");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = TurnRunner::open(&root, SESSION_ID, door)
+        .await
+        .expect("open");
+
+    let mut req = request("basic", addr, UserEntrySource::Telegram);
+    req.workspace_root = Some("work/space".to_owned());
+    let turn = runner.send(req).await.expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    let body = mock.bodies.lock().unwrap()[0].clone();
+    assert!(
+        body.contains("[Host context: active workspace work/space]"),
+        "the workspace label travels to the model: {body}"
+    );
+    assert!(
+        body.contains("[Host context: reply through send_message_to_owner"),
+        "the Telegram delivery hint travels to the model: {body}"
+    );
+
+    // Neither label ever enters the transcript.
+    let record = saved(&root);
+    for entry in &record.entries {
+        if let SessionEntry::User { text, .. } = entry {
+            assert!(!text.contains("[Host context: active workspace"));
+            assert!(!text.contains("send_message_to_owner"));
+        }
+    }
 
     let _ = std::fs::remove_dir_all(&root);
 }

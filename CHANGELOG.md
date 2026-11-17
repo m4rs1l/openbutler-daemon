@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `session.send`: the accept-immediately dispatch contract — the
+  `parseQueuedMessage` validation with the source's wording, the
+  connection's chat requirement, `prepare_send` resolving record +
+  settings + secrets into a prepared turn, and the `TurnExecutor` seam
+  (production `DoorExecutor`: one shared door spawned on first use, one
+  runner per session, failures as `Could not send the message: …`
+  notices). Boot installs it in `main.rs` with the production
+  `DoorConfig` (heap belt, 10-minute idle kill). Documented deviation:
+  well-formed images are refused loudly instead of stored as
+  attachments. Pins: `session_send` (7 tests) plus a model-only label
+  test for the workspace and Telegram delivery hints (`agent_loop`, 9).
 - `agent/context.rs`: the runtime context builder — fills
   `SystemPromptContext` from disk exactly as legacy `buildAgentSystem`
   (budgeted user notes with the truncation notice, availability reads,

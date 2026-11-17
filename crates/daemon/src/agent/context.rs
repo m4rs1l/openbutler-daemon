@@ -126,3 +126,70 @@ pub fn build_system(
     let context = build_context(role, env)?;
     Ok(build_agent_system(base_for(role), &context))
 }
+
+/// Builds the turn dispatch hands to the executor: the system assembled
+/// from disk, the provider resolved by the caller, and the chat's
+/// workspace travelling alongside for the model-only label.
+pub struct TurnInputs<'a> {
+    pub meta: &'a openbutler_protocol::session::SessionMeta,
+    pub workspace_root: Option<String>,
+    pub provider_url: Option<String>,
+    pub provider_api_key: Option<String>,
+    pub team: Option<TeamInfo>,
+    pub home: Option<&'a std::path::Path>,
+    pub source: openbutler_protocol::entry::UserEntrySource,
+    pub text: String,
+}
+
+pub fn prepare_turn(
+    data_dir: &std::path::Path,
+    inputs: TurnInputs<'_>,
+) -> Result<super::TurnRequest, String> {
+    let TurnInputs {
+        meta,
+        workspace_root,
+        provider_url,
+        provider_api_key,
+        team,
+        home,
+        source,
+        text,
+    } = inputs;
+    let home = home
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(default_home);
+    // The label travels only when a workspace is known; the assembly
+    // still needs a root, so it falls back to the process directory.
+    let env_workspace = workspace_root.clone().unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    });
+    let env = PromptEnvironment {
+        data_root: data_dir.to_path_buf(),
+        workspace_root: PathBuf::from(env_workspace),
+        home,
+        codex_home: None,
+        builtin_skill_dir: None,
+        team,
+    };
+    let system = build_system(PromptRole::Agent, &env).map_err(|error| error.to_string())?;
+    Ok(super::TurnRequest {
+        text,
+        source,
+        provider_key: meta.provider_id.clone(),
+        provider_url,
+        provider_api_key,
+        model: meta.model_id.clone(),
+        system,
+        workspace_root,
+    })
+}
+
+/// The user's home the way the source resolves it: environment first.
+fn default_home() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}

@@ -1,0 +1,114 @@
+//! The spawn seam between dispatch and the turn loop: dispatch accepts a
+//! turn and hands it over; everything after that is background work whose
+//! failures become notices, never the response — the shape of the legacy
+//! `controller.sendMessage` fire-and-forget.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use openbutler_protocol::SessionEntryMeta;
+use openbutler_protocol::entry::{NoticeTone, SessionEntry};
+use tokio::runtime::Handle;
+
+use super::{TurnError, TurnRequest, TurnRunner};
+use crate::sidecar::{DoorConfig, SidecarDoor};
+use crate::state;
+
+/// What dispatch does with an accepted turn. The receiver is `Arc<Self>`
+/// so the spawned task can own a share of the executor.
+pub trait TurnExecutor: Send + Sync {
+    fn spawn_turn(self: Arc<Self>, session_id: String, request: TurnRequest);
+}
+
+/// The production executor: one shared door (spawned on first use — an
+/// idle daemon never pays for the sidecar) and one runner per session, so
+/// two sends for the same chat can never write its record concurrently.
+pub struct DoorExecutor {
+    data_dir: PathBuf,
+    config: DoorConfig,
+    door: tokio::sync::Mutex<Option<SidecarDoor>>,
+    runners: Mutex<HashMap<String, Arc<TurnRunner>>>,
+}
+
+impl DoorExecutor {
+    pub fn new(data_dir: PathBuf, config: DoorConfig) -> Self {
+        Self {
+            data_dir,
+            config,
+            door: tokio::sync::Mutex::new(None),
+            runners: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The session's runner, opening the door and the record on first use.
+    async fn runner_for(&self, session_id: &str) -> Result<Arc<TurnRunner>, TurnError> {
+        if let Some(runner) = self
+            .runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+        {
+            return Ok(Arc::clone(runner));
+        }
+        let door = {
+            let mut guard = self.door.lock().await;
+            match guard.as_ref() {
+                Some(door) => door.clone(),
+                None => {
+                    let (door, _ready) = SidecarDoor::spawn(self.config.clone()).await?;
+                    *guard = Some(door.clone());
+                    door
+                }
+            }
+        };
+        let runner = Arc::new(TurnRunner::open(&self.data_dir, session_id, door).await?);
+        self.runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(session_id.to_owned(), Arc::clone(&runner));
+        Ok(runner)
+    }
+}
+
+impl TurnExecutor for DoorExecutor {
+    fn spawn_turn(self: Arc<Self>, session_id: String, request: TurnRequest) {
+        // The response has already gone out; from here failures are
+        // notices on the record.
+        Handle::current().spawn(async move {
+            let outcome = async {
+                let runner = self.runner_for(&session_id).await?;
+                runner.send(request).await?;
+                Ok::<(), TurnError>(())
+            }
+            .await;
+            if let Err(error) = outcome {
+                report_turn_error(&self.data_dir, &session_id, &error.to_string());
+            }
+        });
+    }
+}
+
+/// Best-effort `Could not send the message: …` notice (legacy wording).
+/// A record that cannot be read cannot carry the notice — the legacy
+/// controller held it in memory instead, and this build has no memory.
+fn report_turn_error(data_dir: &Path, session_id: &str, error: &str) {
+    let Some(path) = state::record_path(data_dir, session_id) else {
+        return;
+    };
+    let Some(mut record) = state::read_session_record(&path, session_id) else {
+        return;
+    };
+    record.entries.push(SessionEntry::Notice {
+        meta: SessionEntryMeta {
+            at: Some(chrono::Utc::now().timestamp_millis()),
+            turn_id: None,
+            ..SessionEntryMeta::default()
+        },
+        text: format!("Could not send the message: {error}"),
+        detail: None,
+        tone: Some(NoticeTone::Error),
+        cause: None,
+    });
+    let _ = state::save_session(data_dir, &record, true);
+}

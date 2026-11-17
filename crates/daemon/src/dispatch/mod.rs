@@ -8,21 +8,26 @@
 //! module constructs responses.
 
 mod schedule;
+pub mod session_send;
 
 use std::path::Path;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
 
+use openbutler_protocol::entry::UserEntrySource;
 use openbutler_protocol::session::{SessionView, read};
 use openbutler_protocol::{
     DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, DaemonStatus, InlineAttachment,
     SessionEntriesRange, validate_request,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::watch;
 
+use crate::agent::providers::TeamInfo;
+use crate::agent::{TurnExecutor, TurnRequest};
 use crate::auth::PairingCodes;
 use crate::ledger;
+use crate::settings::schema::TeamRole;
 use crate::settings::{LoadedSettings, SettingsError, load_settings};
 use crate::state::{self, WorkspaceFilter};
 
@@ -33,6 +38,9 @@ use crate::state::{self, WorkspaceFilter};
 #[derive(Debug, Default)]
 pub struct DispatchState {
     current_session: Option<String>,
+    /// The client kind the connection attached with; until `attach` sets
+    /// it, sends read as terminal (the source's default channel).
+    client_kind: Option<UserEntrySource>,
 }
 
 impl DispatchState {
@@ -62,6 +70,9 @@ pub struct Host {
     /// The live settings copy every runtime read goes through. Loaded and
     /// reloaded only by `reload_settings` — one writer for the host.
     settings: RwLock<Option<LoadedSettings>>,
+    /// The host-wide turn executor (door + runners). Set once at boot;
+    /// `session.send` refuses without it.
+    executor: RwLock<Option<Arc<dyn TurnExecutor>>>,
 }
 
 impl Host {
@@ -77,6 +88,7 @@ impl Host {
             shutdown,
             pairing: PairingCodes::new(),
             settings: RwLock::new(None),
+            executor: RwLock::new(None),
         }
     }
 
@@ -104,6 +116,22 @@ impl Host {
     /// admission gate redeems through it.
     pub fn pairing(&self) -> &PairingCodes {
         &self.pairing
+    }
+
+    /// Install the turn executor (boot wiring or a test double).
+    pub fn set_executor(&self, executor: Arc<dyn TurnExecutor>) {
+        *self
+            .executor
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(executor);
+    }
+
+    /// The installed executor, if any.
+    pub fn executor(&self) -> Option<Arc<dyn TurnExecutor>> {
+        self.executor
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// The current status view (`status` action).
@@ -242,6 +270,32 @@ pub fn handle(
                 },
             },
         },
+        "session.send" => {
+            let message = request.get("message").cloned().unwrap_or(Value::Null);
+            let parsed = match session_send::parse_queued_message(&message) {
+                Ok(parsed) => parsed,
+                Err(error) => return failure(request, error),
+            };
+            let Some(session_id) = state.current_session.clone() else {
+                return failure(request, CHAT_NOT_FOUND.to_owned());
+            };
+            let source = state.client_kind.unwrap_or(UserEntrySource::Terminal);
+            let turn = match prepare_send(host, data_dir, &session_id, parsed.text, source) {
+                Ok(turn) => turn,
+                Err(error) => {
+                    return failure(request, format!("Could not send the message: {error}"));
+                }
+            };
+            let Some(executor) = host.executor() else {
+                return failure(
+                    request,
+                    "Could not send the message: the host has no turn executor.".to_owned(),
+                );
+            };
+            // The legacy contract: accept first, run in the background.
+            executor.spawn_turn(session_id, turn);
+            success(request, json!({ "accepted": true }))
+        }
         "stop" => {
             host.request_shutdown();
             success(request, json!({ "stopping": true }))
@@ -366,4 +420,57 @@ fn load_view(data_dir: &Path, session_id: &str) -> Option<SessionView> {
 /// Failure envelope for a dispatched request.
 fn failure(request: &DaemonRequest, error: String) -> DaemonResponse {
     envelope_failure(&request.id, &error)
+}
+
+/// Resolves everything an accepted send needs: the chat's record, the
+/// live settings (provider url, team, default workspace), the provider
+/// secret, and the assembled system prompt.
+fn prepare_send(
+    host: &Host,
+    data_dir: &Path,
+    session_id: &str,
+    text: String,
+    source: UserEntrySource,
+) -> Result<TurnRequest, String> {
+    let path = state::record_path(data_dir, session_id).ok_or_else(|| CHAT_NOT_FOUND.to_owned())?;
+    let record =
+        state::read_session_record(&path, session_id).ok_or_else(|| CHAT_NOT_FOUND.to_owned())?;
+    let meta = record.meta;
+    let settings = host.settings();
+    let loaded = settings
+        .as_ref()
+        .ok_or_else(|| "settings are not loaded".to_owned())?;
+    let provider_url = loaded
+        .store
+        .providers
+        .get(&meta.provider_id)
+        .and_then(|provider| provider.url.clone());
+    let workspace_root = meta
+        .workspace_root
+        .clone()
+        .or_else(|| loaded.store.default_workspace_root.clone());
+    let team = loaded.store.team.as_ref().map(|team| TeamInfo {
+        team_name: team.team_name.clone(),
+        member_name: team.member_name.clone(),
+        hub: matches!(team.role, TeamRole::Hub),
+    });
+    drop(settings);
+    let secrets = crate::settings::load_secrets(data_dir).map_err(|error| error.to_string())?;
+    let provider_api_key = secrets
+        .providers
+        .get(&meta.provider_id)
+        .and_then(|secret| secret.keys.first().cloned());
+    crate::agent::context::prepare_turn(
+        data_dir,
+        crate::agent::context::TurnInputs {
+            meta: &meta,
+            workspace_root,
+            provider_url,
+            provider_api_key,
+            team,
+            home: None,
+            source,
+            text,
+        },
+    )
 }

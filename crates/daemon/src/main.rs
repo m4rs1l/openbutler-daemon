@@ -5,7 +5,10 @@
 
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
+use openbutler_daemon::agent::executor::DoorExecutor;
+use openbutler_daemon::sidecar::DoorConfig;
 use openbutler_daemon::{config, dispatch::Host, server};
 
 fn main() -> ExitCode {
@@ -90,6 +93,13 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             eprintln!("openbutler-daemon: {error}");
             return ExitCode::FAILURE;
         }
+        // The turn executor is host-wide: one door (spawned on the first
+        // send — an idle daemon never pays for the sidecar), one runner
+        // per session.
+        host.set_executor(Arc::new(DoorExecutor::new(
+            config::data_dir(),
+            production_door_config(),
+        )));
         let shutdown = host.subscribe_shutdown();
 
         if let Some(addr) = listen {
@@ -156,4 +166,49 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             }
         }
     })
+}
+
+/// The sidecar door for a production boot. `OPENBUTLER_NODE` and
+/// `OPENBUTLER_SIDECAR` override both paths (development); otherwise the
+/// packaged layout sits beside the binary and the workspace copy is the
+/// last resort. The heap belt keeps the node process's commit bounded —
+/// every measurement already runs this profile.
+fn production_door_config() -> DoorConfig {
+    let node_program = std::env::var_os("OPENBUTLER_NODE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("node"));
+    let script = std::env::var_os("OPENBUTLER_SIDECAR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let beside = std::env::current_exe().ok().and_then(|exe| {
+                exe.parent()
+                    .map(|dir| dir.join("sidecar").join("dist").join("entry.js"))
+            });
+            match beside {
+                Some(path) if path.exists() => path,
+                _ => std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("sidecar")
+                    .join("src")
+                    .join("entry.mjs"),
+            }
+        });
+    DoorConfig {
+        node_program,
+        node_args: vec!["--max-old-space-size=64".to_owned()],
+        script,
+        mode: String::new(),
+        providers: None,
+        log_file: None,
+        env: Vec::new(),
+        spawn_timeout: Duration::from_secs(15),
+        // The M2 memory decision: no sidecar sits idle longer than this.
+        idle_kill: Duration::from_secs(600),
+        drain_max: Duration::from_millis(900),
+        queue_max_wait: Duration::from_millis(2500),
+        first_event_timeout: Duration::from_secs(10),
+        inter_event_timeout: Duration::from_secs(30),
+        concurrency: 4,
+        line_cap: 64 * 1024,
+    }
 }
