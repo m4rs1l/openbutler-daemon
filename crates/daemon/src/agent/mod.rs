@@ -15,6 +15,8 @@
 //!   prompt, tool execution/second batch (c2) and workspace labels belong
 //!   to their own slices and are recorded in `docs/agent-loop.md`.
 
+pub mod prompt;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

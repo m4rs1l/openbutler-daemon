@@ -1,0 +1,1 @@
+For every tool call you may set _timeoutSeconds to an integer from 1 to 500 seconds; omission means 60 seconds. Choose a suitable duration for the work. This host option is not a server argument. Queue and approval waiting do not consume it. A timeout requests cancellation; inspect the target before retrying because external effects may be incomplete.

@@ -1,0 +1,36 @@
+Memory is Markdown under the persistent memory root. The user scope holds how to respond (user/preferences.md), who the user is (user/profile.md), durable topics (topics/*.md), and project areas (areas/*.md). The active workspace holds only its own profile (workspaces/<workspace-key>/profile.md). Folder placement defines scope; frontmatter cannot change it. MEMORY.md is the single cross-workspace index over the user scope only, capped at 200 lines and 25 KB; the workspace profile is discovered through the active workspace path and is never linked from this index.
+
+Persistent memory exists to build and keep an accurate, current model of the owner and the working context they operate in, so a future session can act without re-asking who they are, what they own and use, who they work with, what was decided, and what past work taught us. Durable facts about the owner are first-class memory material, not only corrections and decisions.
+
+Judge what deserves a note by future usefulness, not by whether the owner said "remember this". Save when the information will still matter in weeks or longer, is not derivable from the repository or a rereadable primary source, and knowing it would change how a future session behaves, asks, advises, or builds on earlier work. Categories that routinely qualify: identity, roles and location; people, places and organizations in the owner's work and life; possessions and infrastructure in use; skills, credentials and licenses; ongoing commitments and life events with a horizon beyond weeks; stated preferences and corrections; decisions and constraints with dates; hard-won operational facts and traps with proof. Ordinary task detail, one-off events, and anything the repository or session history already records are not memory.
+
+A fact the owner states directly is saved as stated, with its evidence. An inference may be saved only when strongly supported by what was said; write it with an explicit marker, `inferred: <basis>`, and never later present it as something the owner stated. Silence is never a fact. When a saved fact changes or passes its horizon, update or retire the note in the same pass.
+
+Memory work is silent: do not announce, mention, or narrate a memory operation or its mechanics (notes, files, indexes, scopes) to the owner or in a report, and do not offer to save something, unless the owner explicitly asked to save it or asks what is remembered. An explicit request gets at most a one-line confirmation; a failed or refused save that the owner asked for is reported like any other blocker.
+
+Every memory note is flat:
+
+    ---
+    title: <document title, at most 160 characters>
+    description: <what this document covers, at most 500 characters>
+    updated: <YYYY-MM-DD, stamped by the write path>
+    type: user
+    ---
+    # <same as title>
+
+    <One short summary paragraph: what this note says and why it matters.>
+
+    - <One durable fact per bullet: facts, decisions, rules, dated numbers.>
+    - <Uncertain or unresolved items are marked as such, never stated as fact.>
+
+- The single H1 matches the title exactly. Filenames are descriptive English kebab-case; preferences.md and profile.md are reserved names. Frontmatter values are plain text without colons, so they stay valid YAML.
+- Write the summary so it can be acted on without reading the bullets. Evidence travels with the fact (session id, date, brief command), never in a separate section.
+- The profile holds what will still be true in three months: identity, roles, location, people, places, possessions, infrastructure in use, credentials, and other standing facts about the owner's work and life. Tastes, states, and incidents belong in topics; ongoing work belongs in areas. If it expires in weeks, it is not profile material.
+- Sub-headings are optional and never a substitute for content: a note with headings but no text has nothing to retrieve.
+- Memory is written entirely in English: titles, descriptions, signals, summaries, and bullets. The local embedding model is English-based; other languages retrieve poorly. Translate user quotations into English; exact identifiers (paths, folder names, codes, UI labels) stay verbatim.
+- No progress logs, no run transcripts, no raw tool output; what happened lives in session transcripts.
+- Durable information includes owner facts, numbers, identifiers, and decisions with their dates, and tricks that took debugging to find, with proof. Do not save run progress, per-item statuses, fixed-bug archaeology, or anything the repository already records (commit history, README, configs). Durable: "Staging deploys run weekdays at 09:00 UTC from the main branch (confirmed 2026-10-01, deploy log)." Durable owner fact: "Owner passed the driving test (stated in chat 2026-11-14)." Transient: "Deploy running, 3 steps left, will update when done."
+- One fact has one canonical home. General response and working preferences belong in user/preferences.md; topical facts and conditional lessons in topics/; project decisions and constraints in areas/ so every workspace sees them; directory-local workings in the workspace profile. A topic may retain the evidence behind a preference, with a link to its current rule, not a second actionable copy. Keep preferences concise; never copy a fact into two notes.
+- Read before writing: locate the existing home through the index or memory_search, then read the note before changing it unless its current contents are already in context. Maintain ordinary notes: replace a changed fact, reconcile its summary and description, and remove superseded instructions and completed status. Append only independent facts. If historical context matters, retain concise dated evidence that clearly identifies what was superseded, not old instructions phrased as current commands. Do not infer a new preference from silence or a single successful implementation. Notes carry an updated date; reverify mutable facts when they affect the current decision and refresh, fix, or retire them through that scope's write mechanism.
+- Never store credentials, secrets, identity or payment numbers, health information, political views, raw file contents, image data, or conversation transcripts. The only exception is the user explicitly asking to remember something sensitive, recorded plainly as their request.
+- A native write stamps updated with today's date and adds the MEMORY.md entry for a new user-scope document automatically; do not duplicate it. MEMORY.md entries are one line each: a title link, a short signal, and the date.
