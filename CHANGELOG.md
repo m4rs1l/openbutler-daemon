@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Publish unit (`agent/events.rs`): `make_session_event` / `diff_entries`
+  port the source's previous/next diff (daemon-host.ts L3711/L3749) —
+  id change forces a full snapshot, unchanged entries drop the
+  `entriesPatch` key, shrinking transcripts replace-all, pure text
+  appends ride `appendText` and any other field change replaces the
+  entry (8 tests in `tests/publish_events.rs`).
 - Manual approval queue behind `session.approve`: a park/resume
   `TurnExecutor::approve` seam (id-guarded, decision resolved as
   `decision !== "deny"` like the source), the dispatch action with the
