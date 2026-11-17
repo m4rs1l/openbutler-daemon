@@ -79,8 +79,9 @@ fn invalid(message: &str) -> Value {
 }
 
 /// `resolveCommandDirectory`: relative paths resolve from the session
-/// workspace, then canonicalised through existing parents.
-fn resolve_command_directory(value: Option<&Value>, workspace_root: &Path) -> PathBuf {
+/// workspace, then canonicalised through existing parents. The catalog's
+/// scope and execute hooks both resolve their target through it.
+pub fn resolve_command_directory(value: Option<&Value>, workspace_root: &Path) -> PathBuf {
     let requested = value
         .and_then(Value::as_str)
         .map(str::trim)

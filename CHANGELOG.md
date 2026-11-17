@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Shared tool pipeline (`tools/pipeline.rs` + `tools/catalog.rs`): one
+  `ToolDefinition` shape and one `run_tool_call` sequence every native
+  tool takes — source-exact gate rules (full-access never consults
+  scope), the denial contract sentences, write-ahead proposal with
+  stop-only-on-plain-decline semantics, `toolOutcome` mapping, host
+  timeout extraction/stripping with the 1-500 s sentence, registry
+  denotation + `_timeoutSeconds` schema injection, and 16 000 unit
+  result bounding through the spill writer. `execute_command` is the
+  first catalog entry; 6 fail-before tests (`tool_pipeline`).
+  Deviations in `docs/tool-pipeline.md` (no redaction engine yet,
+  unreachable timeout-exception path).
 - `tools/execute_command.rs`: the flagship native tool — input
   validation with the source's sentences, the workspace-scope rules
   (cd walk, install/elevation/home/fetcher/piped-interpreter regexes,
