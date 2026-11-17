@@ -7,6 +7,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The door now carries the tool catalog per turn (`sidecar_tool`
+  shapes each native definition with the denotation suffix and the
+  timeout field): a real provider sees the tools the batch loop can
+  execute, instead of an empty list the mock used to hide.
+
+- `session.answer` and the question queue: `TurnExecutor::answer`
+  seam (id-guarded like the source's `answerQuestion`), the dispatch
+  action with its three validation sentences, `TurnRunner::ask` — the
+  queue behind the `question` tool with the owner's stop dismissing it
+  (`None`), and the `pendingQuestion` slot in every published frame.
+  The roster publish at queue time rides with the `question` tool slice
+  (it runs under the send-held state lock); the tool itself needs the
+  async-execute refactor. 3 tests.
 - `session.stop` and the pending-approval visibility: the fire-and-forget
   stop seam (`TurnExecutor::stop` — the runner's stop flag, never
   spawning the door), and `pendingApproval`/`pendingApprovalId` now

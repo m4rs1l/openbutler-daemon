@@ -30,6 +30,10 @@ pub trait TurnExecutor: Send + Sync {
     /// Returns whether a runner existed; a chat with no live turn
     /// reports false and the action still answers.
     fn stop(&self, session_id: &str) -> bool;
+    /// `session.answer`: resolves the session's waiting question
+    /// (id-guarded; a stale id no-ops like the source's
+    /// `answerQuestion`). `None` is the dismissal the source sends.
+    fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool;
 }
 
 /// The production executor: one shared door (spawned on first use — an
@@ -152,6 +156,19 @@ impl TurnExecutor for DoorExecutor {
                 runner.stop();
                 true
             }
+            None => false,
+        }
+    }
+
+    fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool {
+        let runner = self
+            .runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .map(Arc::clone);
+        match runner {
+            Some(runner) => runner.answer_question(question_id, answer),
             None => false,
         }
     }

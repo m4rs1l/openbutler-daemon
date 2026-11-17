@@ -753,6 +753,22 @@ async fn await_approval(runner: &Arc<TurnRunner>) -> String {
     panic!("a pending approval appears");
 }
 
+/// Polls until a question is waiting, then answers it (the queue behind
+/// `session.answer`).
+async fn answer_question(runner: &Arc<TurnRunner>, answer: &str) {
+    for _ in 0..400 {
+        if let Some(question_id) = runner.pending_question_id() {
+            assert!(
+                runner.answer_question(&question_id, Some(answer.to_owned())),
+                "the id guard accepts the live question id"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("a pending question appears");
+}
+
 fn tool_entries(record: &openbutler_daemon::state::SessionRecord) -> Vec<SessionEntry> {
     record
         .entries
@@ -1112,6 +1128,44 @@ async fn a_running_turn_publishes_live_state_to_the_fanout() {
         }
         other => panic!("expected a closing patch, got {other:?}"),
     }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn a_question_queues_publishes_and_resolves_through_the_answer_seam() {
+    let root = temp_root("question-queue");
+    seed_session(&root);
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    let sink = Arc::new(RecordingSink::default());
+    host.fanout().subscribe(SESSION_ID, sink.clone());
+
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+
+    // A question queued for the owner (what the `question` tool calls).
+    let asker = Arc::clone(&runner);
+    let worker = tokio::spawn(async move {
+        asker
+            .ask(
+                "Ship it today?".to_owned(),
+                Some(vec!["yes".to_owned(), "no".to_owned()]),
+            )
+            .await
+    });
+    answer_question(&runner, "yes").await;
+
+    // The answer rides back to the waiting ask.
+    assert_eq!(worker.await.unwrap(), Some("yes".to_owned()));
+
+    // A stale id no-ops (the source's questionId guard).
+    assert!(!runner.answer_question("question-stale", Some("no".to_owned())));
 
     let _ = std::fs::remove_dir_all(&root);
 }

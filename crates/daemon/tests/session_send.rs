@@ -20,12 +20,16 @@ use openbutler_protocol::entry::UserEntrySource;
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
 use serde_json::{Value, json};
 
+/// What dispatch handed over for `session.answer`.
+type Answered = (String, String, Option<String>);
+
 /// The seam's test double: records what dispatch handed over.
 #[derive(Clone, Default)]
 struct RecordingExecutor {
     sent: Arc<Mutex<Vec<(String, TurnRequest)>>>,
     approvals: Arc<Mutex<Vec<(String, String, bool)>>>,
     stops: Arc<Mutex<Vec<String>>>,
+    answers: Arc<Mutex<Vec<Answered>>>,
 }
 
 impl TurnExecutor for RecordingExecutor {
@@ -44,6 +48,14 @@ impl TurnExecutor for RecordingExecutor {
 
     fn stop(&self, session_id: &str) -> bool {
         self.stops.lock().unwrap().push(session_id.to_owned());
+        true
+    }
+
+    fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool {
+        self.answers
+            .lock()
+            .unwrap()
+            .push((session_id.to_owned(), question_id.to_owned(), answer));
         true
     }
 }
@@ -426,6 +438,112 @@ fn the_stop_action_forwards_to_the_executor() {
     );
     assert_eq!(success_result(response), json!({ "accepted": true }));
     assert_eq!(recorder.stops.lock().unwrap().len(), 2, "it still stops");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- session.answer -----------------------------------------------------------
+
+#[test]
+fn the_answer_action_validates_and_forwards_through_the_seam() {
+    let dir = temp_data_dir("answer-wire");
+    let session_id = seed_chat(&dir);
+    let (host, recorder) = host_with_executor();
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("l1", "session.load", &[("sessionId", json!(session_id))]),
+    ));
+
+    // The source's shapes (daemon-host L3532-3544): accept immediately,
+    // hand the answer to the seam.
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "q1",
+            "session.answer",
+            &[
+                ("questionId", json!("question-abc")),
+                ("answer", json!("yes")),
+            ],
+        ),
+    );
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+    assert_eq!(
+        recorder.answers.lock().unwrap().as_slice(),
+        [(
+            session_id.clone(),
+            "question-abc".to_owned(),
+            Some("yes".to_owned())
+        )],
+        "the seam receives session, question id and answer"
+    );
+
+    // `null` dismisses the question (valid, distinct from a bad shape).
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "q2",
+            "session.answer",
+            &[
+                ("questionId", json!("question-abc")),
+                ("answer", json!(null)),
+            ],
+        ),
+    );
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+    assert_eq!(recorder.answers.lock().unwrap().last().unwrap().2, None);
+
+    // Validation sentences, verbatim.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "q3",
+                "session.answer",
+                &[("questionId", json!("")), ("answer", json!("x")),],
+            ),
+        )),
+        "questionId must be a non-empty string under 64 bytes."
+    );
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "q4",
+                "session.answer",
+                &[("questionId", json!("q")), ("answer", json!(42)),],
+            ),
+        )),
+        "answer must be a string or null."
+    );
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "q5",
+                "session.answer",
+                &[
+                    ("questionId", json!("q")),
+                    ("answer", json!("x".repeat(10_001))),
+                ],
+            ),
+        )),
+        "answer must be at most 10000 characters."
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

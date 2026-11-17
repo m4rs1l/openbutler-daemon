@@ -605,6 +605,41 @@ pub fn handle(
             }
             success(request, json!({ "accepted": true }))
         }
+        "session.answer" => {
+            // Source (daemon-host L3532-3544): requireString(questionId,
+            // 64) + the two answer shapes, then accept immediately.
+            let question_id = match request.get("questionId").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
+                _ => {
+                    return failure(
+                        request,
+                        "questionId must be a non-empty string under 64 bytes.".to_owned(),
+                    );
+                }
+            };
+            let answer = match request.get("answer") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(text)) => {
+                    if text.len() > 10_000 {
+                        return failure(
+                            request,
+                            "answer must be at most 10000 characters.".to_owned(),
+                        );
+                    }
+                    Some(text.clone())
+                }
+                Some(_) => {
+                    return failure(request, "answer must be a string or null.".to_owned());
+                }
+            };
+            let Some(executor) = host.executor() else {
+                return failure(request, "The host has no turn executor.".to_owned());
+            };
+            if let Some(session_id) = state.current_session.clone() {
+                let _ = executor.answer(&session_id, &question_id, answer);
+            }
+            success(request, json!({ "accepted": true }))
+        }
         "stop" => {
             host.request_shutdown();
             success(request, json!({ "stopping": true }))

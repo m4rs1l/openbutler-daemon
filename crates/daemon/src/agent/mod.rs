@@ -143,6 +143,9 @@ pub struct TurnRunner {
     /// `pendingApproval` pair). Std mutex: every critical section here
     /// is short and never spans an await — the wait rides the oneshot.
     approval: std::sync::Mutex<Option<PendingApproval>>,
+    /// The one pending model question (the queue behind
+    /// `session.answer`; same lock discipline as `approval`).
+    question: std::sync::Mutex<Option<QueuedQuestion>>,
     /// The host this runner publishes live state to (c3). Weak: a runner
     /// must never keep the host alive.
     host: std::sync::Weak<crate::dispatch::Host>,
@@ -160,6 +163,15 @@ struct PendingApproval {
     request: openbutler_protocol::session::ToolCallRequest,
     gate_reason: &'static str,
     sender: tokio::sync::oneshot::Sender<bool>,
+}
+
+/// A model question waiting for the owner (the `question` tool's queue).
+struct QueuedQuestion {
+    question_id: String,
+    /// The owner-visible text and options the roster publishes.
+    text: String,
+    options: Option<Vec<String>>,
+    sender: tokio::sync::oneshot::Sender<Option<String>>,
 }
 
 /// One drained step: the outcome, the streamed reply, and the tool
@@ -199,15 +211,25 @@ impl TurnRunner {
             }),
             stop: Arc::new(AtomicBool::new(false)),
             approval: std::sync::Mutex::new(None),
+            question: std::sync::Mutex::new(None),
             host,
             last_published: std::sync::Mutex::new(None),
         })
     }
 
     /// Cancels the running turn (the owner's stop). A stop that arrives
-    /// between turns is drained at the next admission.
+    /// between turns is drained at the next admission. A pending
+    /// question is dismissed too (the source's stop handler, L1259).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        let pending = self
+            .question
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(pending) = pending {
+            let _ = pending.sender.send(None);
+        }
     }
 
     /// The pending approval for visibility surfaces (c3): its id — the
@@ -218,6 +240,65 @@ impl TurnRunner {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .as_ref()
             .map(|pending| (pending.request_id.clone(), pending.gate_reason))
+    }
+
+    /// Queues one model question and waits for the owner's answer
+    /// (`requestQuestion`, L1850). The roster publish rides with the
+    /// `question` tool slice (it runs under the send-held state lock);
+    /// a stop dismisses with `None` (the source's stop handler, L1259).
+    pub async fn ask(&self, text: String, options: Option<Vec<String>>) -> Option<String> {
+        let question_id = format!(
+            "question-{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_millis())
+                .unwrap_or(0),
+            &Uuid::new_v4().to_string()[..6]
+        );
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self
+            .question
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(QueuedQuestion {
+            question_id: question_id.clone(),
+            text,
+            options,
+            sender,
+        });
+        let answer = wait_question(receiver, &self.stop).await;
+        if answer.is_none() {
+            // A stop that won the race: clear the queue entry so the
+            // roster stops showing a question nobody can answer.
+            let _ = self.answer_question(&question_id, None);
+        }
+        answer
+    }
+
+    /// `session.answer`: id-guarded resolve (`answerQuestion`, L1224 —
+    /// a stale id no-ops).
+    pub fn answer_question(&self, question_id: &str, answer: Option<String>) -> bool {
+        let mut slot = self
+            .question
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|pending| pending.question_id == question_id)
+            && let Some(pending) = slot.take()
+        {
+            let _ = pending.sender.send(answer);
+            return true;
+        }
+        false
+    }
+
+    /// The waiting question's id (visibility surfaces and tests).
+    pub fn pending_question_id(&self) -> Option<String> {
+        self.question
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|pending| pending.question_id.clone())
     }
 
     /// `session.approve`: id-guarded resolve (`approveToolCall`, L1201 —
@@ -347,6 +428,17 @@ impl TurnRunner {
             .as_ref()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.data_root.clone());
+        // The catalog the model sees (`sidecar_tool` shapes it with the
+        // denotation suffix and the timeout field). Built once per turn
+        // from the turn's workspace and shell — the batch loop resolves
+        // names per call from the same catalog.
+        call.tools = ["execute_command"]
+            .iter()
+            .filter_map(|name| {
+                native_definition(name, &tool_workspace, request.command_shell.as_deref())
+            })
+            .filter_map(|definition| crate::tools::catalog::sidecar_tool(&definition).ok())
+            .collect();
         let mut steps = 0usize;
         let (outcome, final_reply) = loop {
             steps += 1;
@@ -765,7 +857,16 @@ impl TurnRunner {
                 running_turn_id: Some(turn_id.to_owned()),
                 pending_approval: queued.as_ref().map(|pending| pending.request.clone()),
                 pending_approval_id: queued.as_ref().map(|pending| pending.request_id.clone()),
-                pending_question: None,
+                pending_question: self
+                    .question
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_ref()
+                    .map(|pending| openbutler_protocol::session::PendingQuestion {
+                        id: pending.question_id.clone(),
+                        question: pending.text.clone(),
+                        options: pending.options.clone(),
+                    }),
                 queued_message_count: 0,
                 first_queued_message: None,
                 queued_messages: Vec::new(),
@@ -792,6 +893,25 @@ impl TurnRunner {
 }
 
 // --- transcript mapping -------------------------------------------------------
+
+/// Waits a queued question: the answer wins immediately, the owner's
+/// stop flag returns `None` (and consumes it, like the approval wait).
+async fn wait_question(
+    mut receiver: tokio::sync::oneshot::Receiver<Option<String>>,
+    stop: &Arc<AtomicBool>,
+) -> Option<String> {
+    loop {
+        tokio::select! {
+            biased;
+            answer = &mut receiver => return answer.unwrap_or(None),
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                if stop.swap(false, Ordering::SeqCst) {
+                    return None;
+                }
+            }
+        }
+    }
+}
 
 /// The model-visible user message: host-context labels in front of the raw
 /// text, parts array (`queuedUserMessageToModelMessage`). Labels never enter
