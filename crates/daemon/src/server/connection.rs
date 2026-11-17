@@ -54,6 +54,7 @@ impl Drop for ClientGuard {
 }
 
 /// Sends frames to the writer task, enforcing the byte budget first.
+#[derive(Clone)]
 struct Outbound {
     tx: mpsc::Sender<Vec<u8>>,
     queued: Arc<AtomicUsize>,
@@ -72,6 +73,24 @@ impl Outbound {
             return Err(());
         }
         Ok(())
+    }
+}
+
+/// The fan-out seam: the same bounded queue the response path uses,
+/// without the await (a publish must never block on a writer task).
+impl crate::dispatch::fanout::EventSink for Outbound {
+    fn try_send(&self, frame: Vec<u8>) -> bool {
+        let length = frame.len();
+        let previous = self.queued.fetch_add(length, Ordering::SeqCst);
+        if previous + length > MAX_QUEUED_OUTPUT_BYTES {
+            self.queued.fetch_sub(length, Ordering::SeqCst);
+            return false;
+        }
+        if self.tx.try_send(frame).is_err() {
+            self.queued.fetch_sub(length, Ordering::SeqCst);
+            return false;
+        }
+        true
     }
 }
 
@@ -109,6 +128,8 @@ where
     let mut pending: VecDeque<Vec<u8>> = VecDeque::new();
     // The chat this connection carries between requests (`session.load`).
     let mut dispatch_state = dispatch::DispatchState::new();
+    // Every frame this connection may publish (`attach` subscribes it).
+    dispatch_state.set_sink(Arc::new(outbound.clone()));
 
     if let Admission::Remote { auth_timeout } = admission {
         let first = tokio::time::timeout(
@@ -122,27 +143,50 @@ where
             Ok(None) | Err(_) => false,
         };
         if !admitted {
-            return drop_connection(outbound, writer_task).await;
+            return {
+                drop(dispatch_state);
+                drop_connection(outbound, writer_task).await
+            };
         }
     }
 
     while let Some(frame) = next_frame(&mut reader, &mut decoder, &mut buffer, &mut pending).await {
         let Ok(request) = serde_json::from_slice::<openbutler_protocol::DaemonRequest>(&frame)
         else {
-            return drop_connection(outbound, writer_task).await;
+            return {
+                drop(dispatch_state);
+                drop_connection(outbound, writer_task).await
+            };
         };
         let response = dispatch::handle(&host, &data_dir, &mut dispatch_state, &request);
         let Ok(mut bytes) = serde_json::to_vec(&response) else {
-            return drop_connection(outbound, writer_task).await;
+            return {
+                drop(dispatch_state);
+                drop_connection(outbound, writer_task).await
+            };
         };
         bytes.push(b'\n');
         if outbound.send(bytes).await.is_err() {
-            return drop_connection(outbound, writer_task).await;
+            return {
+                drop(dispatch_state);
+                drop_connection(outbound, writer_task).await
+            };
+        }
+        // Events an action queued behind its answer (the attach snapshot
+        // event) go out only after the response is on the wire.
+        for frame in dispatch_state.take_pending_events() {
+            if outbound.send(frame).await.is_err() {
+                return {
+                    drop(dispatch_state);
+                    drop_connection(outbound, writer_task).await
+                };
+            }
         }
         if outbound.tx.is_closed() {
             break; // writer task ended: the peer is gone
         }
     }
+    drop(dispatch_state);
     drop_connection(outbound, writer_task).await;
 }
 

@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `attach` (chat path): the source's validation wording, the windowed
+  answer (`entriesFrom`/`totalEntries`, web only), the fan-out
+  subscription on the connection's own sink, and the snapshot event
+  queued behind the response — the connection flushes it after the
+  answer is on the wire (`DispatchState::take_pending_events`, with
+  `Outbound` implementing `EventSink`). Workspace root resolves like
+  the source (record → settings default → the daemon's cwd). 3 tests in
+  `tests/attach.rs`; isolated/schedule/worker/new-chat paths need the
+  runtime (M2).
 - Live publish (c3 producer): `TurnRunner` carries a weak host handle
   and a `last_published` baseline, and publishes on admission, on every
   stream event (text/reasoning/tool-call, with the live streaming

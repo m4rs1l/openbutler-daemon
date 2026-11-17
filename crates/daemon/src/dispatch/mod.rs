@@ -16,9 +16,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
 use openbutler_protocol::entry::UserEntrySource;
+use openbutler_protocol::runtime::LocalClientKind;
 use openbutler_protocol::runtime::RuntimeViewData;
 use openbutler_protocol::runtime::view::{ApprovalMode, ReasoningSupport};
-use openbutler_protocol::session::{SessionView, read};
+use openbutler_protocol::session::{
+    AttachResult, RunState, SessionSnapshotData, SessionView, read,
+};
 use openbutler_protocol::{
     DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, DaemonStatus, InlineAttachment,
     SessionEntriesRange, validate_request,
@@ -39,12 +42,21 @@ use fanout::Fanout;
 /// paging and attachment reads address it — the per-connection stand-in for
 /// a host-wide current controller (there is no runtime in this build,
 /// so the record on disk is the whole truth).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct DispatchState {
     current_session: Option<String>,
     /// The client kind the connection attached with; until `attach` sets
     /// it, sends read as terminal (the source's default channel).
     client_kind: Option<UserEntrySource>,
+    /// This connection's write path, set by the server before dispatch
+    /// runs; `attach` subscribes it to the session's fan-out.
+    sink: Option<fanout::SharedSink>,
+    /// The fan-out subscription this connection owns (dropped on a new
+    /// attach or when the connection's state is discarded).
+    subscription: Option<u64>,
+    /// Frames an action wants sent *after* its response (the attach
+    /// snapshot event rides behind the answer, daemon-host.ts L1459).
+    pending_events: Vec<Vec<u8>>,
 }
 
 impl DispatchState {
@@ -56,6 +68,18 @@ impl DispatchState {
     /// The id `session.load` last succeeded with (tests and diagnostics).
     pub fn current_session(&self) -> Option<&str> {
         self.current_session.as_deref()
+    }
+
+    /// Hands dispatch the connection's write path (server wiring; tests
+    /// pass a recording sink).
+    pub fn set_sink(&mut self, sink: fanout::SharedSink) {
+        self.sink = Some(sink);
+    }
+
+    /// The frames queued behind the current response, drained by the
+    /// connection after it writes it.
+    pub fn take_pending_events(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.pending_events)
     }
 }
 
@@ -259,6 +283,202 @@ pub fn handle(
                 }
             }
         },
+        "attach" => {
+            // Source: daemon-host.ts attach handler (L3312), chat path.
+            // Isolated/schedule/worker/new-chat attachment paths need the
+            // runtime and land with it (M2); without one of them this
+            // request falls to the source's own refusal.
+            let client_kind = match request.payload.get("clientKind") {
+                None => LocalClientKind::Terminal,
+                Some(value) if *value == json!("terminal") => LocalClientKind::Terminal,
+                Some(value) if *value == json!("web") => LocalClientKind::Web,
+                Some(_) => {
+                    return failure(request, "clientKind must be terminal or web.".to_owned());
+                }
+            };
+            // Only a web client may window its attach (L3316).
+            let entries_window = match request.payload.get("entriesWindow") {
+                _ if client_kind != LocalClientKind::Web => None,
+                None | Some(Value::Null) => None,
+                Some(value) => {
+                    let window = value.as_i64().filter(|value| (1..=2000).contains(value));
+                    match window {
+                        Some(window) => Some(window),
+                        None => {
+                            return failure(
+                                request,
+                                "entriesWindow must be an integer between 1 and 2000.".to_owned(),
+                            );
+                        }
+                    }
+                }
+            };
+            if let Some(root) = request.payload.get("workspaceRoot") {
+                let Value::String(path) = root else {
+                    return failure(
+                        request,
+                        "workspaceRoot must be an absolute path on this host (got a non-string). Omit workspaceRoot to use this host's default workspace."
+                            .to_owned(),
+                    );
+                };
+                if !std::path::Path::new(path).is_absolute() {
+                    return failure(
+                        request,
+                        format!(
+                            "workspaceRoot must be an absolute path on this host (got {path:?}). Omit workspaceRoot to use this host's default workspace."
+                        ),
+                    );
+                }
+            }
+            if request
+                .payload
+                .get("isolatedSession")
+                .is_some_and(|value| *value != json!(true))
+                || request
+                    .payload
+                    .get("newChatSession")
+                    .is_some_and(|value| *value != json!(true))
+            {
+                return failure(request, "isolatedSession must be a boolean.".to_owned());
+            }
+            let has_chat = request.payload.get("chatSessionId").is_some();
+            let has_new = request.payload.get("newChatSession") == Some(&json!(true));
+            if has_chat && has_new {
+                return failure(request, "Choose an existing chat or a new chat.".to_owned());
+            }
+            if has_chat
+                && (request.payload.get("isolatedSession").is_some()
+                    || request.payload.get("scheduleId").is_some()
+                    || request.payload.get("workerSessionId").is_some()
+                    || request.payload.get("runningWorkerOf").is_some())
+            {
+                return failure(
+                    request,
+                    "A chat attachment cannot also select a custodian, worker, or background session."
+                        .to_owned(),
+                );
+            }
+            // Every attachment names what it attaches to (L3365): only
+            // the chat path exists in this build.
+            let Some(chat_value) = request.payload.get("chatSessionId") else {
+                return failure(request, "Choose a chat or a session to attach.".to_owned());
+            };
+            let chat_session_id = chat_value.as_str().unwrap_or_default().to_owned();
+            if chat_session_id.is_empty() || chat_session_id.len() > 64 {
+                return failure(
+                    request,
+                    "chatSessionId must be a non-empty string under 64 bytes.".to_owned(),
+                );
+            }
+            let Some(view) = load_view(data_dir, &chat_session_id) else {
+                return failure(request, CHAT_NOT_FOUND.to_owned());
+            };
+
+            // Adopt the chat: subscribe this connection's sink to its
+            // fan-out, replacing any prior subscription (attachChat's
+            // detachClient). A connection without a sink (the sync test
+            // surface) answers but never receives events.
+            if let Some(previous) = state.subscription.take() {
+                host.fanout().unsubscribe(previous);
+            }
+            if let Some(sink) = state.sink.clone() {
+                state.subscription = Some(host.fanout().subscribe(&chat_session_id, sink));
+            }
+            state.current_session = Some(chat_session_id.clone());
+            state.client_kind = Some(match client_kind {
+                LocalClientKind::Web => UserEntrySource::Web,
+                LocalClientKind::Terminal => UserEntrySource::Terminal,
+            });
+
+            let approval_mode = host
+                .settings()
+                .as_ref()
+                .map(|loaded| loaded.store.approval_mode)
+                .unwrap_or(crate::settings::schema::ApprovalMode::Workspace);
+            let workspace_root = view
+                .meta
+                .workspace_root
+                .clone()
+                .or_else(|| {
+                    host.settings()
+                        .as_ref()
+                        .and_then(|loaded| loaded.store.default_workspace_root.clone())
+                })
+                // The source always resolves a scope root — the daemon's
+                // own working directory when nothing else names one
+                // (`resolveInteractiveScope({cwd: process.cwd()})`).
+                .or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|path| path.display().to_string())
+                });
+            let runtime = host.runtime_view().unwrap_or_else(|| {
+                bootstrap_runtime_view(&view.meta, workspace_root.as_deref(), approval_mode)
+            });
+
+            // The tail window (windowedSnapshotData, L3824): entries
+            // sliced from the front, absolute markers, streaming index
+            // translated into the window.
+            let total = view.entries.len() as i64;
+            let from = entries_window
+                .map(|window| (total - window).max(0))
+                .unwrap_or(0);
+            let mut windowed = view.clone();
+            if entries_window.is_some() {
+                // `split_off(at)` returns the tail and leaves the head;
+                // the window is the tail (and keeps the absolute start).
+                let tail = windowed.entries.split_off(from as usize);
+                windowed.entries = tail;
+            }
+            let snapshot = SessionSnapshotData {
+                session: windowed,
+                run: RunState {
+                    busy: false,
+                    running_turn_id: None,
+                    pending_approval: None,
+                    pending_approval_id: None,
+                    pending_question: None,
+                    queued_message_count: 0,
+                    first_queued_message: None,
+                    queued_messages: Vec::new(),
+                    session_save_error: None,
+                    streaming_assistant_index: None,
+                },
+                entries_from: entries_window.map(|_| from),
+                total_entries: entries_window.map(|_| total),
+            };
+            let result = AttachResult {
+                host_entry: std::env::current_exe()
+                    .ok()
+                    .map(|path| path.display().to_string()),
+                host_build_id: Some(None), // source run, no build id
+                session_attachments: Some(true),
+                workspace_key: workspace_root.clone(),
+                client_kind: Some(client_kind),
+                snapshot: snapshot.clone(),
+                runtime: runtime.clone(),
+                saved_sessions: state::list_sessions(data_dir, &WorkspaceFilter::Any)
+                    .unwrap_or_default(),
+            };
+            // The attachChat snapshot event rides behind the answer
+            // (L1459): queued as a pending frame, flushed by the
+            // connection after it writes the response.
+            if state.sink.is_some() {
+                let event = openbutler_protocol::DaemonEvent::Snapshot {
+                    version: openbutler_protocol::DAEMON_PROTOCOL_VERSION,
+                    snapshot,
+                    runtime,
+                };
+                if let Ok(mut bytes) = serde_json::to_vec(&event) {
+                    bytes.push(b'\n');
+                    state.pending_events.push(bytes);
+                }
+            }
+            success(
+                request,
+                serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+            )
+        }
         "session.entries-range" => match read::entries_range(&request.payload) {
             Err(error) => failure(request, error.to_string()),
             Ok(range) => match state
@@ -488,6 +708,41 @@ fn success(request: &DaemonRequest, result: serde_json::Value) -> DaemonResponse
 /// Reads one saved record for the three disk-authoritative reads (location
 /// rule + full parse); `None` covers an invalid id, a missing or oversized
 /// or damaged file, or a mismatched identity — all "not found" to a client.
+/// The bootstrap runtime view (documented in `agent-loop.md`): the model
+/// facts come from the record this turn or attach opens; catalog-backed
+/// fields stay empty rather than guessed. One builder for both callers —
+/// `session.send` and `attach`.
+fn bootstrap_runtime_view(
+    meta: &openbutler_protocol::session::SessionMeta,
+    workspace_root: Option<&str>,
+    approval_mode: crate::settings::schema::ApprovalMode,
+) -> RuntimeViewData {
+    RuntimeViewData {
+        supports_session_attachments: Some(true),
+        supports_projects: Some(false),
+        workspace_root: workspace_root.unwrap_or_default().to_owned(),
+        model_name: meta.model_id.clone(),
+        provider_name: None,
+        provider_id: meta.provider_id.clone(),
+        model_id: meta.model_id.clone(),
+        context_window_tokens: None,
+        custodian_context_limit_tokens: None,
+        supports_vision: false,
+        reasoning_variants: Vec::new(),
+        reasoning_metadata_source: None,
+        reasoning_support: ReasoningSupport::ModelUnsupported,
+        reasoning_default: String::new(),
+        reasoning_preference: String::new(),
+        show_reasoning_default: false,
+        reasoning_titles: None,
+        approval_mode: Some(match approval_mode {
+            crate::settings::schema::ApprovalMode::Workspace => ApprovalMode::Workspace,
+            crate::settings::schema::ApprovalMode::AutoReview => ApprovalMode::AutoReview,
+            crate::settings::schema::ApprovalMode::FullAccess => ApprovalMode::FullAccess,
+        }),
+    }
+}
+
 fn load_view(data_dir: &Path, session_id: &str) -> Option<SessionView> {
     let path = state::record_path(data_dir, session_id)?;
     state::read_session_view(&path, session_id)
@@ -546,30 +801,11 @@ fn prepare_send(
     // `toRuntimeView` port lands with `session.attach`. Model facts come
     // from this turn's own choice; catalog-backed fields stay empty
     // rather than guessed (documented bootstrap in agent-loop.md).
-    host.set_runtime_view(RuntimeViewData {
-        supports_session_attachments: Some(true),
-        supports_projects: Some(false),
-        workspace_root: workspace_root.clone().unwrap_or_default(),
-        model_name: meta.model_id.clone(),
-        provider_name: None,
-        provider_id: meta.provider_id.clone(),
-        model_id: meta.model_id.clone(),
-        context_window_tokens: None,
-        custodian_context_limit_tokens: None,
-        supports_vision: false,
-        reasoning_variants: Vec::new(),
-        reasoning_metadata_source: None,
-        reasoning_support: ReasoningSupport::ModelUnsupported,
-        reasoning_default: String::new(),
-        reasoning_preference: String::new(),
-        show_reasoning_default: false,
-        reasoning_titles: None,
-        approval_mode: Some(match approval_mode {
-            crate::settings::schema::ApprovalMode::Workspace => ApprovalMode::Workspace,
-            crate::settings::schema::ApprovalMode::AutoReview => ApprovalMode::AutoReview,
-            crate::settings::schema::ApprovalMode::FullAccess => ApprovalMode::FullAccess,
-        }),
-    });
+    host.set_runtime_view(bootstrap_runtime_view(
+        &meta,
+        workspace_root.as_deref(),
+        approval_mode,
+    ));
     crate::agent::context::prepare_turn(
         data_dir,
         crate::agent::context::TurnInputs {
