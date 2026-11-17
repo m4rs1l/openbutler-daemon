@@ -52,6 +52,11 @@ use crate::tools::pipeline::{
 /// session lock) forever. At 24 steps the turn fails with a notice.
 const MAX_TOOL_STEPS: usize = 24;
 
+/// The manual-approval wait when settings do not pin one (legacy
+/// `DEFAULT_APPROVAL_TIMEOUT_SECONDS`, L328 — not the tool's 60 s
+/// execution default).
+const DEFAULT_APPROVAL_TIMEOUT_SECONDS: u64 = 120;
+
 /// One turn's input. The provider block mirrors what the runtime resolves
 /// from settings; the transcript keeps only `text` and `source`.
 #[derive(Debug, Clone)]
@@ -78,6 +83,9 @@ pub struct TurnRequest {
     pub approval_mode: crate::settings::ApprovalMode,
     /// The shell setting baked into the execute_command description.
     pub command_shell: Option<String>,
+    /// The manual-approval wait in seconds (settings
+    /// `approvalTimeoutSeconds`); `None` means the source's 120.
+    pub approval_timeout_seconds: Option<u64>,
 }
 
 /// One validated image riding a turn until it is stored.
@@ -124,6 +132,18 @@ pub struct TurnRunner {
     session_id: String,
     state: Mutex<SessionState>,
     stop: Arc<AtomicBool>,
+    /// The one pending manual approval while a gate waits (the queue
+    /// behind `session.approve`; one at a time, like the source's
+    /// `pendingApproval` pair). Std mutex: every critical section here
+    /// is short and never spans an await — the wait rides the oneshot.
+    approval: std::sync::Mutex<Option<PendingApproval>>,
+}
+
+/// A queued approval awaiting the client's decision.
+struct PendingApproval {
+    request_id: String,
+    gate_reason: &'static str,
+    sender: tokio::sync::oneshot::Sender<bool>,
 }
 
 /// One drained step: the outcome, the streamed reply, and the tool
@@ -161,6 +181,7 @@ impl TurnRunner {
                 dirty: false,
             }),
             stop: Arc::new(AtomicBool::new(false)),
+            approval: std::sync::Mutex::new(None),
         })
     }
 
@@ -168,6 +189,86 @@ impl TurnRunner {
     /// between turns is drained at the next admission.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// The pending approval for visibility surfaces (c3): its id — the
+    /// `approvalId` clients answer — and the gate reason.
+    pub fn pending_approval(&self) -> Option<(String, &'static str)> {
+        self.approval
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|pending| (pending.request_id.clone(), pending.gate_reason))
+    }
+
+    /// `session.approve`: id-guarded resolve (`approveToolCall`, L1201 —
+    /// a stale id no-ops), and the send happens under the same lock the
+    /// timeout reads, so a decision can never be lost to the clock.
+    pub fn resolve_approval(&self, approval_id: &str, approved: bool) -> bool {
+        let mut slot = self
+            .approval
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|pending| pending.request_id == approval_id)
+            && let Some(pending) = slot.take()
+        {
+            let _ = pending.sender.send(approved);
+            return true;
+        }
+        false
+    }
+
+    /// Queues one manual approval and waits out the decision:
+    /// `allow`/`always` approve (the source's `decision !== 'deny'`), a
+    /// decline declines, the owner's stop denies the pending approval
+    /// (the source's stop handler, L1260 — and consumes the flag), and
+    /// silence produces the timeout outcome the registry formats.
+    async fn request_manual_approval(
+        &self,
+        request_id: &str,
+        gate_reason: &'static str,
+        timeout_seconds: u64,
+    ) -> ApprovalOutcome {
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        *self
+            .approval
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PendingApproval {
+            request_id: request_id.to_owned(),
+            gate_reason,
+            sender,
+        });
+        let mut stop_poll = tokio::time::interval(Duration::from_millis(100));
+        stop_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tokio::select! {
+            // Biased: a decision landing in the same tick as the clock
+            // wins — the client's answer is never discarded as a timeout.
+            biased;
+            approved = &mut receiver => {
+                if approved.unwrap_or(false) {
+                    ApprovalOutcome::Approved
+                } else {
+                    ApprovalOutcome::Declined
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(timeout_seconds)) => {
+                self.approval
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                ApprovalOutcome::TimedOut { seconds: timeout_seconds }
+            }
+            _ = stop_poll.tick(), if self.stop.load(Ordering::SeqCst) => {
+                self.stop.store(false, Ordering::SeqCst);
+                self.approval
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                ApprovalOutcome::Declined
+            }
+        }
     }
 
     /// Runs one turn to settlement: the user entry lands and is saved
@@ -296,10 +397,28 @@ impl TurnRunner {
                         Ok(context) => {
                             let approval = match assess(&definition, &context) {
                                 GateDecision::AutoApproved => ApprovalOutcome::Approved,
-                                // No approval queue yet: `session.approve`
-                                // (api-surface) replaces this interim with
-                                // the real resolve.
-                                GateDecision::NeedsApproval { .. } => ApprovalOutcome::Declined,
+                                GateDecision::NeedsApproval { gate_reason } => {
+                                    let outcome = self
+                                        .request_manual_approval(
+                                            &tool_call.call_id,
+                                            gate_reason,
+                                            request
+                                                .approval_timeout_seconds
+                                                .unwrap_or(DEFAULT_APPROVAL_TIMEOUT_SECONDS),
+                                        )
+                                        .await;
+                                    if let ApprovalOutcome::TimedOut { seconds } = outcome {
+                                        push_notice(
+                                            &mut state,
+                                            &turn_id,
+                                            &format!(
+                                                "No approval decision within {seconds} seconds; the action was not run."
+                                            ),
+                                            Some(NoticeTone::Warn),
+                                        );
+                                    }
+                                    outcome
+                                }
                             };
                             match ledger.as_mut() {
                                 None => (proposal_failure("state.db is unavailable"), true),

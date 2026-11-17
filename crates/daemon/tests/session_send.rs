@@ -24,11 +24,21 @@ use serde_json::{Value, json};
 #[derive(Clone, Default)]
 struct RecordingExecutor {
     sent: Arc<Mutex<Vec<(String, TurnRequest)>>>,
+    approvals: Arc<Mutex<Vec<(String, String, bool)>>>,
 }
 
 impl TurnExecutor for RecordingExecutor {
     fn spawn_turn(self: Arc<Self>, session_id: String, request: TurnRequest) {
         self.sent.lock().unwrap().push((session_id, request));
+    }
+
+    fn approve(&self, session_id: &str, approval_id: &str, approved: bool) -> bool {
+        self.approvals.lock().unwrap().push((
+            session_id.to_owned(),
+            approval_id.to_owned(),
+            approved,
+        ));
+        true
     }
 }
 
@@ -280,4 +290,85 @@ fn an_accepted_send_hands_a_prepared_turn_to_the_executor() {
         system.contains("work/chat"),
         "the assembled system names the chat's workspace"
     );
+}
+
+// --- session.approve ----------------------------------------------------------
+
+#[test]
+fn the_approval_action_validates_and_forwards_through_the_seam() {
+    let dir = temp_data_dir("approve-wire");
+    let session_id = seed_chat(&dir);
+    let (host, recorder) = host_with_executor();
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("load", "session.load", &[("sessionId", json!(session_id))]),
+    ));
+
+    // The source's decision words and its accept-immediately answer.
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "a1",
+            "session.approve",
+            &[
+                ("decision", json!("allow")),
+                ("approvalId", json!("call_1")),
+            ],
+        ),
+    );
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+    assert_eq!(
+        recorder.approvals.lock().unwrap().as_slice(),
+        [(session_id.to_owned(), "call_1".to_owned(), true)],
+        "the seam receives the session, the id and the decision"
+    );
+
+    // `deny` resolves false at the queue (dispatch forwards verbatim).
+    call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "a2",
+            "session.approve",
+            &[("decision", json!("deny")), ("approvalId", json!("call_2"))],
+        ),
+    );
+    assert!(!recorder.approvals.lock().unwrap().last().unwrap().2);
+
+    // Both validation sentences, verbatim (daemon-host L3527/L4211).
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "a3",
+                "session.approve",
+                &[("decision", json!("maybe")), ("approvalId", json!("x"))]
+            ),
+        )),
+        "Approval decision must be allow, deny, or always."
+    );
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "a4",
+                "session.approve",
+                &[("decision", json!("allow")), ("approvalId", json!(""))]
+            ),
+        )),
+        "approvalId must be a non-empty string under 64 bytes."
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

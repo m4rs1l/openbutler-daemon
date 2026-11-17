@@ -19,6 +19,12 @@ use crate::state;
 /// so the spawned task can own a share of the executor.
 pub trait TurnExecutor: Send + Sync {
     fn spawn_turn(self: Arc<Self>, session_id: String, request: TurnRequest);
+    /// `session.approve`: resolves the pending approval of the session's
+    /// running turn (id-guarded) and reports whether one matched — a
+    /// stale id or an inactive session is the source's silent no-op.
+    /// Synchronous: the queue's locks are all short, never spanning an
+    /// await, so dispatch stays a sync surface.
+    fn approve(&self, session_id: &str, approval_id: &str, approved: bool) -> bool;
 }
 
 /// The production executor: one shared door (spawned on first use — an
@@ -100,6 +106,22 @@ impl TurnExecutor for DoorExecutor {
                 report_turn_error(&self.data_dir, &session_id, &error.to_string());
             }
         });
+    }
+
+    fn approve(&self, session_id: &str, approval_id: &str, approved: bool) -> bool {
+        // No runner means no running turn — the source's controller
+        // would not exist either, and the id simply no-ops. An approve
+        // must never spawn the door.
+        let runner = self
+            .runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .map(Arc::clone);
+        match runner {
+            Some(runner) => runner.resolve_approval(approval_id, approved),
+            None => false,
+        }
     }
 }
 

@@ -145,6 +145,8 @@ pub struct TurnInputs<'a> {
     /// them off the request, never off a hidden load.
     pub approval_mode: crate::settings::ApprovalMode,
     pub command_shell: Option<String>,
+    /// The manual-approval wait (settings `approvalTimeoutSeconds`).
+    pub approval_timeout_seconds: Option<u64>,
 }
 
 pub fn prepare_turn(
@@ -163,6 +165,7 @@ pub fn prepare_turn(
         images,
         approval_mode,
         command_shell,
+        approval_timeout_seconds,
     } = inputs;
     let home = home
         .map(std::path::Path::to_path_buf)
@@ -196,6 +199,7 @@ pub fn prepare_turn(
         attachments: Vec::new(),
         approval_mode,
         command_shell,
+        approval_timeout_seconds,
     })
 }
 

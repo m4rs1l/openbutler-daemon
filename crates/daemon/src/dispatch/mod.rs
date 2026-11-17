@@ -303,6 +303,39 @@ pub fn handle(
             executor.spawn_turn(session_id, turn);
             success(request, json!({ "accepted": true }))
         }
+        "session.approve" => {
+            // `parseApprovalDecision` + `requireString(approvalId, 64)`
+            // (daemon-host L3525-3531), then the legacy fire-and-forget
+            // acceptance — a stale approval id no-ops server side.
+            let decision = match request.get("decision").and_then(Value::as_str) {
+                Some("allow" | "always") => Some(true),
+                Some("deny") => Some(false),
+                _ => None,
+            };
+            let Some(approved) = decision else {
+                return failure(
+                    request,
+                    "Approval decision must be allow, deny, or always.".to_owned(),
+                );
+            };
+            let approval_id = match request.get("approvalId").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
+                _ => {
+                    return failure(
+                        request,
+                        "approvalId must be a non-empty string under 64 bytes.".to_owned(),
+                    );
+                }
+            };
+            let Some(session_id) = state.current_session.clone() else {
+                return failure(request, CHAT_NOT_FOUND.to_owned());
+            };
+            let Some(executor) = host.executor() else {
+                return failure(request, "The host has no turn executor.".to_owned());
+            };
+            let _ = executor.approve(&session_id, &approval_id, approved);
+            success(request, json!({ "accepted": true }))
+        }
         "stop" => {
             host.request_shutdown();
             success(request, json!({ "stopping": true }))
@@ -466,6 +499,7 @@ fn prepare_send(
     // captured here, where settings are the single read authority.
     let approval_mode = loaded.store.approval_mode;
     let command_shell = loaded.store.command_shell.clone();
+    let approval_timeout_seconds = loaded.store.approval_timeout_seconds;
     drop(settings);
     let secrets = crate::settings::load_secrets(data_dir).map_err(|error| error.to_string())?;
     let provider_api_key = secrets
@@ -486,6 +520,7 @@ fn prepare_send(
             images,
             approval_mode,
             command_shell,
+            approval_timeout_seconds,
         },
     )
 }
