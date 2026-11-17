@@ -9,6 +9,7 @@
 //! (L417), catch (L461-497), `toolOutcome` (L650), `truncatedResult`
 //! (L676); `src/tools/timeout.ts` (field, limits, schema injection).
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -26,6 +27,25 @@ pub const MAX_TOOL_TIMEOUT_SECONDS: u64 = 500;
 /// The model-facing inline budget for one tool result (registry L454).
 pub const MAX_TOOL_RESULT_CHARS: usize = 16_000;
 
+/// One tool execution, as a future: a tool may await (the `question`
+/// tool queues and waits for the owner), so `execute` is a boxed future
+/// rather than a plain call.
+pub type ToolFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send>>;
+
+/// The answer a queued question resolves to: `None` when dismissed
+/// (the owner's stop). The tool shapes its own result from it; the
+/// channel only transports the answer.
+pub type AskFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+
+/// The question channel a tool may hold (the `question` tool's ask).
+/// The host wires the runner in; a context without it answers with the
+/// source's `unavailable` shape.
+pub trait AskPort: Send + Sync + std::fmt::Debug {
+    /// Queues the question and waits for the answer — `None` when the
+    /// question was dismissed (the owner's stop).
+    fn ask(&self, text: String, options: Option<Vec<String>>) -> AskFuture;
+}
+
 /// Everything a tool needs, owned by the host: the validated input (the
 /// timeout field already removed), the policy in force, and the paths.
 #[derive(Debug, Clone)]
@@ -38,6 +58,10 @@ pub struct ToolCallContext {
     pub data_dir: PathBuf,
     pub session_id: String,
     pub command_shell: Option<String>,
+    /// The question channel when a runner drives this call; `None` for
+    /// callers with no interactive owner (the source's `ask ===
+    /// undefined` path, question.ts L56).
+    pub ask: Option<Arc<dyn AskPort>>,
 }
 
 impl ToolCallContext {
@@ -53,6 +77,31 @@ impl ToolCallContext {
         session_id: String,
         command_shell: Option<String>,
     ) -> Result<Self, String> {
+        Self::with_ask(
+            input,
+            approval_mode,
+            workspace_root,
+            scratch_root,
+            data_dir,
+            session_id,
+            command_shell,
+            None,
+        )
+    }
+
+    /// The same construction with a question channel (the batch loop
+    /// wires the runner in; `new` stays the no-channel shape tests use).
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_ask(
+        input: Value,
+        approval_mode: ApprovalMode,
+        workspace_root: PathBuf,
+        scratch_root: PathBuf,
+        data_dir: PathBuf,
+        session_id: String,
+        command_shell: Option<String>,
+        ask: Option<Arc<dyn AskPort>>,
+    ) -> Result<Self, String> {
         let timeout_seconds = tool_timeout_seconds(input.get(TOOL_TIMEOUT_FIELD))?;
         let mut input = input;
         if let Some(object) = input.as_object_mut() {
@@ -67,6 +116,7 @@ impl ToolCallContext {
             data_dir,
             session_id,
             command_shell,
+            ask,
         })
     }
 }
@@ -111,7 +161,10 @@ pub struct ToolDefinition {
     /// `effect()` for the ledger's structured copy.
     pub effect_json: &'static str,
     pub scope: fn(&ToolCallContext) -> WorkspaceScope,
-    pub execute: fn(&ToolCallContext) -> Value,
+    /// Runs the tool: a future, because a tool may await (the `question`
+    /// tool queues for the owner). The context is cloned into the box —
+    /// the future is `'static` and the caller never holds a borrow.
+    pub execute: fn(&ToolCallContext) -> ToolFuture,
 }
 
 impl ToolDefinition {
@@ -296,7 +349,7 @@ fn bound_result(result: &Value, context: &ToolCallContext, tool: &str) -> Value 
 /// The full sequence for one tool call (registry L237-497): write-ahead
 /// proposal, denial or execution, and exactly one ledger record per state.
 /// Ledger failures land in the source's fail-closed shapes — never a panic.
-pub fn run_tool_call(
+pub async fn run_tool_call(
     definition: &ToolDefinition,
     context: &ToolCallContext,
     request_id: &str,
@@ -375,7 +428,7 @@ pub fn run_tool_call(
         };
     }
 
-    let executed = (definition.execute)(context);
+    let executed = (definition.execute)(context).await;
     let state = tool_outcome(&executed);
     let bounded = bound_result(
         &executed,

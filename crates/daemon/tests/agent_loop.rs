@@ -229,6 +229,27 @@ async fn chat(
                 ))
             }
         }
+        // The question scenario: the model asks once and reads the
+        // answer from the paired tool result on the second request.
+        "question" => {
+            let requests = mock.bodies.lock().unwrap().len();
+            if requests == 1 {
+                sse(&format!(
+                    "{}{}data: [DONE]\n\n",
+                    tool_call_chunk(
+                        "question",
+                        "{\"question\":\"Ship it today?\",\"options\":[\"yes\",\"no\"]}",
+                    ),
+                    finish_chunk("tool_calls"),
+                ))
+            } else {
+                sse(&format!(
+                    "{}{}data: [DONE]\n\n",
+                    chunk(json!({ "role": "assistant", "content": "shipping" })),
+                    finish_chunk("stop"),
+                ))
+            }
+        }
         "fail" => Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .header(header::CONTENT_TYPE, "application/json")
@@ -1133,7 +1154,7 @@ async fn a_running_turn_publishes_live_state_to_the_fanout() {
 }
 
 #[tokio::test]
-async fn a_question_queues_publishes_and_resolves_through_the_answer_seam() {
+async fn a_question_queues_and_resolves_through_the_answer_seam() {
     let root = temp_root("question-queue");
     seed_session(&root);
     let door = spawn_door().await;
@@ -1166,6 +1187,127 @@ async fn a_question_queues_publishes_and_resolves_through_the_answer_seam() {
 
     // A stale id no-ops (the source's questionId guard).
     assert!(!runner.answer_question("question-stale", Some("no".to_owned())));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The `question` tool end to end: the model's call queues, the roster
+/// shows the pending question while the turn waits, the owner answers
+/// through the seam, and the answer lands in the conversation pair.
+/// (A direct `ask` has no turn owner to publish from — the roster
+/// claim belongs to the send-driven path, so it lives here.)
+#[tokio::test]
+async fn the_question_tool_queues_publishes_and_resolves_during_a_turn() {
+    let root = temp_root("question-e2e");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    let sink = Arc::new(RecordingSink::default());
+    host.fanout().subscribe(SESSION_ID, sink.clone());
+
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+
+    let asker = Arc::clone(&runner);
+    let turn_root = root.clone();
+    let worker = tokio::spawn(async move {
+        let mut req = request("question", addr, UserEntrySource::Terminal);
+        req.workspace_root = Some(turn_root.display().to_string());
+        asker.send(req).await
+    });
+
+    // The roster must show the queued question while the turn waits —
+    // published by `send`'s tool select the moment the tool queues it
+    // (the tool itself runs under the held state lock).
+    let question_id = {
+        let mut seen = None;
+        for _ in 0..500 {
+            let frames = sink.frames.lock().unwrap().clone();
+            for frame in &frames {
+                let event = serde_json::from_slice::<openbutler_protocol::DaemonEvent>(
+                    frame.strip_suffix(b"\n").unwrap_or(frame),
+                )
+                .ok();
+                if let Some(openbutler_protocol::DaemonEvent::Patch { patch, .. }) = event
+                    && let Some(pending) = &patch.run.pending_question
+                {
+                    seen = Some(pending.id.clone());
+                    break;
+                }
+            }
+            if seen.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if let Some(id) = seen {
+            id
+        } else {
+            let frames_count = sink.frames.lock().unwrap().len();
+            let bodies_count = mock.bodies.lock().unwrap().len();
+            panic!(
+                "the roster never shows the queued question (frames={frames_count}, \
+                 bodies={bodies_count}, pending={:?})",
+                runner.pending_question_id()
+            )
+        }
+    };
+
+    // The frame's id answers through the same seam the arm uses.
+    assert!(
+        runner.answer_question(&question_id, Some("yes".to_owned())),
+        "the roster id answers through the seam"
+    );
+
+    let turn = worker.await.unwrap().expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    // The answer reached the model as the tool result on the second
+    // request, and the pair persisted: user, assistant, tool, final.
+    let bodies = mock.bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2, "one question step needs a second request");
+    assert!(
+        bodies[1].contains("Ship it today?"),
+        "the tool result carries the question"
+    );
+    // The result rides embedded in the tool message's JSON string, so
+    // the quotes arrive backslash-escaped in the raw body.
+    assert!(
+        bodies[1].contains("\\\"answer\\\":\\\"yes\\\""),
+        "and the answer"
+    );
+
+    let record = saved(&root);
+    assert_eq!(record.conversation.len(), 4, "user, assistant, tool, final");
+    let value = &record.conversation[2]["content"][0]["output"]["value"];
+    assert_eq!(value["status"], "answered");
+    assert_eq!(value["question"], "Ship it today?");
+    assert_eq!(value["answer"], "yes");
+    assert_eq!(record.conversation[3]["content"][0]["text"], "shipping");
+
+    // The closing frame carries no pending question any more.
+    let frames = sink.frames.lock().unwrap().clone();
+    let last_frame = frames.last().expect("at least one frame");
+    let last = serde_json::from_slice::<openbutler_protocol::DaemonEvent>(
+        last_frame.strip_suffix(b"\n").unwrap_or(last_frame),
+    )
+    .expect("frame decodes as an event");
+    match last {
+        openbutler_protocol::DaemonEvent::Patch { patch, .. } => {
+            assert!(!patch.run.busy, "the turn end publishes busy: false");
+            assert!(
+                patch.run.pending_question.is_none(),
+                "the queue is empty after the answer"
+            );
+        }
+        other => panic!("expected a closing patch, got {other:?}"),
+    }
 
     let _ = std::fs::remove_dir_all(&root);
 }

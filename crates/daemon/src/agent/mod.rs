@@ -48,8 +48,8 @@ use crate::state::{self, SaveOutcome, SessionRecord, StateError, save_session};
 use crate::tools::catalog::native_definition;
 use crate::tools::format::format_tool_result;
 use crate::tools::pipeline::{
-    ApprovalOutcome, GateDecision, ToolCallContext, assess, proposal_failure, run_tool_call,
-    stop_result,
+    ApprovalOutcome, AskFuture, AskPort, GateDecision, ToolCallContext, assess, proposal_failure,
+    run_tool_call, stop_result,
 };
 use events::PublishSnapshot;
 
@@ -144,8 +144,13 @@ pub struct TurnRunner {
     /// is short and never spans an await — the wait rides the oneshot.
     approval: std::sync::Mutex<Option<PendingApproval>>,
     /// The one pending model question (the queue behind
-    /// `session.answer`; same lock discipline as `approval`).
-    question: std::sync::Mutex<Option<QueuedQuestion>>,
+    /// `session.answer`; same lock discipline as `approval`). Shared so
+    /// the `question` tool's port owns a clone of the same queue.
+    question: Arc<std::sync::Mutex<Option<QueuedQuestion>>>,
+    /// Wakes the turn owner when a question is queued: `send`'s tool
+    /// select publishes the roster frame — the tool waits under the
+    /// held `state` lock, where a re-entrant publish would deadlock.
+    publish_notify: Arc<tokio::sync::Notify>,
     /// The host this runner publishes live state to (c3). Weak: a runner
     /// must never keep the host alive.
     host: std::sync::Weak<crate::dispatch::Host>,
@@ -211,7 +216,8 @@ impl TurnRunner {
             }),
             stop: Arc::new(AtomicBool::new(false)),
             approval: std::sync::Mutex::new(None),
-            question: std::sync::Mutex::new(None),
+            question: Arc::new(std::sync::Mutex::new(None)),
+            publish_notify: Arc::new(tokio::sync::Notify::new()),
             host,
             last_published: std::sync::Mutex::new(None),
         })
@@ -243,53 +249,27 @@ impl TurnRunner {
     }
 
     /// Queues one model question and waits for the owner's answer
-    /// (`requestQuestion`, L1850). The roster publish rides with the
-    /// `question` tool slice (it runs under the send-held state lock);
-    /// a stop dismisses with `None` (the source's stop handler, L1259).
+    /// (`requestQuestion`, L1850) — the shared queue path the
+    /// `question` tool's port also runs.
     pub async fn ask(&self, text: String, options: Option<Vec<String>>) -> Option<String> {
-        let question_id = format!(
-            "question-{}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|since| since.as_millis())
-                .unwrap_or(0),
-            &Uuid::new_v4().to_string()[..6]
-        );
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        *self
-            .question
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(QueuedQuestion {
-            question_id: question_id.clone(),
-            text,
-            options,
-            sender,
-        });
-        let answer = wait_question(receiver, &self.stop).await;
-        if answer.is_none() {
-            // A stop that won the race: clear the queue entry so the
-            // roster stops showing a question nobody can answer.
-            let _ = self.answer_question(&question_id, None);
+        self.ask_channel().queue_and_wait(text, options).await
+    }
+
+    /// The channel a `question` tool call holds: the shared queue, the
+    /// stop flag, and the roster wakeup. Cloned into the tool's
+    /// `'static` future, so the port never borrows the runner.
+    fn ask_channel(&self) -> AskChannel {
+        AskChannel {
+            question: Arc::clone(&self.question),
+            stop: Arc::clone(&self.stop),
+            publish_notify: Arc::clone(&self.publish_notify),
         }
-        answer
     }
 
     /// `session.answer`: id-guarded resolve (`answerQuestion`, L1224 —
     /// a stale id no-ops).
     pub fn answer_question(&self, question_id: &str, answer: Option<String>) -> bool {
-        let mut slot = self
-            .question
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if slot
-            .as_ref()
-            .is_some_and(|pending| pending.question_id == question_id)
-            && let Some(pending) = slot.take()
-        {
-            let _ = pending.sender.send(answer);
-            return true;
-        }
-        false
+        resolve_question(&self.question, question_id, answer)
     }
 
     /// The waiting question's id (visibility surfaces and tests).
@@ -432,7 +412,7 @@ impl TurnRunner {
         // denotation suffix and the timeout field). Built once per turn
         // from the turn's workspace and shell — the batch loop resolves
         // names per call from the same catalog.
-        call.tools = ["execute_command"]
+        call.tools = ["execute_command", "question"]
             .iter()
             .filter_map(|name| {
                 native_definition(name, &tool_workspace, request.command_shell.as_deref())
@@ -501,7 +481,7 @@ impl TurnRunner {
                     &tool_workspace,
                     request.command_shell.as_deref(),
                 ) {
-                    match ToolCallContext::new(
+                    match ToolCallContext::with_ask(
                         tool_call.arguments.clone(),
                         request.approval_mode,
                         tool_workspace.clone(),
@@ -509,6 +489,7 @@ impl TurnRunner {
                         self.data_root.clone(),
                         self.session_id.clone(),
                         request.command_shell.clone(),
+                        Some(Arc::new(self.ask_channel())),
                     ) {
                         // Invalid host metadata fails before the proposal —
                         // no ledger row, the pair still lands (timeout.ts).
@@ -565,7 +546,7 @@ impl TurnRunner {
                             match ledger.as_mut() {
                                 None => (proposal_failure("state.db is unavailable"), true),
                                 Some(writer) => {
-                                    let call_outcome = run_tool_call(
+                                    let pending = run_tool_call(
                                         &definition,
                                         &context,
                                         &tool_call.call_id,
@@ -573,6 +554,20 @@ impl TurnRunner {
                                         approval,
                                         writer,
                                     );
+                                    tokio::pin!(pending);
+                                    // The tool may queue a question while the
+                                    // turn holds `state`; the roster publish
+                                    // rides this select — a re-entrant call
+                                    // would deadlock on the state lock.
+                                    let call_outcome = loop {
+                                        tokio::select! {
+                                            biased;
+                                            outcome = &mut pending => break outcome,
+                                            _ = self.publish_notify.notified() => {
+                                                self.publish_now(&state, &turn_id, None, true);
+                                            }
+                                        }
+                                    };
                                     (call_outcome.result, call_outcome.run_stopped)
                                 }
                             }
@@ -890,6 +885,91 @@ impl TurnRunner {
             }
         }
     }
+}
+
+// --- question channel --------------------------------------------------------
+
+/// The question channel a `question` tool holds: the shared queue, the
+/// stop flag, and the roster wakeup. `Clone` by `Arc`, so the tool's
+/// future is `'static` (definitions are plain function pointers).
+#[derive(Clone)]
+pub(crate) struct AskChannel {
+    question: Arc<std::sync::Mutex<Option<QueuedQuestion>>>,
+    stop: Arc<AtomicBool>,
+    publish_notify: Arc<tokio::sync::Notify>,
+}
+
+impl AskChannel {
+    /// The queue path behind both the runner's `ask` and the tool port:
+    /// queue → wake the turn's publish select → wait; a stop that wins
+    /// the race clears the entry (the source's stop handler, L1259).
+    async fn queue_and_wait(&self, text: String, options: Option<Vec<String>>) -> Option<String> {
+        let question_id = format!(
+            "question-{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_millis())
+                .unwrap_or(0),
+            &Uuid::new_v4().to_string()[..6]
+        );
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self
+            .question
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(QueuedQuestion {
+            question_id: question_id.clone(),
+            text,
+            options,
+            sender,
+        });
+        // The roster frame rides the turn owner's select: this code runs
+        // under the held `state` lock, where a re-entrant publish would
+        // deadlock. The wakeup keeps one permit, so it is never lost.
+        self.publish_notify.notify_one();
+        let answer = wait_question(receiver, &self.stop).await;
+        if answer.is_none() {
+            // A stop that won the race: clear the queue entry so the
+            // roster stops showing a question nobody can answer.
+            let _ = resolve_question(&self.question, &question_id, None);
+        }
+        answer
+    }
+}
+
+impl AskPort for AskChannel {
+    fn ask(&self, text: String, options: Option<Vec<String>>) -> AskFuture {
+        let channel = self.clone();
+        Box::pin(async move { channel.queue_and_wait(text, options).await })
+    }
+}
+
+/// Debug prints the channel, not the queue it holds (the oneshot
+/// sender has no meaningful display).
+impl std::fmt::Debug for AskChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AskChannel").finish_non_exhaustive()
+    }
+}
+
+/// The id-guarded resolve both the seam and the dismissal path share
+/// (`answerQuestion`, L1224 — a stale id no-ops).
+fn resolve_question(
+    queue: &std::sync::Mutex<Option<QueuedQuestion>>,
+    question_id: &str,
+    answer: Option<String>,
+) -> bool {
+    let mut slot = queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot
+        .as_ref()
+        .is_some_and(|pending| pending.question_id == question_id)
+        && let Some(pending) = slot.take()
+    {
+        let _ = pending.sender.send(answer);
+        return true;
+    }
+    false
 }
 
 // --- transcript mapping -------------------------------------------------------

@@ -17,9 +17,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   action with its three validation sentences, `TurnRunner::ask` — the
   queue behind the `question` tool with the owner's stop dismissing it
   (`None`), and the `pendingQuestion` slot in every published frame.
-  The roster publish at queue time rides with the `question` tool slice
-  (it runs under the send-held state lock); the tool itself needs the
-  async-execute refactor. 3 tests.
+  The roster publish at queue time rides `send`'s tool select — the
+  tool runs under the send-held state lock, so a re-entrant publish
+  would deadlock; the wakeup is a `Notify` permit, never lost. 3 tests.
+- The `question` tool end to end: `ToolDefinition::execute` is now a
+  boxed future (`ToolFuture`), `AskPort`/`AskChannel` clone the
+  runner's queue into every tool context, and the tool's source
+  validation (trim, UTF-16 bounds, options rules, and the
+  unavailable/dismissed/answered shapes) ports question.ts byte for
+  byte. The batch loop offers `question` beside `execute_command`.
+  Pinned by the `question`-scenario e2e (queue → roster → seam answer
+  → conversation pair → closing frame) — agent_loop 18.
 - `session.stop` and the pending-approval visibility: the fire-and-forget
   stop seam (`TurnExecutor::stop` — the runner's stop flag, never
   spawning the door), and `pendingApproval`/`pendingApprovalId` now

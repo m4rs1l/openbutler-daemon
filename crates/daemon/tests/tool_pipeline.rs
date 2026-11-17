@@ -18,11 +18,12 @@ use openbutler_daemon::settings::ApprovalMode;
 use openbutler_daemon::tools::catalog::{create_execute_command_tool, sidecar_tool};
 use openbutler_daemon::tools::pipeline::{
     ApprovalOutcome, DEFAULT_TOOL_TIMEOUT_SECONDS, GateDecision, TOOL_TIMEOUT_FIELD,
-    ToolCallContext, ToolDefinition, approval_failure, assess, denial_message, denial_result,
-    policy_failure, proposal_failure, run_tool_call, stop_result, tool_timeout_seconds,
+    ToolCallContext, ToolDefinition, ToolFuture, approval_failure, assess, denial_message,
+    denial_result, policy_failure, proposal_failure, run_tool_call, stop_result,
+    tool_timeout_seconds,
 };
 use openbutler_daemon::tools::workspace_scope::WorkspaceScope;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::path::Path;
 
 /// A definition whose scope hook panics: in full-access mode the source never
@@ -54,26 +55,35 @@ fn echo_tool() -> ToolDefinition {
         effect_json: r#"{"change":"unknown","data":"unknown","network":"possible","reversible":"unknown","outbound":"model"}"#,
         scope: workspace_scope,
         execute: |context| {
-            let command = context.input["command"].as_str().unwrap_or("echo");
-            json!({ "status": "completed", "exitCode": 0, "stdout": format!("{command}\n"), "stderr": "" })
+            let command = context.input["command"]
+                .as_str()
+                .unwrap_or("echo")
+                .to_owned();
+            Box::pin(async move {
+                json!({ "status": "completed", "exitCode": 0, "stdout": format!("{command}\n"), "stderr": "" })
+            })
         },
     }
 }
 
-/// The non-zero exit path as a plain function.
-fn exit_seven(_context: &ToolCallContext) -> Value {
-    json!({ "status": "completed", "exitCode": 7, "stdout": "", "stderr": "" })
+/// The non-zero exit path behind the future interface.
+fn exit_seven(_context: &ToolCallContext) -> ToolFuture {
+    Box::pin(async { json!({ "status": "completed", "exitCode": 7, "stdout": "", "stderr": "" }) })
 }
 
 fn invalid_tool() -> ToolDefinition {
     let mut definition = echo_tool();
-    definition.execute = |_| json!({ "status": "invalid", "error": "command must be a string." });
+    definition.execute = |_| {
+        Box::pin(async { json!({ "status": "invalid", "error": "command must be a string." }) })
+    };
     definition
 }
 
 /// An oversized result: 16_001 characters of text over the inline budget.
-fn big_result(_context: &ToolCallContext) -> Value {
-    json!({ "status": "completed", "exitCode": 0, "text": "x".repeat(16_001), "stdout": "" })
+fn big_result(_context: &ToolCallContext) -> ToolFuture {
+    let result =
+        json!({ "status": "completed", "exitCode": 0, "text": "x".repeat(16_001), "stdout": "" });
+    Box::pin(async move { result })
 }
 
 fn context(workspace: &Path, mode: ApprovalMode) -> ToolCallContext {
@@ -239,8 +249,8 @@ fn denial_results_are_the_source_sentences() {
 
 // --- ledger sequence ---------------------------------------------------------
 
-#[test]
-fn the_ledger_records_the_full_sequence() {
+#[tokio::test]
+async fn the_ledger_records_the_full_sequence() {
     let dir = temp_data_dir("pipeline-seq");
     let mut ledger = LedgerWriter::open(&dir).expect("writer opens");
     let ctx = context(&dir, ApprovalMode::Workspace);
@@ -253,7 +263,8 @@ fn the_ledger_records_the_full_sequence() {
         None,
         ApprovalOutcome::Approved,
         &mut ledger,
-    );
+    )
+    .await;
     assert_eq!(outcome.result["status"], "completed");
     assert!(!outcome.run_stopped, "a success never stops the run");
     assert_eq!(
@@ -274,7 +285,8 @@ fn the_ledger_records_the_full_sequence() {
         None,
         ApprovalOutcome::Approved,
         &mut ledger,
-    );
+    )
+    .await;
     assert!(!outcome.run_stopped);
     assert_eq!(transitions(&dir, "req-exit").last().unwrap(), "failed");
 
@@ -287,7 +299,8 @@ fn the_ledger_records_the_full_sequence() {
         None,
         ApprovalOutcome::Approved,
         &mut ledger,
-    );
+    )
+    .await;
     assert_eq!(
         outcome.result["status"], "invalid",
         "the tool result passes through unchanged"
@@ -305,7 +318,8 @@ fn the_ledger_records_the_full_sequence() {
         None,
         ApprovalOutcome::Declined,
         &mut ledger,
-    );
+    )
+    .await;
     assert!(outcome.run_stopped, "a decline stops the run (L365)");
     assert_eq!(outcome.result["status"], "denied");
     assert_eq!(transitions(&dir, "req-declined"), ["proposed", "denied"]);
@@ -328,7 +342,8 @@ fn the_ledger_records_the_full_sequence() {
             None,
             resolution,
             &mut ledger,
-        );
+        )
+        .await;
         assert!(!outcome.run_stopped, "soft denials keep the run alive");
         assert_eq!(transitions(&dir, &request_id), ["proposed", "denied"]);
     }
@@ -457,8 +472,8 @@ fn the_wire_shape_matches_the_registry_s_denotation() {
 
 // --- result bounding ---------------------------------------------------------
 
-#[test]
-fn results_over_the_inline_budget_spill_to_disk() {
+#[tokio::test]
+async fn results_over_the_inline_budget_spill_to_disk() {
     let dir = temp_data_dir("pipeline-spill");
     let mut ledger = LedgerWriter::open(&dir).expect("writer opens");
     let ctx = context(&dir, ApprovalMode::FullAccess);
@@ -477,7 +492,8 @@ fn results_over_the_inline_budget_spill_to_disk() {
         None,
         ApprovalOutcome::Approved,
         &mut ledger,
-    );
+    )
+    .await;
 
     let result = &outcome.result;
     assert_eq!(result["status"], "truncated");

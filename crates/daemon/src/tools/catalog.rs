@@ -17,6 +17,13 @@ use crate::tools::pipeline::{
     MAX_TOOL_TIMEOUT_SECONDS, TOOL_TIMEOUT_FIELD, ToolCallContext, ToolDefinition,
 };
 use crate::tools::shell::resolve_shell;
+use crate::tools::workspace_scope::WorkspaceScope;
+
+/// The `question` tool's bounds (question.ts L4-6): UTF-16 units, like
+/// the source's `string.length`.
+const MAX_QUESTION_CHARS: usize = 2_000;
+const MAX_OPTION_CHARS: usize = 120;
+const MAX_OPTIONS: usize = 8;
 
 /// The flagship native tool. The description carries the live workspace and
 /// the resolved shell label; a shell nothing can resolve yields the source's
@@ -61,18 +68,133 @@ pub fn create_execute_command_tool(
                 resolve_command_directory(context.input.get("cwd"), &context.workspace_root);
             command_scope(command, &target, &environment)
         },
+        // The sync command run behind the future interface: the
+        // pipeline awaits every tool uniformly (`ToolFuture`).
         execute: |context| {
             let environment = environment(context);
             let target =
                 resolve_command_directory(context.input.get("cwd"), &context.workspace_root);
-            execute_command(
-                &context.input,
-                &environment,
-                Some(&target),
-                Some(context.timeout_seconds),
+            let input = context.input.clone();
+            let timeout = context.timeout_seconds;
+            Box::pin(
+                async move { execute_command(&input, &environment, Some(&target), Some(timeout)) },
             )
         },
     }
+}
+
+/// The `question` tool: queues one question for the interactive owner
+/// and waits for the answer (question.ts). `autoApprove: () => true`
+/// ports as a workspace scope — the gate never blocks it in any mode.
+pub fn create_question_tool() -> ToolDefinition {
+    ToolDefinition {
+        provider_id: "host",
+        name: "question",
+        description: "Ask the user one direct question during a run and wait for their answer. Provide short options when you can enumerate the likely answers; the user can still reply in their own words. Use it for a blocking choice or a missing detail you cannot discover with tools or safe defaults — not for progress updates or rhetorical questions. If no interactive user is attached, ask in your final reply; a worker reports it to its parent with parent_message or its final report. Preserve the blocker rather than guessing. Continue independent work while awaiting a required answer; silence is not approval.".to_owned(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The single question to ask, with enough context to answer it.",
+                },
+                "options": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": MAX_OPTIONS,
+                    "description": "Optional 1-8 short suggested answers; the user may still answer freely.",
+                },
+            },
+            "required": ["question"],
+            "additionalProperties": false,
+        }),
+        effect_json:
+            r#"{"change":"none","data":"local","network":"none","reversible":"full","outbound":"model"}"#,
+        scope: |_| WorkspaceScope::Workspace,
+        execute: |context| match validate_question(context) {
+            Err(result) => Box::pin(async move { result }),
+            Ok((question, options)) => match context.ask.clone() {
+                // The source's `!context?.ask` path (question.ts L56).
+                None => Box::pin(async {
+                    json!({
+                        "status": "unavailable",
+                        "error": "No interactive user is attached to this run. Ask in your final reply; workers report to their parent. Continue independent work; do not assume a required answer.",
+                    })
+                }),
+                Some(port) => Box::pin(async move {
+                    match port.ask(question.clone(), options).await {
+                        // A stop that dismissed the queue (source: `answer === null`).
+                        None => json!({
+                            "status": "dismissed",
+                            "error": "The user dismissed the question without answering. Continue with your best judgment, state the assumption you made, or include the question in your final response.",
+                        }),
+                        Some(answer) => {
+                            json!({ "status": "answered", "question": question, "answer": answer })
+                        }
+                    }
+                }),
+            },
+        },
+    }
+}
+
+/// The source's execute-time validation order (question.ts): trim and
+/// bound the question, then the options, then the ask gate.
+fn validate_question(context: &ToolCallContext) -> Result<(String, Option<Vec<String>>), Value> {
+    let question = context
+        .input
+        .get("question")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if question.is_empty() {
+        return Err(json!({
+            "status": "invalid",
+            "error": "question must be a non-empty string.",
+        }));
+    }
+    if question.encode_utf16().count() > MAX_QUESTION_CHARS {
+        return Err(json!({
+            "status": "invalid",
+            "error": format!("question must be at most {MAX_QUESTION_CHARS} characters."),
+        }));
+    }
+    let options = match context.input.get("options") {
+        None => None,
+        Some(raw) => {
+            let invalid_message = || {
+                json!({
+                    "status": "invalid",
+                    "error": format!(
+                        "options must be 1-{MAX_OPTIONS} non-empty strings of at most \
+                         {MAX_OPTION_CHARS} characters."
+                    ),
+                })
+            };
+            // An explicit `null` is invalid too: JS `Array.isArray(null)`
+            // is false and the key is not `undefined`.
+            let Some(items) = raw.as_array() else {
+                return Err(invalid_message());
+            };
+            if items.is_empty() || items.len() > MAX_OPTIONS {
+                return Err(invalid_message());
+            }
+            let mut trimmed = Vec::with_capacity(items.len());
+            for item in items {
+                let Some(option) = item.as_str() else {
+                    return Err(invalid_message());
+                };
+                let option = option.trim();
+                if option.is_empty() || option.encode_utf16().count() > MAX_OPTION_CHARS {
+                    return Err(invalid_message());
+                }
+                trimmed.push(option.to_owned());
+            }
+            Some(trimmed)
+        }
+    };
+    Ok((question, options))
 }
 
 /// The catalog lookup the batch loop runs per model call: one name, one
@@ -85,6 +207,7 @@ pub fn native_definition(
 ) -> Option<ToolDefinition> {
     match name {
         "execute_command" => Some(create_execute_command_tool(workspace_root, command_shell)),
+        "question" => Some(create_question_tool()),
         _ => None,
     }
 }
