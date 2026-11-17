@@ -1,0 +1,128 @@
+//! The runtime half of the system prompt: fills `SystemPromptContext`
+//! from disk and settings for one session, then assembles the frozen
+//! prompt around it.
+//!
+//! Sources: legacy `src/agent.ts` L48-L127 (`buildAgentSystem`
+//! composition), L144 (`memoryProfileAvailability`), L159
+//! (`buildTeamBlock`). Team membership arrives as an input — the settings
+//! layer loads it, this module only renders it, so prompt building never
+//! performs hidden I/O beyond the reads documented here.
+
+use std::path::PathBuf;
+
+use super::prompt::{
+    AGENT_BASE, AgentBase, CUSTODIAN_BASE, PromptRole, SystemPromptContext, WORKER_BASE,
+    build_agent_system,
+};
+use super::providers::{
+    MEMORY_USER_CONTEXT_MAX_BYTES, TeamInfo, build_team_block, discover_skills, format_skill_index,
+    memory_paths, openbutler_skill_dir, profile_availability, read_memory_file, read_memory_index,
+    scratch_root, skill_roots, truncation_notice, workspace_skill_directory,
+};
+
+/// Everything the prompt reads from outside its own text. The runtime
+/// owns these values; the struct only carries them in.
+#[derive(Debug, Clone)]
+pub struct PromptEnvironment {
+    pub data_root: PathBuf,
+    pub workspace_root: PathBuf,
+    pub home: PathBuf,
+    pub codex_home: Option<PathBuf>,
+    pub builtin_skill_dir: Option<PathBuf>,
+    pub team: Option<TeamInfo>,
+}
+
+/// The role's own base (legacy's `base` argument: one layer owns its
+/// instructions instead of layering on another).
+fn base_for(role: PromptRole) -> AgentBase {
+    match role {
+        PromptRole::Agent => AGENT_BASE,
+        PromptRole::Custodian => CUSTODIAN_BASE,
+        PromptRole::Worker => WORKER_BASE,
+    }
+}
+
+/// Fills the context struct from disk — the seam the assembly fills.
+/// Unexpected I/O while discovering skills bubbles (the source throws);
+/// the memory reads load empty on failure by design.
+pub fn build_context(
+    role: PromptRole,
+    env: &PromptEnvironment,
+) -> Result<SystemPromptContext, std::io::Error> {
+    let paths = memory_paths(&env.data_root, &env.workspace_root);
+    let memory_index = read_memory_index(&paths.index_file);
+
+    let preferences = read_memory_file(&paths.preferences_file, MEMORY_USER_CONTEXT_MAX_BYTES);
+    let profile = read_memory_file(&paths.user_file, MEMORY_USER_CONTEXT_MAX_BYTES);
+    let preferences_availability =
+        profile_availability(&paths.preferences_file, &paths.root, Some(&preferences));
+    let user_availability = profile_availability(&paths.user_file, &paths.root, Some(&profile));
+
+    // Legacy: filter empty parts, append the notice to a cut part, join
+    // with a blank line; nothing left means the section is omitted.
+    let loaded_parts: Vec<String> = [preferences, profile]
+        .into_iter()
+        .filter(|part| !part.text.is_empty())
+        .map(|part| {
+            if part.truncated {
+                format!("{}\n\n{}", part.text, truncation_notice(&part))
+            } else {
+                part.text
+            }
+        })
+        .collect();
+    let loaded_user_context = if loaded_parts.is_empty() {
+        None
+    } else {
+        Some(loaded_parts.join("\n\n"))
+    };
+
+    let roots = skill_roots(
+        &env.data_root,
+        &env.workspace_root,
+        &env.home,
+        env.codex_home.as_deref(),
+        env.builtin_skill_dir.clone(),
+    );
+    let skills = discover_skills(&roots)?;
+    let skill_index = format_skill_index(&skills);
+    let workspace_skill_dir = workspace_skill_directory(&roots);
+
+    let team_block = build_team_block(role, env.team.as_ref(), &paths.peers_directory);
+
+    Ok(SystemPromptContext {
+        openbutler_skill_dir: openbutler_skill_dir(&env.data_root).display().to_string(),
+        workspace_skill_dir: workspace_skill_dir.map(|path| path.display().to_string()),
+        memory_root: paths.root.display().to_string(),
+        index_file: paths.index_file.display().to_string(),
+        preferences_file: paths.preferences_file.display().to_string(),
+        preferences_availability,
+        user_file: paths.user_file.display().to_string(),
+        user_availability,
+        topics_directory: paths.topics_directory.display().to_string(),
+        areas_directory: paths.areas_directory.display().to_string(),
+        workspace_file: paths.workspace_file.display().to_string(),
+        workspace_availability: profile_availability(&paths.workspace_file, &paths.root, None),
+        workspace_root: env.workspace_root.display().to_string(),
+        scratch_root: scratch_root().display().to_string(),
+        config_path: crate::settings::config_path(&env.data_root)
+            .display()
+            .to_string(),
+        memory_index: (!memory_index.is_empty()).then_some(memory_index),
+        skill_index: (!skill_index.is_empty()).then_some(skill_index),
+        loaded_user_context,
+        team_block: (!team_block.is_empty()).then_some(team_block),
+    })
+}
+
+/// The frozen system prompt for one session: the role's instructions
+/// wrapped with everything `build_context` read. `Ok(None)` means the
+/// assembly refused (marker counts must match — impossible unless a
+/// template changed under the code).
+pub fn build_system(
+    role: PromptRole,
+    env: &PromptEnvironment,
+) -> Result<Option<String>, std::io::Error> {
+    let context = build_context(role, env)?;
+    Ok(build_agent_system(base_for(role), &context))
+}

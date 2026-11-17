@@ -7,7 +7,7 @@
 //! (read 2026-11-16).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -19,6 +19,11 @@ use super::{LoadedSettings, SettingsError};
 /// The file names inside a data directory.
 const SETTINGS_FILE: &str = "settings.yaml";
 const CONFIG_FILE: &str = "config.yaml";
+
+/// The secrets file's path — the one authority for `config.yaml`.
+pub fn config_path(data_root: &Path) -> PathBuf {
+    data_root.join(CONFIG_FILE)
+}
 
 /// Reads settings from disk, or returns the empty machine when the file is
 /// absent. Any other I/O failure stays visible — only a missing file means

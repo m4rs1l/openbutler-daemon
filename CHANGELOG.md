@@ -7,6 +7,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `agent/context.rs`: the runtime context builder — fills
+  `SystemPromptContext` from disk exactly as legacy `buildAgentSystem`
+  (budgeted user notes with the truncation notice, availability reads,
+  skill discovery, role base, team block injected rather than loaded
+  secretly), so the assembled system prompt carries every live value
+  (`prompt_context`, 4 tests); `settings::config_path` becomes the single
+  `config.yaml` path authority.
 - Door contract: the assembled system prompt rides `SidecarCall.system`
   (absent from the wire when `None`) from `TurnRequest` through
   `streamText`, pinned by a new conformance vector (present + absent

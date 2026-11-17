@@ -15,6 +15,7 @@
 //!   prompt, tool execution/second batch (c2) and workspace labels belong
 //!   to their own slices and are recorded in `docs/agent-loop.md`.
 
+pub mod context;
 pub mod prompt;
 pub mod providers;
 

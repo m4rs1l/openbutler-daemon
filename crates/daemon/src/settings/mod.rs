@@ -10,7 +10,7 @@ mod save;
 pub mod schema;
 pub mod transaction;
 
-pub use load::{load_secrets, load_settings};
+pub use load::{config_path, load_secrets, load_settings};
 pub use save::save_settings;
 pub use schema::{
     ApprovalMode, CustodianSettings, DaemonSettings, McpServerState, ModalCredentials,
