@@ -42,6 +42,9 @@ struct Mock {
     /// Scenario per request: the tool test asserts exactly one call, so
     /// an SDK-side loop cannot hide.
     requests: Arc<Mutex<Vec<String>>>,
+    /// The raw request bodies, so wire-level pass-through (budgets,
+    /// provider options) can be asserted where the provider sees them.
+    bodies: Arc<Mutex<Vec<String>>>,
 }
 
 fn sse(body: &str) -> Response<Body> {
@@ -55,8 +58,9 @@ fn sse(body: &str) -> Response<Body> {
 async fn chat(
     State(mock): State<Mock>,
     Path(scenario): Path<String>,
-    _body: String,
+    body: String,
 ) -> Response<Body> {
+    mock.bodies.lock().unwrap().push(body);
     mock.requests.lock().unwrap().push(scenario.clone());
     match scenario.as_str() {
         "basic" => sse(
@@ -468,4 +472,32 @@ async fn the_sidecar_refuses_unknown_keys_and_never_prints_a_secret() {
         !transcript.contains(secret),
         "a key leaked onto protocol stdout: {transcript}"
     );
+}
+
+#[tokio::test]
+async fn budget_and_provider_options_reach_the_provider_wire() {
+    let (addr, mock) = mock_server().await;
+    let (door, _) = SidecarDoor::spawn(config()).await.unwrap();
+
+    let mut call = mock_call("budget:1", "basic", addr);
+    call.max_output_tokens = Some(16_384);
+    call.provider_options = Some(serde_json::json!({
+        "openai-compatible": { "reasoningEffort": "low" }
+    }));
+    let mut stream = door.call(Lane::Interactive, call).await.unwrap();
+    let (events, terminal) = drain(&mut stream).await;
+    assert!(terminal.is_none(), "{terminal:?}");
+
+    let bodies = mock.bodies.lock().unwrap();
+    assert_eq!(bodies.len(), 1, "exactly one provider request");
+    let body = &bodies[0];
+    assert!(
+        body.contains("\"max_tokens\":16384"),
+        "the output ceiling reaches the provider: {body}"
+    );
+    assert!(
+        body.contains("\"reasoning_effort\":\"low\""),
+        "request-level provider options reach the provider under its own namespace: {body}"
+    );
+    door.shutdown().await;
 }

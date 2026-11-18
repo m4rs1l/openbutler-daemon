@@ -94,6 +94,8 @@ export async function runCall(call, { signal, emit }) {
     messages: call.messages,
     ...(call.system != null && { system: call.system }),
     ...(Object.keys(tools).length > 0 && { tools }),
+    ...(call.maxOutputTokens != null && { maxOutputTokens: call.maxOutputTokens }),
+    ...(call.providerOptions != null && { providerOptions: call.providerOptions }),
     // Retries belong to the host: never inside the stream.
     maxRetries: 0,
     abortSignal: signal,

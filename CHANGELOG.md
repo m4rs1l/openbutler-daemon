@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Sidecar door: `call` carries `maxOutputTokens` and request-level
+  `providerOptions` (the compaction engine's summary budget and its
+  reasoning/cache options), both absent from the wire when unset.
+  A new conformance vector pins the round trip and
+  `budget_and_provider_options_reach_the_provider_wire` asserts both
+  against the provider's actual HTTP body through the real sidecar.
 - Compaction's pure core (`compaction/`): the measured trigger
   arithmetic (`max(window - reserve, floor(window/2))`, reserve
   40_210 with the real prompt), the conservative estimators

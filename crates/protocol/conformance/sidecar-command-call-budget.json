@@ -1,0 +1,12 @@
+{
+  "type": "call",
+  "id": "call-03",
+  "provider": { "key": "openai-compatible", "url": "https://gateway.example/v1", "apiKey": "sk-live-not-logged" },
+  "model": "mimo-v2.6-flash",
+  "messages": [
+    { "role": "user", "content": [{ "type": "text", "text": "checkpoint the conversation" }] }
+  ],
+  "tools": [],
+  "maxOutputTokens": 16384,
+  "providerOptions": { "openai": { "reasoningEffort": "low" } }
+}

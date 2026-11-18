@@ -431,6 +431,8 @@ pub fn sidecar_call(id: &str, provider_key: &str) -> SidecarCall {
         messages: json!([]),
         system: None,
         tools: Vec::new(),
+        max_output_tokens: None,
+        provider_options: None,
     }
 }
 

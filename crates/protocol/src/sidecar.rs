@@ -56,6 +56,15 @@ pub struct SidecarCall {
     pub system: Option<String>,
     #[serde(default)]
     pub tools: Vec<SidecarTool>,
+    /// Output ceiling for this request (the compaction engine's summary
+    /// budget). Absent on ordinary chat calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    /// Request-level provider options (reasoning effort, cache metadata)
+    /// the source passes with side requests like compaction. Absent on
+    /// ordinary chat calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_options: Option<Value>,
 }
 
 /// Host → sidecar commands.

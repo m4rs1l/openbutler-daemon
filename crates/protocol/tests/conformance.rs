@@ -51,6 +51,9 @@ fn fixture(name: &str) -> &'static str {
         "sidecar-command-call-system" => {
             include_str!("../conformance/sidecar-command-call-system.json")
         }
+        "sidecar-command-call-budget" => {
+            include_str!("../conformance/sidecar-command-call-budget.json")
+        }
         "sidecar-command-cancel" => {
             include_str!("../conformance/sidecar-command-cancel.json")
         }
@@ -599,6 +602,26 @@ fn sidecar_commands_round_trip() {
     let object = value.as_object().expect("tool is an object");
     assert_eq!(object.len(), 3, "name, description, parameters only");
     assert!(!object.contains_key("execute"), "no execute channel");
+
+    // The compaction request's budget and options travel with the call
+    // when present and vanish from the wire when absent.
+    let SidecarCommand::Call(budget) = roundtrip(fixture("sidecar-command-call-budget")) else {
+        panic!("the budget vector decodes as a call command");
+    };
+    assert_eq!(budget.max_output_tokens, Some(16_384));
+    assert_eq!(
+        budget.provider_options,
+        Some(serde_json::json!({ "openai": { "reasoningEffort": "low" } }))
+    );
+    assert!(
+        serde_json::to_value(&with_system)
+            .expect("system call serializes")
+            .as_object()
+            .expect("system call object")
+            .get("maxOutputTokens")
+            .is_none(),
+        "a call without a budget never carries the key"
+    );
 
     let SidecarCommand::Cancel { id } = roundtrip(fixture("sidecar-command-cancel")) else {
         panic!("the cancel vector decodes as a cancel command");
