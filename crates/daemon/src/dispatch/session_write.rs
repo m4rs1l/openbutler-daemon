@@ -488,3 +488,77 @@ pub(super) fn queue_attach_event(
         }
     }
 }
+
+/// `session.select-project` (`daemon-host.ts` L3636 + `agent-session.ts`
+/// `selectProject` L927): bind a chat that has not started to a project.
+///
+/// Adaptations, both documented: the source keeps the binding in memory
+/// until the first message, this build persists it here (a draft stays
+/// list-invisible either way, so the reader sees the same chat); the
+/// source's queued-turn clause has no equivalent without a runtime and
+/// arrives with it. The `!attachment.interactive` gate has no wire shape
+/// yet either - every chat path in this build is interactive until
+/// worker attachments arrive.
+pub fn select_project(
+    host: &Host,
+    data_dir: &Path,
+    state: &mut DispatchState,
+    request: &openbutler_protocol::DaemonRequest,
+) -> Result<(), String> {
+    // The arm's shape gate: an absent key (`undefined`) throws too -
+    // only a literal null or a string passes to the controller.
+    let project_id = match request.get("projectId") {
+        None => return Err("Invalid project ID.".to_owned()),
+        Some(Value::Null) => None,
+        Some(value) => match value.as_str() {
+            Some(text) => Some(text.to_owned()),
+            None => return Err("Invalid project ID.".to_owned()),
+        },
+    };
+    let session_id = require_variant(request, "sessionId", 64)?;
+    if state.current_session.as_deref() != Some(session_id.as_str()) {
+        return Err("The active chat changed. Try again.".to_owned());
+    }
+    let mut record = current_record(data_dir, state)?;
+    // `sessionHasUserMessage` is derived from entries in the source
+    // (agent-session.ts L909), not from the stamped flag.
+    let started = record
+        .entries
+        .iter()
+        .any(|entry| matches!(entry, SessionEntry::User { .. }));
+    if started
+        || record
+            .meta
+            .project
+            .as_ref()
+            .is_some_and(|project| project.locked)
+    {
+        return Err(
+            "This chat's project was fixed by its first message. Start a new chat.".to_owned(),
+        );
+    }
+    if host
+        .executor()
+        .is_some_and(|executor| executor.is_busy(&session_id))
+    {
+        return Err("Wait for the running task to finish before choosing a project.".to_owned());
+    }
+    // "No project" means where the runtime already points: this build's
+    // runtime pointer is the settings default scope; the connection's
+    // own launch scope arrives with the client-scope plumbing.
+    let fallback = host
+        .settings()
+        .as_ref()
+        .and_then(|loaded| loaded.store.default_workspace_root.clone());
+    let project = state::session_project(project_id.as_deref(), fallback.as_deref(), data_dir)?;
+    record.meta.project = Some(project);
+    state::save_session(data_dir, &record, true).map_err(|error| error.to_string())?;
+    // The source's `publish(false)`: the connection sees the re-bound
+    // chat after its response, through the same pending queue the
+    // attach flow uses.
+    let path = state::record_path(data_dir, &session_id).ok_or_else(|| CHAT_NOT_FOUND)?;
+    let view = state::read_session_view(&path, &session_id).ok_or_else(|| CHAT_NOT_FOUND)?;
+    let (snapshot, runtime, _workspace_root) = chat_snapshot(host, view, None);
+    queue_attach_event(state, snapshot, runtime);
+    Ok(())
+}

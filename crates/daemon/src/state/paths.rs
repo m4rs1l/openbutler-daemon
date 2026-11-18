@@ -85,3 +85,18 @@ fn normalize_lexical(path: &Path) -> PathBuf {
     }
     base
 }
+
+/// `fs::canonicalize` on Windows returns the `\\?\` extended form; the
+/// source's `realpathSync` never does. One helper, one spelling: every
+/// path that answers the wire strips it here (the schedule's workspace
+/// root, the project store's folders).
+pub(crate) fn strip_windows_prefix(path: &std::path::Path) -> std::path::PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return std::path::PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}

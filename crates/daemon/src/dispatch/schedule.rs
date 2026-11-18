@@ -539,7 +539,7 @@ fn canonical_scope_root(path: &str) -> Result<String, String> {
             .join(expanded)
     };
     let real = std::fs::canonicalize(&absolute).map_err(|error| error.to_string())?;
-    let real = strip_windows_prefix(&real);
+    let real = crate::state::strip_windows_prefix(&real);
     if !real.is_dir() {
         return Err(format!(
             "Workspace path is not a directory: {}",
@@ -554,19 +554,6 @@ fn home_dir() -> String {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default()
-}
-
-/// `fs::canonicalize` on Windows returns the `\\?\` extended form;
-/// the source's `realpathSync` never does.
-fn strip_windows_prefix(path: &Path) -> std::path::PathBuf {
-    let text = path.to_string_lossy();
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        return std::path::PathBuf::from(format!(r"\\{rest}"));
-    }
-    if let Some(rest) = text.strip_prefix(r"\\?\") {
-        return std::path::PathBuf::from(rest);
-    }
-    path.to_path_buf()
 }
 
 fn success(request: &DaemonRequest, result: Value) -> DaemonResponse {

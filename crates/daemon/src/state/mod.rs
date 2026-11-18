@@ -3,13 +3,15 @@
 //! One authority per concern: `paths` validates ids and builds locations,
 //! `record` locates and parses one saved record whole, `save` is the only
 //! writer (recompute + header order + atomic rename), `header` reads display
-//! fields without materialising transcripts, `list` runs the picker query.
+//! fields without materialising transcripts, `list` runs the picker query,
+//! `projects` owns `projects.json` and folder canonicalisation.
 //! The on-disk contract itself is documented in `docs/state-formats.md`.
 
 mod attachments;
 mod header;
 mod list;
 mod paths;
+mod projects;
 mod record;
 mod save;
 
@@ -20,9 +22,11 @@ pub use attachments::{
 
 pub use header::{SessionHeader, read_session_header};
 pub use list::{WorkspaceFilter, list_sessions};
+pub(crate) use paths::strip_windows_prefix;
 pub use paths::{
     CUSTODIAN_SESSION_ID, is_session_id, same_path, session_directory, sessions_directory,
 };
+pub use projects::session_project;
 /// The one UTF-16 preview slice — shared with the ledger's envelope.
 pub(crate) use record::slice_utf16;
 pub use record::{

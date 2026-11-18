@@ -287,6 +287,12 @@ pub fn handle(
             Ok(()) => success(request, json!({ "accepted": true })),
             Err(error) => failure(request, error),
         },
+        "session.select-project" => {
+            match session_write::select_project(host, data_dir, state, request) {
+                Ok(()) => success(request, json!({ "accepted": true })),
+                Err(error) => failure(request, error),
+            }
+        }
         "session.flush" => match session_write::flush(data_dir, state) {
             Ok(()) => success(request, json!({ "saved": true })),
             Err(error) => failure(request, error),

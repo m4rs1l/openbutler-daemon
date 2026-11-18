@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `session.select-project`: project binding for a chat that has not
+  started - the arm's shape gate (absent `projectId` throws, only
+  literal null or a string passes), the controller's three guards and
+  the `projects.json` store (folder canonicalisation, strict record
+  validation) live in `state/projects.rs`; the binding persists to the
+  draft record here where the source holds it in memory.
 - `session.command` normalization and the telegram trio: the registry
   resolves `/new` / `/compact` / `/stop` before the switch (payload
   untouched, surface names refused with `Unknown command.`), and the
