@@ -766,3 +766,51 @@ fn run_schedule(
         json!({ "status": "queued", "scheduleId": schedule_id }),
     )
 }
+
+/// The lane key whose stop generation guards a schedule background
+/// session — `session.stop` resolves a stopped session back to it the
+/// way the source looks the controller up in `persistentSessions`.
+pub(crate) fn persistent_lane_key(data_dir: &Path, session_id: &str) -> Option<String> {
+    let schedules = crate::state::schedules::load(data_dir).ok()?;
+    for schedule in schedules {
+        let state_key = format!("session:schedule:{}", schedule.id);
+        if let Ok(Some(mapped)) = crate::ledger::LedgerWriter::open(data_dir)
+            .map(|writer| writer.state_get(&state_key))
+            .map(|result| result.ok().flatten())
+            && mapped == session_id
+        {
+            return Some(format!("schedule:{}", schedule.id));
+        }
+    }
+    None
+}
+
+/// `stopNamedRun`'s pending-event cancel: without `keepQueue`, every
+/// pending event of the lane goes `ignored` with the source's
+/// sentence — a kept queue is left untouched.
+pub(crate) fn cancel_pending_schedule_events(
+    data_dir: &Path,
+    lane_key: &str,
+    keep_queue: bool,
+) -> Result<(), String> {
+    if keep_queue {
+        return Ok(());
+    }
+    let schedule_id = lane_key.strip_prefix("schedule:").unwrap_or(lane_key);
+    let writer = crate::ledger::LedgerWriter::open(data_dir).map_err(|e| e.to_string())?;
+    let events = writer
+        .schedule_events(schedule_id, 1000)
+        .map_err(|e| e.to_string())?;
+    for event in events {
+        if event.status == "pending" {
+            writer
+                .set_event_state(
+                    &event.id,
+                    "ignored",
+                    Some("Queued work was cancelled by the owner."),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}

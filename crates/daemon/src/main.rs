@@ -102,10 +102,6 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             Arc::downgrade(&host),
         )));
         host.set_self_ref(&host);
-        // A pending schedule event from a previous run fires at boot —
-        // the source pumps at startup too (recovered interrupted rows
-        // are already final, so only `pending` is left to consume).
-        host.spawn_schedule_pump();
         // The schedule runner: one host writer, publishes straight into
         // the feed, boot-reloads every stored trigger. Interrupted rows
         // recover first — the one-shot priors read clean state.
@@ -149,6 +145,13 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         };
         runner.reload(stored_schedules);
         host.set_scheduler(runner);
+        // A pending schedule event from a previous run fires at boot —
+        // the source pumps at startup too (recovered interrupted rows
+        // are already final, so only `pending` is left to consume).
+        // Placed after the host writer: both open the same schema, and
+        // racing it deadlocks the first pump pass on Windows
+        // (`database is locked`).
+        host.spawn_schedule_pump();
         let shutdown = host.subscribe_shutdown();
 
         if let Some(addr) = listen {

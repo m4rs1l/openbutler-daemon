@@ -235,6 +235,24 @@ impl LedgerWriter {
         schedule_events_on(&self.connection, schedule_id, limit)
     }
 
+    /// The pump's opening read — the source's `pendingEvents` narrowed
+    /// to the schedule lane this build produces: every pending
+    /// schedule-sourced event (registered or not, so an unknown one can
+    /// be ignored), oldest first like the source's `received_at`
+    /// ascending walk.
+    pub fn pending_schedule_events(&self, limit: i64) -> Result<Vec<LedgerEvent>, LedgerError> {
+        let bounded = limit.clamp(1, 1000);
+        let mut statement = self.connection.prepare(
+            "SELECT * FROM openbutler_events
+             WHERE status = 'pending' AND source LIKE 'schedule%'
+             ORDER BY received_at ASC, rowid ASC LIMIT ?1",
+        )?;
+        let rows = statement
+            .query_map(rusqlite::params![bounded], event_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// `getEvent`: one row by id.
     pub fn get_event(&self, event_id: &str) -> Result<Option<LedgerEvent>, LedgerError> {
         let row = self

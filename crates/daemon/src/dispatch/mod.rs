@@ -382,15 +382,29 @@ pub fn handle(
             success(request, json!({ "accepted": true }))
         }
         "session.stop" => {
-            // Source (daemon-host L3552): fire-and-forget `stop` with
+            // Source (daemon-host L3552 → stopPersistentRun →
+            // stopNamedRun L2271): fire-and-forget `stop` with
             // `keepQueue`/`holdQueue` as plain `=== true` checks — no
-            // validation; `keepQueue` decides whether the queued sends
-            // survive (the source's stop handler clears them otherwise).
+            // validation. A persistent lane also moves its stop
+            // generation (refusing a firing captured before this stop)
+            // and, without `keepQueue`, its pending events go
+            // `ignored` with the source's sentence.
             let Some(executor) = host.executor() else {
                 return failure(request, "The host has no turn executor.".to_owned());
             };
             if let Some(session_id) = state.current_session.clone() {
                 let keep_queue = request.get("keepQueue").and_then(Value::as_bool) == Some(true);
+                // The source resolves the controller back to its
+                // persistent key; this build scans the schedule state
+                // map for the session it minted.
+                let lane_key = schedule::persistent_lane_key(data_dir, &session_id);
+                if let Some(lane_key) = lane_key.as_deref() {
+                    if !keep_queue {
+                        host.bump_stop_generation(lane_key);
+                    }
+                    let _ =
+                        schedule::cancel_pending_schedule_events(data_dir, lane_key, keep_queue);
+                }
                 let _ = executor.stop(&session_id, keep_queue);
             }
             success(request, json!({ "accepted": true }))

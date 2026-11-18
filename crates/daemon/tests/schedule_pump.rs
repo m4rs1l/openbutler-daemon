@@ -319,3 +319,50 @@ async fn the_origin_session_wins_when_it_is_alive() {
     let event = writer.get_event(&event_id).expect("read").expect("exists");
     assert_eq!(event.status, "delivered");
 }
+
+#[tokio::test]
+async fn a_missing_or_disabled_schedule_is_ignored_without_a_message() {
+    let data_dir = temp_data_dir("ignored");
+    let workspace = temp_data_dir("ignored-ws");
+    // Enabled: false — stored, never fired.
+    let mut off = daily_schedule("off1", &workspace, "origin-gone");
+    off.enabled = false;
+    state::schedules::save(&data_dir, &[off]).expect("save");
+    let writer = LedgerWriter::open(&data_dir).expect("ledger");
+    let off_id = queue_event(&writer, "off1", json!({}));
+    // No stored schedule at all for this payload.
+    let orphan_id = queue_event(&writer, "ghost", json!({}));
+
+    let executor = Arc::new(PumpExecutor::default());
+    let host = Host::new();
+    host.reload_settings(&data_dir).expect("settings load");
+    host.set_executor(executor.clone());
+
+    schedule::pump::pump_once(&host, &data_dir)
+        .await
+        .expect("pump runs");
+
+    assert!(executor.spawned.lock().unwrap().is_empty(), "no turn");
+    // The source's `setEventState(event.id, 'ignored')` — no message.
+    for id in [off_id, orphan_id] {
+        let event = writer.get_event(&id).expect("read").expect("exists");
+        assert_eq!(event.status, "ignored");
+        assert!(event.error.is_none(), "no refusal text on an ignore");
+    }
+}
+
+#[tokio::test]
+async fn a_stop_bump_is_visible_to_the_stop_generation_reads() {
+    let executor = Arc::new(PumpExecutor::default());
+    let host = Host::new();
+    let key = "schedule:gen1";
+    assert_eq!(host.stop_generation(key), 0);
+    // The source's stopNamedRun counter: a stop bumps, reads follow.
+    host.bump_stop_generation(key);
+    assert_eq!(host.stop_generation(key), 1);
+    host.bump_stop_generation(key);
+    assert_eq!(host.stop_generation(key), 2);
+    // Keys are independent — another schedule's stop is invisible.
+    assert_eq!(host.stop_generation("schedule:other"), 0);
+    assert!(executor.spawned.lock().unwrap().is_empty());
+}

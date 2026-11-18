@@ -100,6 +100,10 @@ pub struct Host {
     /// spawn the schedule pump with an owned `Arc<Host>` — spawned
     /// tasks need `'static`, and dispatch only ever holds `&Host`.
     self_ref: std::sync::OnceLock<std::sync::Weak<Host>>,
+    /// Stop counters per lane key (the source's `stopGenerations`):
+    /// `session.stop` bumps, the pump captures before each firing and
+    /// refuses a turn whose generation moved. Map touch, never an await.
+    stop_generations: std::sync::Mutex<std::collections::HashMap<String, u32>>,
 }
 
 impl Host {
@@ -121,6 +125,7 @@ impl Host {
             model_picks: std::sync::Mutex::new(std::collections::HashMap::new()),
             scheduler: RwLock::new(None),
             self_ref: std::sync::OnceLock::new(),
+            stop_generations: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -215,6 +220,27 @@ impl Host {
     /// pump spawn upgrades.
     pub fn set_self_ref(&self, host: &Arc<Host>) {
         let _ = self.self_ref.set(Arc::downgrade(host));
+    }
+
+    /// The source's `stopGenerations.set(key, (get ?? 0) + 1)` — a stop
+    /// without `keepQueue` moves the lane's generation so a firing
+    /// captured before it refuses to run.
+    pub fn bump_stop_generation(&self, lane_key: &str) {
+        let mut map = self
+            .stop_generations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *map.entry(lane_key.to_owned()).or_insert(0) += 1;
+    }
+
+    /// The current generation counter for a lane (missing = 0).
+    pub fn stop_generation(&self, lane_key: &str) -> u32 {
+        self.stop_generations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(lane_key)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Runs one schedule-pump pass on the runtime (the source's

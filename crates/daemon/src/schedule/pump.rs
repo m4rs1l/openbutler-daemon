@@ -53,18 +53,15 @@ pub async fn pump_once(host: &Host, data_dir: &Path) -> Result<(), String> {
     }
     let writer = Mutex::new(LedgerWriter::open(data_dir).map_err(|error| error.to_string())?);
     let schedules = state::schedules::load(data_dir).map_err(|error| error.to_string())?;
-    let mut pending = Vec::new();
-    for schedule in &schedules {
-        // `scheduleEvents` reads newest-first; the legacy pump walks
-        // `received_at` ascending, so each batch is reversed here.
-        let mut batch = writer
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .schedule_events(&schedule.id, 1000)
-            .map_err(|error| error.to_string())?;
-        batch.reverse();
-        pending.extend(batch);
-    }
+    // The source opens with `pendingEvents(1000)` — every pending
+    // schedule-sourced row, oldest first (each per-schedule read comes
+    // back newest-first, so it would have to reverse them; this read
+    // already walks ascending).
+    let pending = writer
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .pending_schedule_events(1000)
+        .map_err(|error| error.to_string())?;
     for event in pending {
         if *shutdown.borrow() {
             return Ok(());
@@ -94,17 +91,34 @@ pub async fn pump_once(host: &Host, data_dir: &Path) -> Result<(), String> {
             // `event:{id}` lane never reaches this handler).
             continue;
         };
+        // The source captures the lane's stop generation before any
+        // schedule lookup (L2326): a stop that lands after this point
+        // refuses the firing with `Run cancelled before execution.`.
+        let lane_key = format!("schedule:{schedule_id}");
+        let stop_snapshot = host.stop_generation(&lane_key);
         let Some(schedule) = schedules
             .iter()
             .find(|candidate| candidate.id == schedule_id)
         else {
+            // The source's `!schedule` arm: an unknown schedule
+            // silently ignores the event (no refusal text).
             writer
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .set_event_state(&event.id, "failed", Some("Schedule does not exist."))
+                .set_event_state(&event.id, "ignored", None)
                 .map_err(|error| error.to_string())?;
             continue;
         };
+        if !schedule.enabled {
+            // The source's `!schedule.enabled` arm: stored, never
+            // fired, ignored without a message.
+            writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .set_event_state(&event.id, "ignored", None)
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
 
         // Sync half 1: everything up to the turn (the guard lives in
         // this block and never crosses the await).
@@ -112,7 +126,7 @@ pub async fn pump_once(host: &Host, data_dir: &Path) -> Result<(), String> {
             let writer = writer
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            prepare_firing(host, data_dir, &writer, &event, schedule)
+            prepare_firing(host, data_dir, &writer, &event, schedule, stop_snapshot)
         };
         let turn_result = match prepared {
             // The workspace is gone or setup refused: the state is
@@ -179,6 +193,7 @@ fn prepare_firing(
     writer: &LedgerWriter,
     event: &LedgerEvent,
     schedule: &ScheduleState,
+    stop_snapshot: u32,
 ) -> Result<Option<PreparedFiring>, String> {
     // The workspace is gone: fail visibly, mark the schedule, never
     // retry-loop — and return Ok, because the event state is already
@@ -244,6 +259,12 @@ fn prepare_firing(
     // host fails the event and the pump marks it interrupted.
     if *host.subscribe_shutdown().borrow() {
         return Err("Host is shutting down.".to_owned());
+    }
+    // The source's generation guard (schedule-service L138): a stop
+    // that landed after the pump captured this lane refuses the
+    // firing before the run starts; the pump's catch marks it failed.
+    if host.stop_generation(&format!("schedule:{}", schedule.id)) != stop_snapshot {
+        return Err("Run cancelled before execution.".to_owned());
     }
 
     write_schedule_run_started(writer, &schedule.id, now_ms).map_err(|error| error.to_string())?;
