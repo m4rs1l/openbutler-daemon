@@ -26,6 +26,24 @@ pub fn weekday_number(day: &str) -> Option<i64> {
     })
 }
 
+/// The source's `days.map((day) => WEEKDAY_NUMBERS[day.toLowerCase()]!)`
+/// over a stored options value: `None` when the key is absent (every day),
+/// `Some` otherwise with unknown ids as 99 — the sentinel that never
+/// matches a real weekday, exactly like the source's `undefined` in a Set.
+pub(super) fn weekday_numbers(days: Option<&serde_json::Value>) -> Option<Vec<i64>> {
+    let days = days?;
+    Some(
+        days.as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|day| day.as_str().and_then(weekday_number).unwrap_or(99))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
 /// Absolute epoch ms of one occurrence plus the source's DST-gap marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WallOccurrence {

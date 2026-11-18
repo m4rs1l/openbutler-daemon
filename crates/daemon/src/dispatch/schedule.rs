@@ -335,7 +335,7 @@ fn parse_instant(value: &str) -> Option<DateTime<Local>> {
 }
 
 /// Adapter-specific trigger validation with the source's exact messages.
-fn validate_schedule_trigger(trigger: &ScheduleTrigger) -> Result<(), String> {
+pub(crate) fn validate_schedule_trigger(trigger: &ScheduleTrigger) -> Result<(), String> {
     let options = match &trigger.options {
         Value::Object(options) => options.clone(),
         _ => {

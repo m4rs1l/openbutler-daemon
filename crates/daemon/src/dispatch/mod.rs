@@ -9,7 +9,7 @@
 mod commands;
 pub mod fanout;
 mod host;
-mod schedule;
+pub(crate) mod schedule;
 pub mod session_send;
 mod session_write;
 

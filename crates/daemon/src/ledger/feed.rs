@@ -12,7 +12,7 @@ use openbutler_protocol::ledger::{LedgerAction, LedgerEvent};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
 
-use super::{LedgerError, now_iso};
+use super::{LedgerError, LedgerWriter, now_iso};
 
 /// `ledger.events`: newest first, limit clamped to 1..=200, default 30.
 /// A missing database or a missing table is an empty feed — and reading
@@ -69,6 +69,12 @@ pub fn retry_event(data_dir: &Path, event_id: &str) -> Result<bool, LedgerError>
     if !table_exists(&connection, "openbutler_events")? {
         return Ok(false);
     }
+    retry_event_on(&connection, event_id)
+}
+
+/// The retry body, shared by the data-dir entry point and the runner's
+/// writer connection (one implementation, two doors).
+fn retry_event_on(connection: &Connection, event_id: &str) -> Result<bool, LedgerError> {
     let current: Option<(String, String)> = connection
         .query_row(
             "SELECT source, status FROM openbutler_events WHERE event_id = ?1",
@@ -179,5 +185,34 @@ fn parse_record(text: &str) -> Value {
     match serde_json::from_str::<Value>(text) {
         Ok(value) if value.is_object() => value,
         _ => json!({}),
+    }
+}
+
+impl LedgerWriter {
+    /// `scheduleEvents`: newest-first events of one schedule for run
+    /// history — the payload's `scheduleId` (or the pre-rename
+    /// `taskId`) selects the rows, newest `received_at` first with
+    /// `rowid` as the tie-break, limit clamped to 1..=200.
+    pub fn schedule_events(
+        &self,
+        schedule_id: &str,
+        limit: i64,
+    ) -> Result<Vec<LedgerEvent>, LedgerError> {
+        let bounded = limit.clamp(1, 200);
+        let mut statement = self.connection.prepare(
+            "SELECT * FROM openbutler_events
+             WHERE COALESCE(json_extract(payload_json, '$.scheduleId'), json_extract(payload_json, '$.taskId')) = ?1
+             ORDER BY received_at DESC, rowid DESC LIMIT ?2",
+        )?;
+        let rows = statement
+            .query_map(rusqlite::params![schedule_id, bounded], event_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// `retryEvent` through the writer's own connection — the runner's
+    /// one-shot adapters retry an interrupted fire without a second open.
+    pub fn retry_event(&self, event_id: &str) -> Result<bool, LedgerError> {
+        retry_event_on(&self.connection, event_id)
     }
 }

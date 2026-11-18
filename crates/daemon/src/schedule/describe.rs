@@ -6,7 +6,7 @@
 //! validation refuses such values on write, so the path is defensive only.
 
 use super::format::{format_duration, format_wall};
-use super::wall::{next_daily_occurrence, weekday_number};
+use super::wall::{next_daily_occurrence, weekday_numbers};
 use crate::state::schedules::ScheduleState;
 use chrono::TimeZone;
 use serde_json::Value;
@@ -74,18 +74,9 @@ pub fn describe_schedule(
                 }
                 None => String::new(),
             };
-            // Unknown ids map to `undefined` in the source's Set and never
-            // match; 99 reproduces that.
-            let mapped: Option<Vec<i64>> = options.get("days").map(|days| {
-                days.as_array()
-                    .map(|items| {
-                        items
-                            .iter()
-                            .map(|day| day.as_str().and_then(weekday_number).unwrap_or(99))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            });
+            // Unknown ids become 99 through the shared mapper — the
+            // sentinel that never matches, like the source's `undefined`.
+            let mapped = weekday_numbers(options.get("days"));
             let occurrence = next_daily_occurrence(now_ms, &at, mapped.as_deref());
             next_due_at = occurrence.ok().map(|found| found.at_ms);
             human = format!("daily {at}{suffix}");
@@ -131,7 +122,7 @@ fn js_string(value: Option<&Value>) -> String {
 /// `Date.parse` on an offset-less local ISO value); seconds are accepted for
 /// tolerance. Stored values carry no offset — `normalizeScheduleTrigger`
 /// removed it at write time.
-fn parse_local_iso(raw: &str) -> Option<i64> {
+pub(super) fn parse_local_iso(raw: &str) -> Option<i64> {
     let naive = chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M")
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S"))
         .ok()?;

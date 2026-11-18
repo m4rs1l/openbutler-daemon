@@ -7,6 +7,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `ScheduleRunner` (`schedule/runner.rs`): trigger lifetimes ported from
+  `tools/schedule.ts` L69-415 — serialized reload, Map-style statuses,
+  the seven adapters (interval due seeding with missed-interval
+  coalescing, one-shot prior-event checks with interrupted retry,
+  daily re-arm with `clockShift`, a notify filesystem watcher with one
+  debounce window, sysinfo-backed memory sampling), `close`, and the
+  10-second `shutdown` deadline. Emit builds the source's event envelope
+  through an injected publish callback.
+- Observed-event write path (`ledger/events.rs`): `insertEvent` with the
+  UTF-16 validation ceilings, the 256 KiB / 32 MiB payload limits, the
+  dedupe insert returning the existing id, plus `LedgerWriter::schedule_events`
+  and a shared retry body. The writer schema now creates
+  `openbutler_events` (status CHECK from `OBSERVED_EVENT_STATES`) — the
+  table never existed on a fresh database, so inserts failed there.
+  14 pins (`ledger_events`, `schedule_runner`).
 - Schedule engine (`schedule/{wall,format,runtime,describe,wake}.rs`):
   the pure scheduler half ported from `tools/schedule.ts` — wall-clock
   occurrence math (server-local only, DST-gap walk with round-trip

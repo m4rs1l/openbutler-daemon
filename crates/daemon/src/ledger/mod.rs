@@ -4,11 +4,13 @@
 //! Source: `activity-ledger.ts` (read 2026-11-16 and 2026-11-17). Reads
 //! never create the database; `LedgerWriter` is the one writable open.
 
+mod events;
 mod feed;
 mod state;
 mod usage;
 mod writer;
 
+pub use events::{EventInput, OBSERVED_EVENT_STATES};
 pub use feed::{list_actions, list_events, retry_event};
 pub use state::StateReader;
 pub use usage::{StepUsageReport, UsageInput, UsageRow, UsageTokens};
@@ -23,6 +25,10 @@ pub enum LedgerError {
     /// (`recordToolAction` in the source).
     #[error("An action must be recorded before execution.")]
     MissingAction,
+    /// A refusal whose message *is* the contract (event validation,
+    /// payload ceilings).
+    #[error("{0}")]
+    Refusal(String),
 }
 
 /// The retry marker's timestamp, shaped like JS `toISOString()`.

@@ -11,12 +11,14 @@
 
 mod describe;
 mod format;
+mod runner;
 mod runtime;
 mod wake;
 mod wall;
 
 pub use describe::{ScheduleDescription, describe_schedule};
 pub use format::{format_duration, format_schedule_age, format_wall};
+pub use runner::{Log, Publish, ScheduleRunner, ScheduleStatus, TriggerState};
 pub use runtime::{
     MAX_REPORT_CHARS, ScheduleRunOutcome, ScheduleRunResult, ScheduleRuntime,
     ScheduleRuntimeStatus, read_schedule_runtime, read_trigger_due, trigger_state_key,

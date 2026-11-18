@@ -24,3 +24,5 @@ time = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+notify = { workspace = true }
+sysinfo = { workspace = true }

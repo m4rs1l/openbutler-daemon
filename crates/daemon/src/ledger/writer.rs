@@ -100,8 +100,28 @@ fn tool_action_schema() -> String {
         .map(|state| format!("'{state}'"))
         .collect::<Vec<_>>()
         .join(", ");
+    let event_states = super::OBSERVED_EVENT_STATES
+        .iter()
+        .map(|state| format!("'{state}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "CREATE TABLE IF NOT EXISTS openbutler_actions (
+        "CREATE TABLE IF NOT EXISTS openbutler_events (
+            event_id TEXT PRIMARY KEY,
+            source TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            workspace_root TEXT,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ({event_states})),
+            attempts INTEGER NOT NULL DEFAULT 0,
+            payload_json TEXT NOT NULL,
+            error TEXT,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS openbutler_events_status_received_idx ON openbutler_events(status, received_at);
+        CREATE TABLE IF NOT EXISTS openbutler_actions (
             request_id TEXT PRIMARY KEY,
             workspace_root TEXT NOT NULL,
             session_id TEXT NOT NULL,
