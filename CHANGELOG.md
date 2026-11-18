@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Compaction's pure core (`compaction/`): the measured trigger
+  arithmetic (`max(window - reserve, floor(window/2))`, reserve
+  40_210 with the real prompt), the conservative estimators
+  (non-ASCII code points cost a full token, media parts 1_024),
+  the three checkpoint prompts as mechanical byte-exact extractions
+  (sha256-pinned), and the conversation-projection helpers
+  (tool references, head/tail preview bounds, archive pointer,
+  queued-message order repair). No model call yet - the engine
+  arrives with the sidecar wiring.
 - `session.select-project`: project binding for a chat that has not
   started - the arm's shape gate (absent `projectId` throws, only
   literal null or a string passes), the controller's three guards and

@@ -1,0 +1,1 @@
+Merge these transcript notes into one set of notes under the same rules: keep every concrete fact, identifier and decision with its reason; when two notes disagree, keep both the dated values; drop duplicates and narration. Notes only.

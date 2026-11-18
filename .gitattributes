@@ -12,8 +12,9 @@
 *.sh text eol=lf
 
 # The prompt assets are a byte contract with the legacy sources: git must
-# never rewrite their line endings on any platform.
-crates/daemon/src/agent/prompts/*.txt -text
+# never rewrite their line endings on any platform, in any module's
+# prompts directory.
+**/prompts/*.txt -text
 
 *.png binary
 *.jpg binary
