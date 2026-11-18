@@ -12,7 +12,8 @@ use chrono::TimeZone;
 use serde_json::Value;
 
 /// Human schedule line, server-local wall time, plus the next due instant.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScheduleDescription {
     pub human: String,
     /// Next due epoch ms, or `None` when the adapter has no schedule.

@@ -19,7 +19,8 @@ use sha2::{Digest, Sha256};
 pub const MAX_REPORT_CHARS: usize = 8_000;
 
 /// `ScheduleRunStatus`: an unrecognized stored value reads as `Idle`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ScheduleRuntimeStatus {
     Idle,
     Running,
@@ -27,7 +28,8 @@ pub enum ScheduleRuntimeStatus {
 }
 
 /// `lastResult`: only these two values are stored or surfaced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ScheduleRunResult {
     Completed,
     Failed,
@@ -43,14 +45,22 @@ impl ScheduleRunResult {
 }
 
 /// Durable runtime of one schedule. Absent keys mean "never ran, idle".
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Absent options serialize as absent (the source's `undefined` fields),
+/// never as `null`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScheduleRuntime {
     pub status: ScheduleRuntimeStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_result: Option<ScheduleRunResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     pub run_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_report: Option<String>,
 }
 

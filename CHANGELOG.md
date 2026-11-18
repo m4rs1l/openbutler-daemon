@@ -7,6 +7,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The `schedule.manage` runtime half: `run` queues one manual event
+  into the feed (the source's envelope), `list` reports every stored
+  schedule with adapter status, durable runtime and describe line, `log`
+  maps the run history (`scheduledAt` surfaced, falsy errors omitted),
+  and the CRUD reloads the newly installed runner so its response
+  carries the real `runtime` (absent when no runner is wired — the
+  source's `undefined`).
+- The event state machine (`ledger/feed.rs`): `claim_event` (single
+  pending claim), `set_event_state`, `get_event`, and
+  `recover_interrupted_events` (the restart split by source with the
+  source's messages), plus a shared `schedule_events` with two doors.
+- Boot wiring (`main`): the host's persistent `LedgerWriter` (with
+  better-sqlite3's 5 s busy timeout), both crash recoveries before the
+  first reload, the `ScheduleRunner` on the host, and a reload of every
+  stored trigger. `ScheduleRunner` reload/shutdown are sync now — the
+  body never awaits and dispatch is a sync surface; adapter tasks spawn
+  through the runtime handle captured at construction.
+- `ScheduleRuntime`/`ScheduleDescription` serialize to the source's
+  wire shape (camelCase keys, absent options stay absent).
 - `ScheduleRunner` (`schedule/runner.rs`): trigger lifetimes ported from
   `tools/schedule.ts` L69-415 — serialized reload, Map-style statuses,
   the seven adapters (interval due seeding with missed-interval

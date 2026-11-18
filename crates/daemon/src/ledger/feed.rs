@@ -188,26 +188,113 @@ fn parse_record(text: &str) -> Value {
     }
 }
 
+/// `scheduleEvents`: newest-first events of one schedule for run
+/// history — the payload's `scheduleId` (or the pre-rename `taskId`)
+/// selects the rows, newest `received_at` first with `rowid` as the
+/// tie-break, limit clamped to 1..=200. Shared by the read door and the
+/// runner's writer connection (one query, two doors).
+fn schedule_events_on(
+    connection: &Connection,
+    schedule_id: &str,
+    limit: i64,
+) -> Result<Vec<LedgerEvent>, LedgerError> {
+    let bounded = limit.clamp(1, 200);
+    let mut statement = connection.prepare(
+        "SELECT * FROM openbutler_events
+         WHERE COALESCE(json_extract(payload_json, '$.scheduleId'), json_extract(payload_json, '$.taskId')) = ?1
+         ORDER BY received_at DESC, rowid DESC LIMIT ?2",
+    )?;
+    let rows = statement
+        .query_map(rusqlite::params![schedule_id, bounded], event_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// The read door for callers that hold only a data directory (the
+/// `log` action). A missing database or table is an empty history.
+pub fn schedule_events(
+    data_dir: &Path,
+    schedule_id: &str,
+    limit: i64,
+) -> Result<Vec<LedgerEvent>, LedgerError> {
+    let Some(connection) = open_readonly(data_dir)? else {
+        return Ok(Vec::new());
+    };
+    if !table_exists(&connection, "openbutler_events")? {
+        return Ok(Vec::new());
+    }
+    schedule_events_on(&connection, schedule_id, limit)
+}
+
 impl LedgerWriter {
-    /// `scheduleEvents`: newest-first events of one schedule for run
-    /// history — the payload's `scheduleId` (or the pre-rename
-    /// `taskId`) selects the rows, newest `received_at` first with
-    /// `rowid` as the tie-break, limit clamped to 1..=200.
     pub fn schedule_events(
         &self,
         schedule_id: &str,
         limit: i64,
     ) -> Result<Vec<LedgerEvent>, LedgerError> {
-        let bounded = limit.clamp(1, 200);
-        let mut statement = self.connection.prepare(
-            "SELECT * FROM openbutler_events
-             WHERE COALESCE(json_extract(payload_json, '$.scheduleId'), json_extract(payload_json, '$.taskId')) = ?1
-             ORDER BY received_at DESC, rowid DESC LIMIT ?2",
+        schedule_events_on(&self.connection, schedule_id, limit)
+    }
+
+    /// `getEvent`: one row by id.
+    pub fn get_event(&self, event_id: &str) -> Result<Option<LedgerEvent>, LedgerError> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT * FROM openbutler_events WHERE event_id = ?1",
+                [event_id],
+                event_from_row,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// `claimEvent`: pending → processing with `attempts + 1` and a
+    /// cleared error; `None` when the row was not claimable (another
+    /// claim, or not pending). The pump's single-claim gate.
+    pub fn claim_event(&self, event_id: &str) -> Result<Option<LedgerEvent>, LedgerError> {
+        let changed = self.connection.execute(
+            "UPDATE openbutler_events
+             SET status = 'processing', attempts = attempts + 1, updated_at = ?1, error = NULL
+             WHERE event_id = ?2 AND status = 'pending'",
+            rusqlite::params![now_iso(), event_id],
         )?;
-        let rows = statement
-            .query_map(rusqlite::params![schedule_id, bounded], event_from_row)?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.get_event(event_id)
+    }
+
+    /// `setEventState`: the plain status/error write (no state guard —
+    /// the source has none). The source passes the error through its
+    /// redaction engine; that gate is deferred with the tool-output one
+    /// (`docs/agent-loop.md`), a cutover prerequisite.
+    pub fn set_event_state(
+        &self,
+        event_id: &str,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        self.connection.execute(
+            "UPDATE openbutler_events SET status = ?1, error = ?2, updated_at = ?3
+             WHERE event_id = ?4",
+            rusqlite::params![state, error, now_iso(), event_id],
+        )?;
+        Ok(())
+    }
+
+    /// `recoverInterruptedEvents`: a restart leaves `processing` rows
+    /// split by source — retryable sources go back to `pending`, the
+    /// rest become `interrupted`, each with the source's message.
+    pub fn recover_interrupted_events(&self) -> Result<u64, LedgerError> {
+        let changed = self.connection.execute(
+            "UPDATE openbutler_events SET
+             status = CASE WHEN source IN ('notification','owner-inbox','worker') OR (source = 'telegram' AND kind LIKE 'inbox.%') THEN 'pending' ELSE 'interrupted' END,
+             error = CASE WHEN source = 'owner-inbox' THEN 'Owner message is available for retry after host restart.' ELSE 'Host stopped while this event was being processed.' END,
+             updated_at = ?1
+             WHERE status = 'processing'",
+            [now_iso()],
+        )?;
+        Ok(changed as u64)
     }
 
     /// `retryEvent` through the writer's own connection — the runner's

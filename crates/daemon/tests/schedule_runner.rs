@@ -138,7 +138,7 @@ async fn disabled_and_invalid_triggers_read_their_statuses() {
     disabled.enabled = false;
     let invalid = schedule("d2", "daily", json!({ "at": "9:00" }));
 
-    harness.runner.reload(vec![disabled, invalid]).await;
+    harness.runner.reload(vec![disabled, invalid]);
 
     assert_eq!(
         harness.status_of("d1"),
@@ -165,8 +165,7 @@ async fn manual_is_active_and_never_emits() {
     let harness = harness("manual");
     harness
         .runner
-        .reload(vec![schedule("m1", "manual", json!({}))])
-        .await;
+        .reload(vec![schedule("m1", "manual", json!({}))]);
     assert_eq!(
         harness.status_of("m1").map(|entry| entry.state),
         Some(TriggerState::Active)
@@ -188,7 +187,7 @@ async fn interval_fires_immediately_when_the_stored_due_is_in_the_past() {
         .expect("seed due");
     let before = chrono::Utc::now().timestamp_millis();
 
-    harness.runner.reload(vec![schedule_ref.clone()]).await;
+    harness.runner.reload(vec![schedule_ref.clone()]);
 
     let event = harness
         .wait_for_event(Duration::from_secs(3), "schedule.interval")
@@ -231,7 +230,7 @@ async fn at_fires_once_then_stays_scheduled_until_delivered() {
         .timestamp_millis();
     let schedule_ref = schedule("a1", "at", json!({ "at": at }));
 
-    harness.runner.reload(vec![schedule_ref.clone()]).await;
+    harness.runner.reload(vec![schedule_ref.clone()]);
     let event = harness
         .wait_for_event(Duration::from_secs(3), "schedule.at")
         .await
@@ -240,7 +239,7 @@ async fn at_fires_once_then_stays_scheduled_until_delivered() {
     assert_eq!(event.payload["facts"]["scheduledAt"], to_iso(due));
 
     // Second reload: the pending event is found — active, no re-fire.
-    harness.runner.reload(vec![schedule_ref.clone()]).await;
+    harness.runner.reload(vec![schedule_ref.clone()]);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(harness.event_count(), 1, "one-shot must not fire twice");
     assert_eq!(
@@ -258,7 +257,7 @@ async fn at_fires_once_then_stays_scheduled_until_delivered() {
             )
             .expect("deliver");
     }
-    harness.runner.reload(vec![schedule_ref.clone()]).await;
+    harness.runner.reload(vec![schedule_ref.clone()]);
     assert_eq!(
         harness.status_of("a1").map(|entry| entry.state),
         Some(TriggerState::Completed)
@@ -300,7 +299,7 @@ async fn interrupted_at_prior_retries_the_event_without_rearming() {
             .expect("interrupt");
     }
 
-    harness.runner.reload(vec![schedule_ref]).await;
+    harness.runner.reload(vec![schedule_ref]);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
         harness.event_count(),
@@ -331,14 +330,11 @@ async fn window_in_the_past_fires_late_immediately() {
         .single()
         .expect("local instant")
         .timestamp_millis();
-    harness
-        .runner
-        .reload(vec![schedule(
-            "w1",
-            "window",
-            json!({ "from": from, "to": "2020-01-01T11:00" }),
-        )])
-        .await;
+    harness.runner.reload(vec![schedule(
+        "w1",
+        "window",
+        json!({ "from": from, "to": "2020-01-01T11:00" }),
+    )]);
 
     let event = harness
         .wait_for_event(Duration::from_secs(3), "schedule.window")
@@ -353,14 +349,12 @@ async fn reload_replaces_the_previous_statuses_and_stops() {
     let harness = harness("replace");
     harness
         .runner
-        .reload(vec![schedule("old", "manual", json!({}))])
-        .await;
+        .reload(vec![schedule("old", "manual", json!({}))]);
     assert_eq!(harness.runner.list_statuses().len(), 1);
 
     harness
         .runner
-        .reload(vec![schedule("new", "manual", json!({}))])
-        .await;
+        .reload(vec![schedule("new", "manual", json!({}))]);
     let statuses = harness.runner.list_statuses();
     assert_eq!(statuses.len(), 1, "close() cleared the old entries");
     assert_eq!(statuses[0].id, "new");
@@ -374,18 +368,15 @@ async fn filesystem_change_emits_and_close_stops_the_watcher() {
         .to_string_lossy()
         .into_owned();
     let harness = harness("fs");
-    harness
-        .runner
-        .reload(vec![schedule(
-            "f1",
-            "filesystem",
-            json!({
-                "path": dir.to_string_lossy(),
-                "recursive": false,
-                "debounceSeconds": 1,
-            }),
-        )])
-        .await;
+    harness.runner.reload(vec![schedule(
+        "f1",
+        "filesystem",
+        json!({
+            "path": dir.to_string_lossy(),
+            "recursive": false,
+            "debounceSeconds": 1,
+        }),
+    )]);
     assert_eq!(
         harness.status_of("f1").map(|entry| entry.state),
         Some(TriggerState::Active)
@@ -424,14 +415,11 @@ async fn filesystem_change_emits_and_close_stops_the_watcher() {
 #[tokio::test]
 async fn memory_pressure_starts_and_close_clears_it() {
     let harness = harness("memory");
-    harness
-        .runner
-        .reload(vec![schedule(
-            "m1",
-            "memory_pressure",
-            json!({ "usedPercent": 99, "sampleSeconds": 10, "durationSeconds": 60 }),
-        )])
-        .await;
+    harness.runner.reload(vec![schedule(
+        "m1",
+        "memory_pressure",
+        json!({ "usedPercent": 99, "sampleSeconds": 10, "durationSeconds": 60 }),
+    )]);
     assert_eq!(
         harness.status_of("m1").map(|entry| entry.state),
         Some(TriggerState::Active)
@@ -445,17 +433,15 @@ async fn shutdown_clears_and_refuses_further_reloads() {
     let harness = harness("shutdown");
     harness
         .runner
-        .reload(vec![schedule("s1", "manual", json!({}))])
-        .await;
+        .reload(vec![schedule("s1", "manual", json!({}))]);
 
-    harness.runner.shutdown().await.expect("clean shutdown");
+    harness.runner.shutdown().expect("clean shutdown");
     assert!(harness.runner.list_statuses().is_empty());
 
     // The shutting-down guard: a later reload starts nothing.
     harness
         .runner
-        .reload(vec![schedule("s2", "manual", json!({}))])
-        .await;
+        .reload(vec![schedule("s2", "manual", json!({}))]);
     assert!(harness.runner.list_statuses().is_empty());
 }
 

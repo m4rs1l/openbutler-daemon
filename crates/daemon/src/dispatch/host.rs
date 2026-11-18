@@ -93,6 +93,9 @@ pub struct Host {
     /// record when the turn starts. Std mutex — every section is a map
     /// touch, never spanning an await.
     model_picks: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+    /// The schedule runner (trigger lifetimes). Set once at boot; the
+    /// `schedule.manage` CRUD reloads it and `list` reads its statuses.
+    scheduler: RwLock<Option<crate::schedule::ScheduleRunner>>,
 }
 
 impl Host {
@@ -112,6 +115,7 @@ impl Host {
             fanout: Fanout::new(),
             runtime_view: RwLock::new(None),
             model_picks: std::sync::Mutex::new(std::collections::HashMap::new()),
+            scheduler: RwLock::new(None),
         }
     }
 
@@ -208,6 +212,25 @@ impl Host {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Install the schedule runner (boot wiring or a test).
+    pub fn set_scheduler(&self, scheduler: crate::schedule::ScheduleRunner) {
+        *self
+            .scheduler
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(scheduler);
+    }
+
+    /// The installed runner (the CRUD reloads it, `list` reads its
+    /// statuses). `None` before boot wiring: adapter states then read
+    /// `idle`, which is the source's fallback for an unknown id.
+    pub fn scheduler(
+        &self,
+    ) -> std::sync::RwLockReadGuard<'_, Option<crate::schedule::ScheduleRunner>> {
+        self.scheduler
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// The current status view (`status` action).

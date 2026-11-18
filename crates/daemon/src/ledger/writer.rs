@@ -171,6 +171,10 @@ impl LedgerWriter {
         let connection = Connection::open(data_dir.join("state.db"))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
+        // better-sqlite3's default `timeout: 5000` — the host writer and
+        // a short-lived writer (usage, events) may overlap; wait instead
+        // of failing with SQLITE_BUSY.
+        connection.busy_timeout(std::time::Duration::from_millis(5_000))?;
         connection.execute_batch(&tool_action_schema())?;
         connection.execute_batch(&super::usage::usage_schema())?;
         Ok(LedgerWriter { connection })

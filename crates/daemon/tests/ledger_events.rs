@@ -159,3 +159,102 @@ fn payload_ceiling_is_utf8_bytes_not_characters() {
     input.payload = json!(format!("x{}", "a".repeat(256 * 1024)));
     writer.insert_event(&input).expect("notification ceiling");
 }
+
+#[test]
+fn claim_moves_pending_to_processing_exactly_once() {
+    let root = temp_root("claim");
+    let writer = LedgerWriter::open(&root).expect("writer opens");
+    let (id, _) = writer
+        .insert_event(&event("schedule:s1:1"))
+        .expect("insert");
+
+    let claimed = writer.claim_event(&id).expect("claim").expect("row");
+    assert_eq!(claimed.status, "processing");
+    assert_eq!(claimed.attempts, 1);
+    assert_eq!(claimed.error, None, "the claim clears the error");
+
+    // A second claim finds no pending row — the pump's single-claim gate.
+    assert!(writer.claim_event(&id).expect("second claim").is_none());
+    let row = writer.get_event(&id).expect("read").expect("row");
+    assert_eq!(row.attempts, 1, "the failed claim must not bump attempts");
+}
+
+#[test]
+fn set_event_state_writes_status_and_error_plainly() {
+    let root = temp_root("set-state");
+    let writer = LedgerWriter::open(&root).expect("writer opens");
+    let (id, _) = writer
+        .insert_event(&event("schedule:s1:1"))
+        .expect("insert");
+
+    writer
+        .set_event_state(&id, "failed", Some("Workspace is missing: /gone"))
+        .expect("fail");
+    let row = writer.get_event(&id).expect("read").expect("row");
+    assert_eq!(row.status, "failed");
+    assert_eq!(row.error.as_deref(), Some("Workspace is missing: /gone"));
+
+    // No state guard (the source has none): any status writes.
+    writer
+        .set_event_state(&id, "delivered", None)
+        .expect("deliver");
+    let row = writer.get_event(&id).expect("read").expect("row");
+    assert_eq!(row.status, "delivered");
+    assert_eq!(row.error, None, "None clears the error column");
+}
+
+#[test]
+fn recover_interrupted_splits_processing_rows_by_source() {
+    let root = temp_root("recover");
+    let writer = LedgerWriter::open(&root).expect("writer opens");
+    let insert = |source: &str, kind: &str, key: &str| {
+        let input = EventInput {
+            source: source.to_owned(),
+            kind: kind.to_owned(),
+            dedupe_key: key.to_owned(),
+            workspace_root: None,
+            occurred_at: None,
+            payload: json!({}),
+        };
+        let (id, _) = writer.insert_event(&input).expect("insert");
+        writer
+            .set_event_state(&id, "processing", None)
+            .expect("processing");
+        id
+    };
+    let schedule = insert("schedule:interval", "schedule.interval", "k1");
+    let notification = insert("notification", "message", "k2");
+    let inbox = insert("owner-inbox", "message", "k3");
+    let telegram = insert("telegram", "inbox.message", "k4");
+    // A delivered row must not be touched.
+    let delivered = insert("schedule:at", "schedule.at", "k5");
+    writer
+        .set_event_state(&delivered, "delivered", None)
+        .expect("deliver");
+
+    let recovered = writer.recover_interrupted_events().expect("recover");
+    assert_eq!(recovered, 4, "only the processing rows move");
+
+    let row = |id: &str| writer.get_event(id).expect("read").expect("row");
+    let schedule_row = row(&schedule);
+    assert_eq!(schedule_row.status, "interrupted");
+    assert_eq!(
+        schedule_row.error.as_deref(),
+        Some("Host stopped while this event was being processed.")
+    );
+    let notification_row = row(&notification);
+    assert_eq!(notification_row.status, "pending");
+    assert_eq!(
+        notification_row.error.as_deref(),
+        Some("Host stopped while this event was being processed.")
+    );
+    let inbox_row = row(&inbox);
+    assert_eq!(inbox_row.status, "pending");
+    assert_eq!(
+        inbox_row.error.as_deref(),
+        Some("Owner message is available for retry after host restart.")
+    );
+    let telegram_row = row(&telegram);
+    assert_eq!(telegram_row.status, "pending", "telegram inbox.* retries");
+    assert_eq!(row(&delivered).status, "delivered", "terminal rows stay");
+}

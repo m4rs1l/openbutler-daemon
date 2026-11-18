@@ -92,8 +92,13 @@ pub struct ScheduleRunner {
     log: Log,
     stops: Mutex<HashMap<String, Box<dyn FnOnce() + Send>>>,
     statuses: Arc<Mutex<Vec<ScheduleStatus>>>,
-    reload_lock: tokio::sync::Mutex<()>,
+    /// Reload serialization (the source's promise chain). Sync — the
+    /// reload body never awaits, and dispatch is a sync surface.
+    reload_lock: Mutex<()>,
     shutting_down: AtomicBool,
+    /// The runtime that owns every adapter task. Captured at construction
+    /// (boot or a test), so a sync `reload` can spawn from any thread.
+    runtime: tokio::runtime::Handle,
 }
 
 fn now_ms() -> i64 {
@@ -149,8 +154,9 @@ impl ScheduleRunner {
             log,
             stops: Mutex::new(HashMap::new()),
             statuses: Arc::new(Mutex::new(Vec::new())),
-            reload_lock: tokio::sync::Mutex::new(()),
+            reload_lock: Mutex::new(()),
             shutting_down: AtomicBool::new(false),
+            runtime: tokio::runtime::Handle::current(),
         }
     }
 
@@ -158,8 +164,11 @@ impl ScheduleRunner {
     /// then (re)start each schedule — disabled reads `disabled`, an
     /// invalid trigger or a failing start reads `error` with a log line.
     /// Never rejects; per-schedule failures are statuses, not errors.
-    pub async fn reload(&self, schedules: Vec<ScheduleState>) {
-        let _queued = self.reload_lock.lock().await;
+    pub fn reload(&self, schedules: Vec<ScheduleState>) {
+        let _queued = self
+            .reload_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if self.shutting_down.load(Ordering::SeqCst) {
             return;
         }
@@ -245,22 +254,32 @@ impl ScheduleRunner {
 
     /// Mark shutdown and wait for a reload already in flight, up to the
     /// source's 10-second deadline. On timeout the error surfaces and
-    /// `close` does NOT run — exactly `withDeadline` + `shutdown`.
-    pub async fn shutdown(&self) -> Result<(), String> {
+    /// `close` does NOT run — exactly `withDeadline` + `shutdown`. The
+    /// reload body never awaits, so a stuck lock here means a panic or a
+    /// wedged thread; polling with the deadline mirrors the race.
+    pub fn shutdown(&self) -> Result<(), String> {
         self.shutting_down.store(true, Ordering::SeqCst);
-        let pending = tokio::time::timeout(
-            Duration::from_millis(RELOAD_DEADLINE_MS),
-            self.reload_lock.lock(),
-        )
-        .await;
-        match pending {
-            Ok(_pending) => {
-                self.close();
-                Ok(())
+        let deadline = std::time::Instant::now() + Duration::from_millis(RELOAD_DEADLINE_MS);
+        loop {
+            match self.reload_lock.try_lock() {
+                Ok(_pending) => {
+                    self.close();
+                    return Ok(());
+                }
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                    drop(poisoned.into_inner());
+                    self.close();
+                    return Ok(());
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!(
+                            "Schedule reload did not finish within {RELOAD_DEADLINE_MS} ms."
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
-            Err(_) => Err(format!(
-                "Schedule reload did not finish within {RELOAD_DEADLINE_MS} ms."
-            )),
         }
     }
 
@@ -305,7 +324,7 @@ impl ScheduleRunner {
 
         let id = schedule.id.clone();
         let log = Arc::clone(&self.log);
-        let handle = tokio::spawn(async move {
+        let handle = self.runtime.spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(delay_ms(due, now_ms()))).await;
                 if due > now_ms() {
@@ -390,7 +409,7 @@ impl ScheduleRunner {
         }
         let id = schedule.id.clone();
         let log = Arc::clone(&self.log);
-        let handle = tokio::spawn(async move {
+        let handle = self.runtime.spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(delay_ms(due, now_ms()))).await;
                 if due > now_ms() {
@@ -422,7 +441,7 @@ impl ScheduleRunner {
         }
         let id = schedule.id.clone();
         let log = Arc::clone(&self.log);
-        let handle = tokio::spawn(async move {
+        let handle = self.runtime.spawn(async move {
             loop {
                 if from > now_ms() {
                     tokio::time::sleep(Duration::from_millis(delay_ms(from, now_ms()))).await;
@@ -475,7 +494,7 @@ impl ScheduleRunner {
         let id = schedule.id.clone();
         let log = Arc::clone(&self.log);
         let statuses = Arc::clone(&self.statuses);
-        let handle = tokio::spawn(async move {
+        let handle = self.runtime.spawn(async move {
             let mut due = first.at_ms;
             let mut shifted = first.shifted;
             // Each arm recomputes the next occurrence from the wall clock,
@@ -618,7 +637,7 @@ impl ScheduleRunner {
 
         let root = path.to_string_lossy().into_owned();
         let id = schedule.id.clone();
-        let handle = tokio::spawn(async move {
+        let handle = self.runtime.spawn(async move {
             loop {
                 if lock(&changes).is_empty() {
                     signal.notified().await;
@@ -682,7 +701,7 @@ impl ScheduleRunner {
         let duration_ms = option_i64(schedule, "durationSeconds").unwrap_or(60) * 1000;
         let log = Arc::clone(&self.log);
         let mut system = sysinfo::System::new().map_err(|error| error.to_string())?;
-        let handle = tokio::spawn(async move {
+        let handle = self.runtime.spawn(async move {
             let mut exceeded_at: Option<i64> = None;
             let mut incident: Option<String> = None;
             loop {

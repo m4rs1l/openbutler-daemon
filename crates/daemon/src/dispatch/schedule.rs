@@ -1,11 +1,12 @@
 //! `schedule.manage`: the schedule actions over their own store.
 //!
 //! Source: `daemon-host.ts` `schedule.manage` → `schedule-service.ts`
-//! `executeBackground` (read 2026-11-16). This slice owns `capabilities`
-//! and the CRUD persisted in `schedules.json` (schedules left the
-//! settings file entirely — owner ruling 2026-11-18); `run`, `list` and
-//! `log` need the ledger and scheduler runtime and are not implemented
-//! here.
+//! `executeBackground` (read 2026-11-16, the runtime half re-read
+//! 2026-11-18). This slice owns every action: capabilities, the CRUD
+//! persisted in `schedules.json` (schedules left the settings file
+//! entirely — owner ruling 2026-11-18), and the runtime half `run`,
+//! `list`, `log`. The pump that consumes a queued `run` event is the
+//! next slice.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -13,7 +14,10 @@ use std::path::Path;
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use serde_json::{Map, Value, json};
 
+use super::Host;
 use crate::dispatch::{envelope_failure, envelope_success};
+use crate::ledger::{self, EventInput, LedgerWriter, StateReader};
+use crate::schedule as engine;
 use crate::shape::is_absolute_path;
 use crate::state::schedules::{
     ScheduleState, ScheduleTrigger, load as load_schedules, parse_schedule_state,
@@ -36,7 +40,11 @@ const CAPABILITIES: [&str; 7] = [
 ];
 
 /// The single dispatch point for `schedule.manage`.
-pub(crate) fn handle_schedule_manage(data_dir: &Path, request: &DaemonRequest) -> DaemonResponse {
+pub(crate) fn handle_schedule_manage(
+    host: &Host,
+    data_dir: &Path,
+    request: &DaemonRequest,
+) -> DaemonResponse {
     let Some(input) = request.get("input").and_then(Value::as_object) else {
         return fail(request, "input must be an object.".to_owned());
     };
@@ -44,13 +52,16 @@ pub(crate) fn handle_schedule_manage(data_dir: &Path, request: &DaemonRequest) -
     if action == "capabilities" {
         return success(request, json!({ "adapters": capabilities() }));
     }
-    // The runtime half needs the ledger and scheduler; refusing by name
-    // keeps the gap visible instead of answering with a wrong shape.
-    if matches!(action.as_str(), "run" | "list" | "log") {
-        return fail(
-            request,
-            format!("Schedule action `{action}` needs the scheduler runtime (not implemented)."),
-        );
+    // The runtime half, in the source's order: list, log, then the
+    // scheduleId-gated run — before the CRUD below.
+    if action == "list" {
+        return list_schedules(host, data_dir, request);
+    }
+    if action == "log" {
+        return log_schedule(data_dir, request, input);
+    }
+    if action == "run" {
+        return run_schedule(data_dir, request, input);
     }
 
     let mut schedules = match load_schedules(data_dir) {
@@ -64,10 +75,17 @@ pub(crate) fn handle_schedule_manage(data_dir: &Path, request: &DaemonRequest) -
                 if let Err(error) = save_schedules(data_dir, &schedules) {
                     return fail(request, error.to_string());
                 }
-                success(
-                    request,
-                    json!({ "status": "completed", "schedule": schedule, "saved": true }),
-                )
+                reload_runner(host, &schedules);
+                let schedule_id = schedule
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                let runtime = runtime_status(host, &schedule_id);
+                let mut body =
+                    json!({ "status": status_word(&runtime), "schedule": schedule, "saved": true });
+                attach_runtime(&mut body, runtime);
+                success(request, body)
             }
             Err(error) => fail(request, error),
         },
@@ -92,10 +110,11 @@ pub(crate) fn handle_schedule_manage(data_dir: &Path, request: &DaemonRequest) -
             if let Err(error) = save_schedules(data_dir, &schedules) {
                 return fail(request, error.to_string());
             }
-            success(
-                request,
-                json!({ "status": "completed", "scheduleId": schedule_id, "saved": true }),
-            )
+            reload_runner(host, &schedules);
+            let runtime = runtime_status(host, &schedule_id);
+            let mut body = json!({ "status": status_word(&runtime), "scheduleId": schedule_id, "saved": true });
+            attach_runtime(&mut body, runtime);
+            success(request, body)
         }
         other => fail(request, format!("Unknown schedule action: {other}")),
     }
@@ -545,4 +564,201 @@ fn success(request: &DaemonRequest, result: Value) -> DaemonResponse {
 
 fn fail(request: &DaemonRequest, error: String) -> DaemonResponse {
     envelope_failure(&request.id, &error)
+}
+
+// ------------------------------------------------------- the runtime half
+
+/// Reload the installed runner after a store change (the source awaits
+/// `scheduler.reload` before reading the status back). No runner yet:
+/// nothing to reload — the response then carries no `runtime`, which is
+/// the source's JSON for `undefined`.
+fn reload_runner(host: &Host, schedules: &[ScheduleState]) {
+    let installed = host.scheduler();
+    if let Some(runner) = installed.as_ref() {
+        runner.reload(schedules.to_vec());
+    }
+}
+
+/// The runner's status for one schedule, if the boot wired one.
+fn runtime_status(host: &Host, schedule_id: &str) -> Option<engine::ScheduleStatus> {
+    let installed = host.scheduler();
+    installed
+        .as_ref()?
+        .list_statuses()
+        .into_iter()
+        .find(|entry| entry.id == schedule_id)
+}
+
+/// `status: runtime?.state === 'error' ? 'error' : 'completed'`.
+fn status_word(runtime: &Option<engine::ScheduleStatus>) -> &'static str {
+    match runtime.as_ref().map(|entry| entry.state) {
+        Some(engine::TriggerState::Error) => "error",
+        _ => "completed",
+    }
+}
+
+/// The source's `runtime` property: present when the runner knows the
+/// id, absent (undefined) when it does not.
+fn attach_runtime(body: &mut Value, runtime: Option<engine::ScheduleStatus>) {
+    if let Some(runtime) = runtime
+        && let Ok(serialized) = serde_json::to_value(runtime)
+    {
+        body["runtime"] = serialized;
+    }
+}
+
+/// `list`: every stored schedule with its adapter status, durable
+/// runtime, and the one-line description.
+fn list_schedules(host: &Host, data_dir: &Path, request: &DaemonRequest) -> DaemonResponse {
+    let schedules = match load_schedules(data_dir) {
+        Ok(schedules) => schedules,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    let reader = match StateReader::open(data_dir) {
+        Ok(reader) => reader,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    let statuses: std::collections::HashMap<String, engine::ScheduleStatus> = {
+        let installed = host.scheduler();
+        installed
+            .as_ref()
+            .map(|runner| {
+                runner
+                    .list_statuses()
+                    .into_iter()
+                    .map(|entry| (entry.id.clone(), entry))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let entries: Vec<Value> = schedules
+        .iter()
+        .map(|schedule| {
+            let status = statuses.get(&schedule.id);
+            let runtime = engine::read_schedule_runtime(&schedule.id, |key| reader.get(key));
+            let description = engine::describe_schedule(
+                schedule,
+                now,
+                engine::read_trigger_due(schedule, |key| reader.get(key)),
+            );
+            let mut entry = serde_json::to_value(schedule).unwrap_or(Value::Null);
+            entry["adapterState"] = status
+                .map(|entry| serde_json::to_value(entry.state).unwrap_or(Value::Null))
+                .unwrap_or_else(|| Value::String("idle".to_owned()));
+            if let Some(error) = status.and_then(|entry| entry.error.as_ref()) {
+                entry["adapterError"] = Value::String(error.clone());
+            }
+            if let Ok(serialized) = serde_json::to_value(runtime) {
+                entry["runtime"] = serialized;
+            }
+            if let Ok(serialized) = serde_json::to_value(description) {
+                entry["schedule"] = serialized;
+            }
+            entry
+        })
+        .collect();
+    success(request, json!({ "schedules": entries }))
+}
+
+/// `log`: the schedule's run history, newest first, with the payload's
+/// `scheduledAt` surfaced when the facts carry it.
+fn log_schedule(
+    data_dir: &Path,
+    request: &DaemonRequest,
+    input: &Map<String, Value>,
+) -> DaemonResponse {
+    let schedule_id = match require_string(input.get("scheduleId"), "scheduleId", 64) {
+        Ok(id) => id,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    let schedules = match load_schedules(data_dir) {
+        Ok(schedules) => schedules,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    if !schedules
+        .iter()
+        .any(|candidate| candidate.id == schedule_id)
+    {
+        return fail(request, "Schedule does not exist.".to_owned());
+    }
+    let rows = match ledger::schedule_events(data_dir, &schedule_id, 50) {
+        Ok(rows) => rows,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    let runs: Vec<Value> = rows
+        .into_iter()
+        .map(|event| {
+            let mut run = json!({
+                "eventId": event.id,
+                "kind": event.kind,
+                "status": event.status,
+                "occurredAt": event.occurred_at,
+                "receivedAt": event.received_at,
+            });
+            if let Some(scheduled_at) = event
+                .payload
+                .get("facts")
+                .and_then(|facts| facts.get("scheduledAt"))
+            {
+                run["scheduledAt"] = scheduled_at.clone();
+            }
+            // The source's truthiness: an empty error string is omitted.
+            if let Some(error) = event.error.filter(|text| !text.is_empty()) {
+                run["error"] = Value::String(error);
+            }
+            run
+        })
+        .collect();
+    success(request, json!({ "scheduleId": schedule_id, "runs": runs }))
+}
+
+/// `run`: queue one manual firing. The pump (next slice) consumes it;
+/// this half only writes the event, exactly as `receiveEvent` did.
+fn run_schedule(
+    data_dir: &Path,
+    request: &DaemonRequest,
+    input: &Map<String, Value>,
+) -> DaemonResponse {
+    let schedule_id = match require_string(input.get("scheduleId"), "scheduleId", 64) {
+        Ok(id) => id,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    let schedules = match load_schedules(data_dir) {
+        Ok(schedules) => schedules,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    let Some(schedule) = schedules
+        .iter()
+        .find(|candidate| candidate.id == schedule_id)
+    else {
+        return fail(request, "Schedule does not exist.".to_owned());
+    };
+    if !schedule.enabled {
+        return fail(request, "Enable the schedule before running it.".to_owned());
+    }
+    let writer = match LedgerWriter::open(data_dir) {
+        Ok(writer) => writer,
+        Err(error) => return fail(request, error.to_string()),
+    };
+    let event = EventInput {
+        source: "schedule:manual".to_owned(),
+        kind: "schedule.requested".to_owned(),
+        dedupe_key: format!("schedule:{schedule_id}:manual:{}", uuid::Uuid::new_v4()),
+        workspace_root: Some(schedule.workspace_root.clone()),
+        occurred_at: None,
+        payload: json!({
+            "scheduleId": schedule_id,
+            "facts": {
+                "requestedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            },
+        }),
+    };
+    if let Err(error) = writer.insert_event(&event) {
+        return fail(request, error.to_string());
+    }
+    success(
+        request,
+        json!({ "status": "queued", "scheduleId": schedule_id }),
+    )
 }

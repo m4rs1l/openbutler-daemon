@@ -101,6 +101,49 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             production_door_config(),
             Arc::downgrade(&host),
         )));
+        // The schedule runner: one host writer, publishes straight into
+        // the feed, boot-reloads every stored trigger. Interrupted rows
+        // recover first — the one-shot priors read clean state.
+        let mut schedule_writer =
+            match openbutler_daemon::ledger::LedgerWriter::open(&config::data_dir()) {
+                Ok(writer) => writer,
+                Err(error) => {
+                    eprintln!("openbutler-daemon: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+        if let Err(error) = schedule_writer.recover_interrupted_actions() {
+            eprintln!("openbutler-daemon: {error}");
+            return ExitCode::FAILURE;
+        }
+        if let Err(error) = schedule_writer.recover_interrupted_events() {
+            eprintln!("openbutler-daemon: {error}");
+            return ExitCode::FAILURE;
+        }
+        let schedule_writer = Arc::new(std::sync::Mutex::new(schedule_writer));
+        let publish_writer = Arc::clone(&schedule_writer);
+        let runner = openbutler_daemon::schedule::ScheduleRunner::new(
+            Arc::clone(&schedule_writer),
+            Arc::new(move |event| {
+                publish_writer
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert_event(&event)
+                    .map(|_inserted| ())
+                    .map_err(|error| error.to_string())
+            }),
+            Arc::new(|message: String| eprintln!("openbutler-daemon: {message}")),
+        );
+        let stored_schedules = match openbutler_daemon::state::schedules::load(&config::data_dir())
+        {
+            Ok(schedules) => schedules,
+            Err(error) => {
+                eprintln!("openbutler-daemon: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        runner.reload(stored_schedules);
+        host.set_scheduler(runner);
         let shutdown = host.subscribe_shutdown();
 
         if let Some(addr) = listen {

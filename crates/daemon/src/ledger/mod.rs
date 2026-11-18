@@ -11,7 +11,7 @@ mod usage;
 mod writer;
 
 pub use events::{EventInput, OBSERVED_EVENT_STATES};
-pub use feed::{list_actions, list_events, retry_event};
+pub use feed::{list_actions, list_events, retry_event, schedule_events};
 pub use state::StateReader;
 pub use usage::{StepUsageReport, UsageInput, UsageRow, UsageTokens};
 pub use writer::{LedgerWriter, TOOL_ACTION_STATES, ToolActionState, ToolActionUpdate};
