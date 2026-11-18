@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Compaction engine (`compaction/engine.rs`): `compact_conversation`
+  with the measured budget arithmetic (both skips with zero calls, the
+  output ceiling, window slack), byte-exact guard sentences
+  (cut-off/text-only/empty/stream error), the checkpoint build over the
+  projection, refusal-as-data outcomes (`exceeds-window`,
+  `no-reduction`), the recovery suffix, and the full sliced chain
+  (per-slice notes, bounded condense rounds, verbatim tail, forced
+  final call) through the real door against the fake sidecar.
+  `docs/context-compaction.md` documents the contract.
 - Compaction slice chunker (`compaction/slicing.rs`): greedy
   transcript chunking that never splits a tool call from its result -
   a slice closes only while no call inside it is unresolved (the

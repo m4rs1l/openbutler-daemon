@@ -83,6 +83,31 @@ process.stdin.on("data", (chunk) => {
           message: "slow down",
         });
         break;
+      case "length":
+        emit({ type: "text-delta", id, delta: "partial summary" });
+        emit({ type: "usage", id, promptTokens: 10, completionTokens: 5, totalTokens: 15 });
+        emit({ type: "finish", id, finishReason: "length" });
+        break;
+      case "tool":
+        emit({ type: "tool-call", id, name: "grep", arguments: {}, callId: "c1" });
+        emit({ type: "usage", id, promptTokens: 10, completionTokens: 5, totalTokens: 15 });
+        emit({ type: "finish", id, finishReason: "tool_calls" });
+        break;
+      case "empty":
+        emit({ type: "usage", id, promptTokens: 10, completionTokens: 0, totalTokens: 10 });
+        emit({ type: "finish", id, finishReason: "stop" });
+        break;
+      case "echo": {
+        const messages = command.messages ?? [];
+        const last = messages[messages.length - 1];
+        const content = typeof last?.content === "string" ? last.content : "";
+        const probe = content.includes("one-time recovery from a full context window")
+          ? "recovery-suffix-present"
+          : "recovery-suffix-missing";
+        emit({ type: "text-delta", id, delta: probe });
+        emit({ type: "finish", id, finishReason: "stop" });
+        break;
+      }
       default:
         emit({ type: "text-delta", id, delta: "Hello" });
         emit({ type: "text-delta", id, delta: " world" });

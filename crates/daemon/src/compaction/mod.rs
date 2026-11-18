@@ -11,6 +11,7 @@
 
 mod conversation;
 mod core;
+mod engine;
 mod projection;
 mod slicing;
 
@@ -26,6 +27,10 @@ pub use core::{
     SLICE_MERGE_INSTRUCTION, SLICE_SYSTEM_PROMPT, SLICED_CONDENSE_ROUNDS, SLICED_NOTE_MIN_TOKENS,
     SLICED_NOTES_SHARE, SLICED_TAIL_SHARE, auto_compaction_trigger_tokens, estimate_context_tokens,
     estimate_text_tokens, estimate_tokens,
+};
+pub use engine::{
+    CompactOutcome, CompactionRequest, CompactionResult, ImpossibleReason, SkipReason,
+    compact_conversation,
 };
 pub use projection::{
     fold_oldest_dialogue, project_transcript, recovery_messages, render_tool_result_output,
