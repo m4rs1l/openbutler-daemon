@@ -101,6 +101,11 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             production_door_config(),
             Arc::downgrade(&host),
         )));
+        host.set_self_ref(&host);
+        // A pending schedule event from a previous run fires at boot —
+        // the source pumps at startup too (recovered interrupted rows
+        // are already final, so only `pending` is left to consume).
+        host.spawn_schedule_pump();
         // The schedule runner: one host writer, publishes straight into
         // the feed, boot-reloads every stored trigger. Interrupted rows
         // recover first — the one-shot priors read clean state.

@@ -11,7 +11,7 @@ pub mod fanout;
 mod host;
 pub(crate) mod schedule;
 pub mod session_send;
-mod session_write;
+pub(crate) mod session_write;
 
 pub use host::{DispatchState, Host};
 
@@ -708,7 +708,7 @@ fn record_pick_in_settings(
     crate::settings::save_settings(data_dir, &mut loaded).map_err(|error| error.to_string())
 }
 
-fn prepare_send(
+pub(crate) fn prepare_send(
     host: &Host,
     data_dir: &Path,
     session_id: &str,

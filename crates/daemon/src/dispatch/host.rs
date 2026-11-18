@@ -96,6 +96,10 @@ pub struct Host {
     /// The schedule runner (trigger lifetimes). Set once at boot; the
     /// `schedule.manage` CRUD reloads it and `list` reads its statuses.
     scheduler: RwLock<Option<crate::schedule::ScheduleRunner>>,
+    /// The host's own weak handle (set at boot): lets a `&self` method
+    /// spawn the schedule pump with an owned `Arc<Host>` — spawned
+    /// tasks need `'static`, and dispatch only ever holds `&Host`.
+    self_ref: std::sync::OnceLock<std::sync::Weak<Host>>,
 }
 
 impl Host {
@@ -116,6 +120,7 @@ impl Host {
             runtime_view: RwLock::new(None),
             model_picks: std::sync::Mutex::new(std::collections::HashMap::new()),
             scheduler: RwLock::new(None),
+            self_ref: std::sync::OnceLock::new(),
         }
     }
 
@@ -204,6 +209,31 @@ impl Host {
             .executor
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(executor);
+    }
+
+    /// Points the host at its own `Arc` (boot wiring): the handle the
+    /// pump spawn upgrades.
+    pub fn set_self_ref(&self, host: &Arc<Host>) {
+        let _ = self.self_ref.set(Arc::downgrade(host));
+    }
+
+    /// Runs one schedule-pump pass on the runtime (the source's
+    /// `pumpEvents` at startup and after every queued event). Safe to
+    /// call before `set_self_ref`: without the handle it does nothing.
+    pub fn spawn_schedule_pump(&self) {
+        let Some(host) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else {
+            return;
+        };
+        let Some(runtime) = tokio::runtime::Handle::try_current().ok() else {
+            return;
+        };
+        runtime.spawn(async move {
+            if let Err(error) =
+                crate::schedule::pump::pump_once(&host, &crate::config::data_dir()).await
+            {
+                eprintln!("openbutler-daemon: schedule pump: {error}");
+            }
+        });
     }
 
     /// The installed executor, if any.

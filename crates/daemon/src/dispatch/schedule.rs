@@ -61,7 +61,7 @@ pub(crate) fn handle_schedule_manage(
         return log_schedule(data_dir, request, input);
     }
     if action == "run" {
-        return run_schedule(data_dir, request, input);
+        return run_schedule(host, data_dir, request, input);
     }
 
     let mut schedules = match load_schedules(data_dir) {
@@ -716,6 +716,7 @@ fn log_schedule(
 /// `run`: queue one manual firing. The pump (next slice) consumes it;
 /// this half only writes the event, exactly as `receiveEvent` did.
 fn run_schedule(
+    host: &Host,
     data_dir: &Path,
     request: &DaemonRequest,
     input: &Map<String, Value>,
@@ -757,6 +758,9 @@ fn run_schedule(
     if let Err(error) = writer.insert_event(&event) {
         return fail(request, error.to_string());
     }
+    // The queued event fires now — the pump is the only consumer
+    // (legacy `receiveEvent` → `pumpEvents`).
+    host.spawn_schedule_pump();
     success(
         request,
         json!({ "status": "queued", "scheduleId": schedule_id }),

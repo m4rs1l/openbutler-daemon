@@ -12,6 +12,7 @@ mod header;
 mod list;
 mod paths;
 mod projects;
+pub(crate) use record::last_assistant_text;
 mod record;
 mod save;
 pub mod schedules;

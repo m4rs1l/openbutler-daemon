@@ -53,6 +53,20 @@ pub trait TurnExecutor: Send + Sync {
     /// become `Could not compact the session: …` notices, never the
     /// response.
     fn compact(self: Arc<Self>, session_id: String, recovery: bool);
+    /// Whether a session has a live runner without opening one — the
+    /// schedule pump's `findSessionController`: the run attaches to the
+    /// origin only while that session still exists, and must never
+    /// create it just to ask.
+    fn has_live_session(&self, session_id: &str) -> bool;
+    /// Spawns a turn and hands back a receiver that settles when the
+    /// enqueued turn ends — the schedule pump's awaited
+    /// `controller.sendMessage`. `Err` is the turn error (already
+    /// noticed on the record), `Ok` the settled run.
+    fn spawn_turn_for_event(
+        self: Arc<Self>,
+        session_id: String,
+        request: TurnRequest,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), String>>;
 }
 
 /// The production executor: one shared door (spawned on first use — an
@@ -241,6 +255,48 @@ impl TurnExecutor for DoorExecutor {
                 report_compact_error(&self.data_dir, &session_id, &error);
             }
         });
+    }
+
+    fn has_live_session(&self, session_id: &str) -> bool {
+        // Read-only, like the source's findSessionController: an
+        // existing runner is the session, and an absent one is never
+        // created just to ask.
+        self.runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(session_id)
+    }
+
+    fn spawn_turn_for_event(
+        self: Arc<Self>,
+        session_id: String,
+        request: TurnRequest,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        Handle::current().spawn(async move {
+            let mut request = request;
+            if !request.images.is_empty() {
+                match convert_images(&self.data_dir, &session_id, &request.images) {
+                    Ok(stored) => {
+                        request.attachments.extend(stored);
+                        request.images.clear();
+                    }
+                    Err(error) => {
+                        report_turn_error(&self.data_dir, &session_id, &error);
+                        let _ = tx.send(Err(error.to_string()));
+                        return;
+                    }
+                }
+            }
+            match self.runner_for(&session_id).await {
+                Ok(runner) => runner.enqueue_for_event(request, tx),
+                Err(error) => {
+                    report_turn_error(&self.data_dir, &session_id, &error.to_string());
+                    let _ = tx.send(Err(error.to_string()));
+                }
+            }
+        });
+        rx
     }
 }
 

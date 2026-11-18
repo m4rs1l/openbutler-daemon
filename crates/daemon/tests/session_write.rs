@@ -59,6 +59,20 @@ impl TurnExecutor for RecordingExecutor {
     }
 
     fn compact(self: Arc<Self>, _session_id: String, _recovery: bool) {}
+
+    fn has_live_session(&self, _session_id: &str) -> bool {
+        false
+    }
+
+    fn spawn_turn_for_event(
+        self: Arc<Self>,
+        _session_id: String,
+        _request: TurnRequest,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(Ok(()));
+        rx
+    }
 }
 
 /// A sink that accepts every frame: the snapshot-event gate requires

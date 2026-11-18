@@ -11,6 +11,7 @@
 
 mod describe;
 mod format;
+pub mod pump;
 mod runner;
 mod runtime;
 mod wake;

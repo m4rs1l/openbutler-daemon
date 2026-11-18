@@ -34,6 +34,9 @@ pub(crate) struct QueuedTurn {
     /// A live-run admission candidate: steered on arrival (the default
     /// sources below) or explicitly promoted through `session.queue`.
     pub steering: bool,
+    /// Set for the schedule pump's awaited send: delivers the drain's
+    /// result to `spawn_turn_for_event`'s receiver when this turn ends.
+    pub completion: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 }
 
 /// Which sources steer into a live run on arrival (L2114, owner
@@ -93,11 +96,30 @@ impl TurnRunner {
     /// Queues a send and starts the drain when idle (legacy
     /// `enqueueMessage`: a busy run keeps it, an idle one runs it).
     pub fn enqueue(self: &Arc<Self>, request: TurnRequest) {
+        self.enqueue_inner(request, None);
+    }
+
+    /// `enqueue` with a completion: the schedule pump's awaited
+    /// `sendMessage` — the receiver fires with this turn's result.
+    pub fn enqueue_for_event(
+        self: &Arc<Self>,
+        request: TurnRequest,
+        completion: tokio::sync::oneshot::Sender<Result<(), String>>,
+    ) {
+        self.enqueue_inner(request, Some(completion));
+    }
+
+    fn enqueue_inner(
+        self: &Arc<Self>,
+        request: TurnRequest,
+        completion: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    ) {
         let turn = queue::QueuedTurn {
             id: Uuid::new_v4().to_string(),
             steering: queue::steering_default(request.source),
             entry_added: false,
             request,
+            completion,
         };
         {
             let mut scheduler = self
@@ -155,12 +177,19 @@ impl TurnRunner {
             let Some(turn) = next else {
                 return;
             };
-            if let Err(error) = self.send(turn.request).await {
+            let result = self.send(turn.request).await;
+            if let Err(error) = &result {
                 crate::agent::executor::report_turn_error(
                     &self.data_root,
                     &self.session_id,
                     &error.to_string(),
                 );
+            }
+            // The pump's awaited send settles here — after the error
+            // notice, exactly like the source's awaited sendMessage
+            // resolving after the controller reported the failure.
+            if let Some(completion) = turn.completion {
+                let _ = completion.send(result.map(|_| ()).map_err(|error| error.to_string()));
             }
             // A compaction requested while this run was busy runs now:
             // the source serves it at the next step boundary, and the

@@ -204,7 +204,7 @@ fn current_record(data_dir: &Path, state: &DispatchState) -> Result<SessionRecor
 /// `createSession` (session-store.ts L254): the fresh draft — hidden from
 /// the list until it carries a user message, exactly like the source's
 /// unsaved controller from the reader's side.
-fn create_draft(host: &Host) -> SessionRecord {
+pub(crate) fn create_draft(host: &Host) -> SessionRecord {
     let (provider_id, model_id, workspace_root) = host
         .settings()
         .as_ref()

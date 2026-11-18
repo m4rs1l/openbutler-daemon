@@ -7,6 +7,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The event pump (`schedule/pump.rs`): pending schedule events are
+  claimed and run to their durable outcome — workspace gate, wake
+  assembly, origin-vs-background session (the persistent background id
+  lives under `session:{scheduleId}` in the ledger state, minted on the
+  first firing and bound to the schedule's workspace), the awaited turn
+  via `spawn_turn_for_event` (a completion that settles when the
+  enqueued turn ends), last-assistant report, run-finished and the
+  `delivered`/`failed` event state. Triggered by `schedule.run` after
+  the insert and once at boot; split sync-prepare/await/sync-finalize
+  because rusqlite's connection is `!Sync` (writer in a `Mutex`, the
+  runner's shape). Four pins (`schedule_pump`).
+- `TurnExecutor` seams for the pump: `has_live_session` (read-only
+  origin lookup — never creates a session to ask) and
+  `spawn_turn_for_event` (the awaited `sendMessage` shape; errors are
+  already noticed on the record by the drain), with the queue's
+  optional per-turn completion.
 - The `schedule.manage` runtime half: `run` queues one manual event
   into the feed (the source's envelope), `list` reports every stored
   schedule with adapter status, durable runtime and describe line, `log`
