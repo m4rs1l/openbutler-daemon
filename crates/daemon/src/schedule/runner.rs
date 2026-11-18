@@ -61,6 +61,7 @@ type Emit = Arc<dyn Fn(&str, Value, &str) -> Result<(), String> + Send + Sync>;
 /// `ScheduleStatus` — one entry per schedule after a reload.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// One adapter's state as `list` reports it.
 pub struct ScheduleStatus {
     pub id: String,
     pub state: TriggerState,
@@ -71,6 +72,7 @@ pub struct ScheduleStatus {
 /// `ScheduleStatus['state']`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
+/// What the adapter knows about its next firing.
 pub enum TriggerState {
     Active,
     Disabled,
@@ -147,6 +149,7 @@ fn option_str<'a>(schedule: &'a ScheduleState, key: &str) -> &'a str {
 }
 
 impl ScheduleRunner {
+    /// Builds a runner over the host writer with injected publish/log.
     pub fn new(writer: Arc<Mutex<LedgerWriter>>, publish: Publish, log: Log) -> Self {
         ScheduleRunner {
             writer,
@@ -239,6 +242,7 @@ impl ScheduleRunner {
         }
     }
 
+    /// The stored schedules' adapter states (reload order preserved).
     pub fn list_statuses(&self) -> Vec<ScheduleStatus> {
         lock(&self.statuses).clone()
     }

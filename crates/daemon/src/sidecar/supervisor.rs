@@ -13,6 +13,7 @@ use super::{SidecarDoor, now_ms};
 
 /// What the door currently is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The door process's lifecycle state (ready/draining/dead).
 pub enum DoorState {
     Ready,
     Draining,

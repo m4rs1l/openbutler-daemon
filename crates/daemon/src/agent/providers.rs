@@ -19,6 +19,8 @@ use super::prompt::PromptRole;
 
 /// `MEMORY_INDEX_MAX_BYTES` / `MEMORY_INDEX_MAX_LINES` (memory-document.ts).
 pub const MEMORY_INDEX_MAX_BYTES: usize = 25 * 1024;
+/// The default memory-index budget in lines (the read path caps at
+/// this before the caller's own byte budget).
 pub const MEMORY_INDEX_MAX_LINES: usize = 200;
 /// `MEMORY_USER_CONTEXT_MAX_BYTES` — the budget preferences/profile load with.
 pub const MEMORY_USER_CONTEXT_MAX_BYTES: usize = 16 * 1024;
@@ -27,6 +29,7 @@ pub const MEMORY_USER_CONTEXT_MAX_BYTES: usize = 16 * 1024;
 
 /// The prompt's memory layout for one workspace (legacy `MemoryPaths`).
 #[derive(Debug, Clone)]
+/// The memory document locations a prompt assembly reads from.
 pub struct MemoryPaths {
     pub root: PathBuf,
     pub index_file: PathBuf,
@@ -76,6 +79,7 @@ pub fn memory_paths(data_root: &Path, workspace_root: &Path) -> MemoryPaths {
 /// A memory note read into the prompt, with the cut reported rather than
 /// hidden (legacy `MemoryFileRead`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// One read memory note: path, capped text, and whether the cap cut it.
 pub struct MemoryFileRead {
     pub text: String,
     pub truncated: bool,
@@ -206,6 +210,7 @@ pub fn profile_availability(
 
 /// The team half of `renderTeamBlock`'s input (the runtime loads settings).
 #[derive(Debug, Clone)]
+/// The team facts a prompt assembly injects (name, member, hub flag).
 pub struct TeamInfo {
     pub team_name: String,
     pub member_name: String,
@@ -318,6 +323,7 @@ fn is_key_line(line: &str) -> bool {
 
 /// Where a skill index line's scope label comes from (legacy scope ranks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Which skill directory the discovery reads (builtin, workspace, user).
 pub enum SkillScope {
     Builtin,
     Workspace,
@@ -325,6 +331,7 @@ pub enum SkillScope {
 }
 
 impl SkillScope {
+    /// The directory name for the scope.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
@@ -343,6 +350,7 @@ impl SkillScope {
 }
 
 #[derive(Debug, Clone)]
+/// One discovered skill root (directory plus its scope).
 pub struct SkillRoot {
     pub path: PathBuf,
     pub scope: SkillScope,
@@ -350,6 +358,7 @@ pub struct SkillRoot {
 
 /// Metadata only: skill instructions stay unloaded until needed.
 #[derive(Debug, Clone)]
+/// One discovered skill: name, description, and its SKILL.md body.
 pub struct AgentSkill {
     pub name: String,
     pub description: String,

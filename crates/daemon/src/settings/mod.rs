@@ -25,6 +25,7 @@ pub use schema::{
 /// established surface byte for byte.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
+/// Settings load/save failure (the message a client sees).
 pub struct SettingsError(pub String);
 
 /// A loaded settings copy. Write authority comes from reading the file
@@ -32,6 +33,7 @@ pub struct SettingsError(pub String);
 /// refuses to replace configuration the copy never read — the guard that
 /// stops a defaults object from wiping a live store.
 #[derive(Debug)]
+/// A loaded settings copy: the store plus its disk revision.
 pub struct LoadedSettings {
     pub store: SettingsStore,
     /// `Some(revision)` after a load; `None` only for a store built from

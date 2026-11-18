@@ -6,6 +6,7 @@
 
 /// A parsed listen target: an IPv4 literal the daemon may bind and a port.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// The parsed `--listen` / `daemon.listen` target.
 pub struct ListenTarget {
     pub host: String,
     pub port: u16,
@@ -13,6 +14,7 @@ pub struct ListenTarget {
 
 /// Refusals of the listen-target rule, worded exactly as the contract.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Why a listen target was refused (shape, range, or host).
 pub enum ListenTargetError {
     #[error("--listen needs an IPv4 address and port, e.g. 100.64.0.5:45280 (got \"{spec}\").")]
     NotAnIpv4Literal { spec: String },

@@ -19,11 +19,13 @@ use super::{AuthError, ct_eq, hex_encode, write_private};
 
 /// One minted token: the id lands in the store, the token never does.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A freshly minted pair token (code plus expiry).
 pub struct Minted {
     pub id: String,
     pub token: String,
 }
 
+/// The pair-token store (issue, verify, single-use consume).
 pub struct TokenStore {
     path: PathBuf,
 }

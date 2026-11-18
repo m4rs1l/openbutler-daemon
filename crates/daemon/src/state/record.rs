@@ -19,6 +19,7 @@ use super::paths::session_directory;
 /// A record on disk: header fields plus the transcript. The `conversation`
 /// arrays are part of the record — a load-then-save round trip must carry   /// them through untouched, so they are parsed (and only parsed; the door   /// treats their contents as an opaque AI-SDK payload).
 #[derive(Debug, serde::Deserialize)]
+/// One saved session: meta, transcript entries, and conversation.
 pub struct SessionRecord {
     #[serde(flatten)]
     pub meta: SessionMeta,

@@ -25,6 +25,7 @@ use super::record;
 
 /// Display fields the picker, the session registry, and recent lists show.
 #[derive(Debug, Clone, PartialEq)]
+/// The on-disk record header (read without the entries).
 pub struct SessionHeader {
     pub id: String,
     pub title: String,

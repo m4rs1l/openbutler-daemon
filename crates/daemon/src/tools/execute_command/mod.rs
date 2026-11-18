@@ -20,18 +20,18 @@ use serde_json::{Value, json};
 use std::sync::OnceLock;
 
 use self::shell::ResolvedShell;
+use crate::tool_runtime::pipeline::{DEFAULT_TOOL_TIMEOUT_SECONDS, MAX_TOOL_TIMEOUT_SECONDS};
 use crate::tool_runtime::tool_output::{
     TOOL_OUTPUT_COMMAND_CHARS, ToolOutputWriter, tool_output_notice,
 };
 use crate::tool_runtime::workspace_scope::{WorkspaceScope, classify_trusted_path};
 
 const MAX_COMMAND_CHARS: usize = 10_000;
-pub const DEFAULT_TOOL_TIMEOUT_SECONDS: u64 = 60;
-pub const MAX_TOOL_TIMEOUT_SECONDS: u64 = 500;
 
 /// Everything the tool reads from its caller: the turn's scope and the
 /// configured shell, injected so tests never touch the host settings.
 #[derive(Debug, Clone)]
+/// Everything the tool reads from its caller (scope, shell, paths).
 pub struct ExecuteEnvironment {
     pub workspace_root: PathBuf,
     pub scratch_root: PathBuf,

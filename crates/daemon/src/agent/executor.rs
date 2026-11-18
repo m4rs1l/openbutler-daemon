@@ -83,6 +83,7 @@ pub struct DoorExecutor {
 }
 
 impl DoorExecutor {
+    /// Builds the production executor (door config plus a host weak ref).
     pub fn new(
         data_dir: PathBuf,
         config: DoorConfig,

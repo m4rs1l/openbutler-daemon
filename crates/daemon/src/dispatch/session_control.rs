@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use super::{CHAT_NOT_FOUND, DispatchState, Host, prepare_send, record_pick_in_settings, schedule};
 use crate::agent::QueueAction;
 
+/// `session.send`: validate the message, prepare the turn, accept
+/// first and run in the background — the legacy fire-and-forget.
 pub fn send(
     host: &Host,
     data_dir: &std::path::Path,
@@ -38,6 +40,8 @@ pub fn send(
     Ok(json!({ "accepted": true }))
 }
 
+/// `session.approve`: resolve the pending approval (id-guarded; a
+/// stale id no-ops) and answer accepted either way.
 pub fn approve(
     host: &Host,
     state: &mut DispatchState,
@@ -70,6 +74,9 @@ pub fn approve(
     Ok(json!({ "accepted": true }))
 }
 
+/// `session.stop`: stop the active turn; a schedule lane also moves
+/// its stop generation and, without `keepQueue`, drops its pending
+/// events with the source's sentence.
 pub fn stop(
     host: &Host,
     data_dir: &std::path::Path,
@@ -102,6 +109,8 @@ pub fn stop(
     Ok(json!({ "accepted": true }))
 }
 
+/// `session.compact`: run or defer the session's compaction — the
+/// controller owns the deferral.
 pub fn compact(
     host: &Host,
     state: &mut DispatchState,
@@ -124,6 +133,8 @@ pub fn compact(
     Ok(json!({ "accepted": true }))
 }
 
+/// `session.queue`: steer or remove one queued message through the
+/// seam; the runner's refusals are this action's error text.
 pub fn queue(
     host: &Host,
     state: &mut DispatchState,
@@ -161,6 +172,8 @@ pub fn queue(
         .map(|()| json!({ "accepted": true }))
 }
 
+/// `session.answer`: resolve the waiting question (id-guarded,
+/// `None` dismisses) and answer accepted.
 pub fn answer(
     host: &Host,
     state: &mut DispatchState,
@@ -195,6 +208,9 @@ pub fn answer(
     Ok(json!({ "accepted": true }))
 }
 
+/// `session.select-model`: the pick waits at the turn boundary;
+/// remembering it in settings is best effort — a failed remember
+/// logs and still answers accepted.
 pub fn select_model(
     host: &Host,
     data_dir: &std::path::Path,

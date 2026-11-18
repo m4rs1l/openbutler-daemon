@@ -18,6 +18,7 @@ pub use store::{Minted, TokenStore};
 /// Everything a credential operation can fail with. The messages are the
 /// fixed wordings, verbatim — they are part of the wire contract.
 #[derive(Debug, thiserror::Error)]
+/// Authentication failure (missing, expired, or unknown credential).
 pub enum AuthError {
     /// An I/O failure underneath (the message is the OS's own).
     #[error(transparent)]

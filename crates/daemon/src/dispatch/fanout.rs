@@ -28,12 +28,14 @@ pub type SharedSink = Arc<dyn EventSink>;
 /// Subscriptions keyed by a host-minted id; a connection unsubscribes on
 /// drop, a failed send unsubscribes immediately.
 #[derive(Default)]
+/// The roster of session subscriptions a publish walks.
 pub struct Fanout {
     next_id: AtomicU64,
     subscribers: RwLock<HashMap<u64, (String, SharedSink)>>,
 }
 
 impl Fanout {
+    /// An empty roster (host-minted ids start here).
     pub fn new() -> Self {
         Self::default()
     }
@@ -49,6 +51,7 @@ impl Fanout {
         id
     }
 
+    /// Removes a subscriber; a rejected sink is dropped on publish.
     pub fn unsubscribe(&self, id: u64) {
         self.subscribers
             .write()

@@ -10,6 +10,7 @@ use crate::agent::QueuedImage;
 
 /// `MAX_MESSAGE_TEXT_BYTES` — UTF-8 bytes, like `Buffer.byteLength`.
 pub const MAX_MESSAGE_TEXT_BYTES: usize = 8 * 1024 * 1024;
+/// The per-message image cap (source: 8).
 pub const MAX_IMAGES_PER_MESSAGE: usize = 8;
 
 const TEXT_ERROR: &str = "message must contain text smaller than 8 MB.";

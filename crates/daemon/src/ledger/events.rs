@@ -23,6 +23,7 @@ pub const OBSERVED_EVENT_STATES: [&str; 6] = [
 
 /// `ObservedEventInput` — what a publisher submits.
 #[derive(Debug, Clone)]
+/// What a publisher submits (the ObservedEventInput shape).
 pub struct EventInput {
     pub source: String,
     pub kind: String,

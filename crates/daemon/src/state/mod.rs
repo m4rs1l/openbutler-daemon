@@ -39,6 +39,7 @@ pub use save::{SaveOutcome, save_session};
 /// Errors of the state layer. Per file, listing stays tolerant: one damaged
 /// record must never block the picker.
 #[derive(Debug, thiserror::Error)]
+/// Why a session-state read or write was refused.
 pub enum StateError {
     #[error("Invalid session id.")]
     InvalidSessionId,

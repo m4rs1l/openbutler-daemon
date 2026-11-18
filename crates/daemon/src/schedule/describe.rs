@@ -14,12 +14,14 @@ use serde_json::Value;
 /// Human schedule line, server-local wall time, plus the next due instant.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// The human description of a schedule (the `list` line).
 pub struct ScheduleDescription {
     pub human: String,
     /// Next due epoch ms, or `None` when the adapter has no schedule.
     pub next_due_at: Option<i64>,
 }
 
+/// Describes a schedule against the clock (next due for intervals).
 pub fn describe_schedule(
     schedule: &ScheduleState,
     now_ms: i64,

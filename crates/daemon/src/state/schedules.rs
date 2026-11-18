@@ -19,6 +19,7 @@ use crate::shape::{as_record, is_id_token, js_len, json_size};
 /// One scheduled instruction (`{adapter, options}` trigger).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// One stored schedule (id, workspace, trigger, instructions).
 pub struct ScheduleState {
     pub id: String,
     pub name: String,
@@ -31,6 +32,7 @@ pub struct ScheduleState {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// The trigger: adapter name plus its options object.
 pub struct ScheduleTrigger {
     pub adapter: String,
     pub options: serde_json::Value,
@@ -38,6 +40,7 @@ pub struct ScheduleTrigger {
 
 /// A store refusal. The message *is* the contract.
 #[derive(Debug, thiserror::Error)]
+/// Why a schedules document was refused.
 pub enum ScheduleError {
     #[error("{0}")]
     Refusal(String),

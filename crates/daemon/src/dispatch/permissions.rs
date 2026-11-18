@@ -8,6 +8,8 @@ use serde_json::json;
 
 use super::Host;
 
+/// `permissions.set-mode`: one message covers every rejected value;
+/// the computed mode is pushed to the live settings copy.
 pub fn set_mode(
     host: &Host,
     data_dir: &std::path::Path,

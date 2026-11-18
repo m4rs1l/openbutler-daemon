@@ -32,6 +32,7 @@ const LOCK_POLL: Duration = Duration::from_millis(25);
 
 /// Everything this boundary can fail with, in the words callers surface.
 #[derive(Debug, thiserror::Error)]
+/// Why a settings write transaction was refused.
 pub enum TransactionError {
     /// The lock stayed held past the wait.
     #[error("Timed out waiting for the settings transaction lock.")]

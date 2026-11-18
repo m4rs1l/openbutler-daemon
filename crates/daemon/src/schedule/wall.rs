@@ -46,6 +46,7 @@ pub(super) fn weekday_numbers(days: Option<&serde_json::Value>) -> Option<Vec<i6
 
 /// Absolute epoch ms of one occurrence plus the source's DST-gap marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One computed daily occurrence (instant plus wall fields).
 pub struct WallOccurrence {
     pub at_ms: i64,
     /// True when a daylight-saving gap moved the occurrence forward.

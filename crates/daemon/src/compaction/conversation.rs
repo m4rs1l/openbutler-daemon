@@ -49,6 +49,7 @@ pub fn append_transcript_archive_reference(content: &str, archive_path: &str) ->
 
 /// A decoded tool-reference placeholder.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A tool call kept in the condensed view (id plus result).
 pub struct ToolReference {
     pub batch_id: String,
     pub tool_call_id: String,

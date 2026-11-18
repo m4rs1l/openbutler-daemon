@@ -65,10 +65,12 @@ impl std::fmt::Debug for WebServer {
 }
 
 impl WebServer {
+    /// The bound address the web server listens on.
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
 
+    /// The pairing token the gate accepts.
     pub fn pair_token(&self) -> &str {
         self.pair.token()
     }

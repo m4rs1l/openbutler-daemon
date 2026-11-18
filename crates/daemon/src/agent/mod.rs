@@ -77,6 +77,8 @@ const DEFAULT_APPROVAL_TIMEOUT_SECONDS: u64 = 120;
 /// One turn's input. The provider block mirrors what the runtime resolves
 /// from settings; the transcript keeps only `text` and `source`.
 #[derive(Debug, Clone)]
+/// One prepared turn: message, provider binding, prompt, and the gate
+/// settings read at the turn boundary.
 pub struct TurnRequest {
     pub text: String,
     pub source: UserEntrySource,
@@ -107,6 +109,7 @@ pub struct TurnRequest {
 
 /// One validated image riding a turn until it is stored.
 #[derive(Debug, Clone)]
+/// A base64 image queued with a send (decoded pre-turn).
 pub struct QueuedImage {
     pub base64: String,
     pub media_type: String,
@@ -114,6 +117,7 @@ pub struct QueuedImage {
 
 /// What a settled turn did — the same stamps `finishTurn` writes.
 #[derive(Debug, Clone)]
+/// What a settled turn produced (report text or the error).
 pub struct TurnReport {
     pub turn_id: String,
     pub outcome: TurnOutcome,
@@ -123,6 +127,7 @@ pub struct TurnReport {
 /// provider failure is not an error value: it settles the turn `failed`
 /// with a notice, exactly like the legacy `runError` path.
 #[derive(Debug, thiserror::Error)]
+/// Why a turn could not start or settle.
 pub enum TurnError {
     #[error(transparent)]
     State(#[from] StateError),
@@ -143,6 +148,8 @@ struct SessionState {
     dirty: bool,
 }
 
+/// One session's turn loop: queue, approvals, questions, and the
+/// record it owns while a turn runs.
 pub struct TurnRunner {
     door: SidecarDoor,
     data_root: PathBuf,

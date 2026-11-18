@@ -25,6 +25,7 @@ use super::record::{SessionRecord, entry_preview, first_user_text, last_assistan
 /// What a save did: the record landed, or (legacy `null`) nothing was
 /// written because there was no user entry to anchor the session on.
 #[derive(Debug)]
+/// What a save did: written to this path, or skipped (no user message).
 pub enum SaveOutcome {
     Written(PathBuf),
     Skipped,

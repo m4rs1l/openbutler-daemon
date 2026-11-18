@@ -46,6 +46,7 @@ const SLICED_NOTES_PREFIX: &str = "Merged continuation notes covering the full t
 /// `onStepUsage` too) but never the transcript hooks: its note streams
 /// stay internal.
 #[derive(Default, Clone, Copy)]
+/// The callbacks an engine run reports through (row, step, usage).
 pub struct EngineHooks<'a> {
     pub on_start: Option<&'a (dyn Fn() + Send + Sync)>,
     pub on_text: Option<&'a (dyn Fn(&str) + Send + Sync)>,
@@ -61,6 +62,7 @@ pub struct EngineHooks<'a> {
 /// provider from settings and owns the door; the engine owns the
 /// arithmetic and the stream.
 #[derive(Debug, Clone)]
+/// One compaction request: window budget, transcript, and options.
 pub struct CompactionRequest {
     /// Namespaces every call id (`{tag}:{uuid}`) - production uses
     /// `compact`; tests point it at a fake-sidecar behavior.
@@ -94,6 +96,7 @@ pub struct CompactionRequest {
 /// a fact about the budget and conversation, never an exceptional
 /// failure.
 #[derive(Debug, Clone, PartialEq)]
+/// What a compaction did: applied, skipped, or refused as data.
 pub enum CompactOutcome {
     Compacted {
         result: CompactionResult,
@@ -113,6 +116,7 @@ pub enum CompactOutcome {
 /// A compaction that ran: the summary, the messages it produced, the
 /// summarisation usage, and the before/after estimates.
 #[derive(Debug, Clone, PartialEq)]
+/// The applied result: checkpoint text plus the sliced breakdown.
 pub struct CompactionResult {
     pub summary: String,
     pub messages: Vec<Value>,
@@ -123,6 +127,7 @@ pub struct CompactionResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why a compaction skipped without touching the transcript.
 pub enum SkipReason {
     NoBudget,
     BelowThreshold,
@@ -138,6 +143,7 @@ impl SkipReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why a compaction refused as data (the refusal is kept, not thrown).
 pub enum ImpossibleReason {
     ExceedsWindow,
     NoReduction,

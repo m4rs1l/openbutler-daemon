@@ -21,6 +21,7 @@ pub const MAX_REPORT_CHARS: usize = 8_000;
 /// `ScheduleRunStatus`: an unrecognized stored value reads as `Idle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
+/// The durable runtime status of a schedule.
 pub enum ScheduleRuntimeStatus {
     Idle,
     Running,
@@ -30,12 +31,14 @@ pub enum ScheduleRuntimeStatus {
 /// `lastResult`: only these two values are stored or surfaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
+/// The stored result of the last run (completed/failed).
 pub enum ScheduleRunResult {
     Completed,
     Failed,
 }
 
 impl ScheduleRunResult {
+    /// The status/result wire spelling.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Completed => "completed",
@@ -49,6 +52,7 @@ impl ScheduleRunResult {
 /// never as `null`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Everything the runtime state carries (status, counts, report).
 pub struct ScheduleRuntime {
     pub status: ScheduleRuntimeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]

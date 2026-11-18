@@ -24,6 +24,7 @@ pub const TOOL_TIMEOUT_GUIDANCE: &str = include_str!("prompts/tool-timeout-guida
 
 /// Which layer reads a prompt (legacy `AgentRole`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which frozen prompt a role assembles from.
 pub enum PromptRole {
     Agent,
     Custodian,
@@ -32,21 +33,25 @@ pub enum PromptRole {
 
 /// Which prompt a role receives (legacy `AgentBase`).
 #[derive(Debug, Clone, Copy)]
+/// One role's frozen base prompt plus its header line (byte-exact port).
 pub struct AgentBase {
     pub role: PromptRole,
     pub instructions: &'static str,
 }
 
+/// The agent's base prompt (agent-instructions.ts).
 pub const AGENT_BASE: AgentBase = AgentBase {
     role: PromptRole::Agent,
     instructions: AGENT_INSTRUCTIONS,
 };
 
+/// The machine custodian's base prompt.
 pub const CUSTODIAN_BASE: AgentBase = AgentBase {
     role: PromptRole::Custodian,
     instructions: CUSTODIAN_INSTRUCTIONS,
 };
 
+/// The worker's base prompt.
 pub const WORKER_BASE: AgentBase = AgentBase {
     role: PromptRole::Worker,
     instructions: WORKER_INSTRUCTIONS,
@@ -81,6 +86,8 @@ const NO_SKILL_ROOT: &str = "(unavailable)";
 /// these from their own slice (memory paths, skill discovery, team block);
 /// this struct is the seam — no string surgery exists outside it.
 #[derive(Debug, Clone, Default)]
+/// Every live value the system-prompt assembly reads — filled by the
+/// context providers, never by the assembler itself.
 pub struct SystemPromptContext {
     pub openbutler_skill_dir: String,
     /// `None` renders the source's `?? '(unavailable)'`.

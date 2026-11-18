@@ -16,6 +16,7 @@ use openbutler_protocol::session::{
 /// One publishable session state (legacy `AgentSessionSnapshot` reduced to
 /// what the frame carries: the transcript view plus the run state).
 #[derive(Debug, Clone, PartialEq)]
+/// One publishable session state (the immutable event unit).
 pub struct PublishSnapshot {
     pub session: SessionView,
     pub run: RunState,

@@ -227,6 +227,7 @@ fn timeout_seconds(value: &Value, name: &str) -> Result<u64, SettingsError> {
 
 /// Theme presentation (`Dark` | `Light` | `System`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `theme`: light or dark (the store's display preference).
 pub enum Theme {
     Dark,
     Light,
@@ -234,6 +235,7 @@ pub enum Theme {
 }
 
 impl Theme {
+    /// The stored wire spelling (`light`/`dark`).
     pub fn as_str(self) -> &'static str {
         match self {
             Theme::Dark => "Dark",
@@ -246,6 +248,8 @@ impl Theme {
 /// Approval policy for tool calls. The original `ask` value migrates to
 /// `workspace` at load; nothing else is coerced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `approvalMode`: how tool calls are gated — the folder-scoped
+/// workspace mode, auto-review, or full access.
 pub enum ApprovalMode {
     Workspace,
     AutoReview,
@@ -253,6 +257,7 @@ pub enum ApprovalMode {
 }
 
 impl ApprovalMode {
+    /// The stored wire spelling of the mode.
     pub fn as_str(self) -> &'static str {
         match self {
             ApprovalMode::Workspace => "workspace",
@@ -265,6 +270,7 @@ impl ApprovalMode {
 /// Team membership role (`hub` | `member`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
+/// `team.role`: hub or member — who owns the team connection.
 pub enum TeamRole {
     Hub,
     Member,
@@ -273,6 +279,7 @@ pub enum TeamRole {
 /// One provider entry — the schema owns the field list (`KNOWN_PROVIDER_KEYS`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// One configured model provider (url, default model, specs).
 pub struct ProviderState {
     pub enabled: bool,
     pub keys: Vec<String>,
@@ -297,6 +304,7 @@ pub struct ProviderState {
 /// Settings-side description of one custom model.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// A provider model's declared specs (context window, output cap).
 pub struct ProviderModelSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -313,6 +321,7 @@ pub struct ProviderModelSpec {
 /// Transport of one MCP server: `stdio` (command/args/env/cwd) or an HTTP
 /// style (`http` | `sse` with url/headers).
 #[derive(Debug, Clone, PartialEq)]
+/// `mcpServers.*.state`: enabled or disabled without deleting the config.
 pub enum McpServerState {
     Stdio {
         command: String,
@@ -369,6 +378,7 @@ impl serde::Serialize for McpServerState {
 /// a literal token in the document is rejected at parse.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// `telegram`: channel identity and workspace binding.
 pub struct TelegramSettings {
     pub enabled: bool,
     pub token_env: String,
@@ -382,6 +392,7 @@ pub struct TelegramSettings {
 /// Non-secret team membership. The bearer ticket lives in `config.yaml`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// `team`: name, member, and role (the connection itself lives in Rust).
 pub struct TeamSettings {
     pub role: TeamRole,
     pub team_name: String,
@@ -397,6 +408,7 @@ pub struct TeamSettings {
 /// Worker caps of the custodian, filled per field when the block is present.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// `workerCaps`: per-worker tool grants (what a spawn may use).
 pub struct WorkerCaps {
     pub per_session: u64,
     pub per_worker_parent: u64,
@@ -408,6 +420,7 @@ pub struct WorkerCaps {
 /// refused by name and range instead of silently becoming the default.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// `custodian`: the machine custodian's model and identity settings.
 pub struct CustodianSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -426,6 +439,7 @@ pub struct CustodianSettings {
 /// A role → provider/model binding; whole pairs only.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// `roleBindings.*`: a named model role bound to provider/model.
 pub struct RoleBinding {
     pub provider: String,
     pub model: String,
@@ -433,6 +447,7 @@ pub struct RoleBinding {
 
 /// The persisted configuration union (the non-secret half).
 #[derive(Debug, Clone, PartialEq)]
+/// The persisted settings document — the store every load/save moves.
 pub struct SettingsStore {
     pub providers: BTreeMap<String, ProviderState>,
     pub mcp_servers: BTreeMap<String, McpServerState>,
@@ -459,6 +474,7 @@ pub struct SettingsStore {
 /// The saved remote-listener preference, validated by the same rule the
 /// daemon binds by.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+/// The `settings.yaml` file shape (daemon section plus the store).
 pub struct DaemonSettings {
     pub listen: String,
 }
@@ -492,6 +508,7 @@ pub fn default_settings() -> SettingsStore {
 /// The secret half: provider keys plus the team ticket and Modal
 /// credentials — nothing else, ever.
 #[derive(Debug, Clone, PartialEq, Default)]
+/// The `config.yaml` secrets document (provider keys and tokens).
 pub struct SecretsStore {
     pub providers: BTreeMap<String, ProviderSecrets>,
     pub team_ticket: Option<String>,
@@ -499,12 +516,14 @@ pub struct SecretsStore {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
+/// One provider's secret keys (first key is the live one).
 pub struct ProviderSecrets {
     pub keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Modal credentials for the voice channel (id/secret pair).
 pub struct ModalCredentials {
     pub token_id: String,
     pub token_secret: String,

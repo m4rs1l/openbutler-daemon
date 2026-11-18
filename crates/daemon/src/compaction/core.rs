@@ -27,14 +27,19 @@ use serde_json::Value;
 ///
 /// The model's declared output limit never enters this reserve.
 pub const COMPACTION_HEADROOM_TOKENS: i64 = 11_583;
+/// The summary token ceiling (measured 26 024 = 6 506×4 + reserve).
 pub const COMPACTION_SUMMARY_MAX_TOKENS: i64 = 26_024;
+/// The summary margin above the ceiling (the source's 1 024).
 pub const COMPACTION_SUMMARY_MARGIN_TOKENS: i64 = 1_024;
 
 /// Shares of the window for the sliced fallback (map-reduce compaction),
 /// for the engine that arrives with the sidecar wiring (C2).
 pub const SLICED_NOTES_SHARE: f64 = 0.3;
+/// The verbatim tail share of a sliced chain (15%).
 pub const SLICED_TAIL_SHARE: f64 = 0.15;
+/// The smallest note worth condensing (512 tokens).
 pub const SLICED_NOTE_MIN_TOKENS: i64 = 512;
+/// Condense rounds per sliced note (the source's 2).
 pub const SLICED_CONDENSE_ROUNDS: u32 = 2;
 
 /// Settled-context share of the window after a successful compaction: the

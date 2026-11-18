@@ -25,6 +25,7 @@ use crate::settings::{LoadedSettings, SettingsError, load_settings};
 /// a host-wide current controller (there is no runtime in this build,
 /// so the record on disk is the whole truth).
 #[derive(Default)]
+/// Per-connection dispatch state (current chat, sink, queue flags).
 pub struct DispatchState {
     pub(super) current_session: Option<String>,
     /// The client kind the connection attached with; until `attach` sets

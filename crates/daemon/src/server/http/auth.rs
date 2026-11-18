@@ -31,6 +31,7 @@ pub struct PairToken {
 }
 
 impl PairToken {
+    /// Mints a session cookie for a paired client.
     pub fn mint(now_ms: u64) -> std::io::Result<Self> {
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
@@ -41,6 +42,7 @@ impl PairToken {
         })
     }
 
+    /// The cookie's token value.
     pub fn token(&self) -> &str {
         &self.token
     }

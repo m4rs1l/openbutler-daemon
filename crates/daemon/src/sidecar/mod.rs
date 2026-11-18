@@ -32,6 +32,7 @@ pub use supervisor::DoorState;
 /// Which lane a call belongs to: interactive work jumps queued
 /// background work, and background work can never hold every slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Which lane a command belongs to (call vs control).
 pub enum Lane {
     Background,
     Interactive,
@@ -40,6 +41,7 @@ pub enum Lane {
 /// Everything the door needs to exist. Testable timings; production
 /// values come from the daemon's configuration when that lands.
 #[derive(Debug, Clone)]
+/// How to spawn the Node sidecar (binary, args, env, node options).
 pub struct DoorConfig {
     /// The Node executable (`node` next to the packaged runtime in
     /// production).
@@ -92,6 +94,7 @@ impl DoorConfig {
 /// Door-level refusals. The message is the contract where it surfaces
 /// to callers.
 #[derive(Debug, Clone, thiserror::Error)]
+/// Why the door refused or broke.
 pub enum DoorError {
     #[error("the sidecar handshake never arrived within {0:?}")]
     HandshakeTimeout(Duration),
@@ -137,6 +140,7 @@ pub(crate) struct DoorInner {
 
 /// The door handle: cheap to clone, one per caller.
 #[derive(Clone)]
+/// The live sidecar connection: one process, framed JSON both ways.
 pub struct SidecarDoor {
     pub(crate) inner: Arc<DoorInner>,
 }

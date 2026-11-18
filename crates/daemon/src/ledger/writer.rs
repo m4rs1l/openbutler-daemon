@@ -37,6 +37,7 @@ const TERMINAL_ACTION_STATES: [&str; 3] = ["completed", "failed", "cancelled"];
 
 /// A row's lifecycle position (`TOOL_ACTION_STATES` as a type).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The durable states a tool action moves through.
 pub enum ToolActionState {
     Proposed,
     Reviewed,
@@ -50,6 +51,7 @@ pub enum ToolActionState {
 }
 
 impl ToolActionState {
+    /// The state's stored spelling.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Proposed => "proposed",
@@ -64,6 +66,7 @@ impl ToolActionState {
         }
     }
 
+    /// Whether the state ends the action's life (no further transition).
     pub fn is_terminal(self) -> bool {
         TERMINAL_ACTION_STATES.contains(&self.as_str())
     }
@@ -72,6 +75,7 @@ impl ToolActionState {
 /// One write to the tool-action table. Owned: the executor builds one per
 /// call and the ledger serialises it inside one transaction.
 #[derive(Debug, Clone)]
+/// One action transition: id, new state, and optional error/detail.
 pub struct ToolActionUpdate {
     pub request_id: String,
     pub workspace_root: String,
@@ -167,6 +171,8 @@ pub struct LedgerWriter {
 }
 
 impl LedgerWriter {
+    /// Opens (creating the database and its schema when absent) the one
+    /// writer the host shares.
     pub fn open(data_dir: &Path) -> Result<LedgerWriter, LedgerError> {
         let connection = Connection::open(data_dir.join("state.db"))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// Where the daemon listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// The listen endpoint a flag or setting names.
 pub enum Endpoint {
     /// Windows named pipe: the full `\\.\pipe\...` name.
     NamedPipe(String),
@@ -20,6 +21,7 @@ pub enum Endpoint {
 
 /// A resolved endpoint: target plus the data directory it belongs to.
 #[derive(Debug, Clone)]
+/// The endpoint after parsing (address plus port).
 pub struct ResolvedEndpoint {
     data_dir: PathBuf,
     target: Endpoint,

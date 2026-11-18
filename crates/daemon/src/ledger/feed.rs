@@ -227,6 +227,7 @@ pub fn schedule_events(
 }
 
 impl LedgerWriter {
+    /// The data-dir read door for a schedule's run history.
     pub fn schedule_events(
         &self,
         schedule_id: &str,

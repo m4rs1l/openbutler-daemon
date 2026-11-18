@@ -18,6 +18,7 @@ pub use writer::{LedgerWriter, TOOL_ACTION_STATES, ToolActionState, ToolActionUp
 
 /// One refusal from the ledger surface. The message *is* the contract.
 #[derive(Debug, thiserror::Error)]
+/// Ledger failure (refusal with the source's message, or I/O).
 pub enum LedgerError {
     #[error("{0}")]
     Sqlite(#[from] rusqlite::Error),

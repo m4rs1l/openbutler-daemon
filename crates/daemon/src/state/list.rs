@@ -13,6 +13,7 @@ use super::record::record_path;
 /// Workspace scoping of the list, the argument triple:
 /// no filter / only sessions without a workspace / exact path match.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// Which sessions a list read covers.
 pub enum WorkspaceFilter {
     /// No scope: every chat in the data directory.
     #[default]

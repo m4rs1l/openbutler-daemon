@@ -23,6 +23,7 @@ use super::providers::{
 /// Everything the prompt reads from outside its own text. The runtime
 /// owns these values; the struct only carries them in.
 #[derive(Debug, Clone)]
+/// The live paths a prompt assembly reads (roots, home, team).
 pub struct PromptEnvironment {
     pub data_root: PathBuf,
     pub workspace_root: PathBuf,
@@ -149,6 +150,7 @@ pub struct TurnInputs<'a> {
     pub approval_timeout_seconds: Option<u64>,
 }
 
+/// Builds the turn request: system prompt plus provider binding.
 pub fn prepare_turn(
     data_dir: &std::path::Path,
     inputs: TurnInputs<'_>,

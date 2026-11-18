@@ -15,6 +15,7 @@ use crate::agent::TurnRequest;
 
 /// The `queueAction` of `session.queue`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a queued message asks for: steer into the run or remove it.
 pub enum QueueAction {
     Steer,
     Remove,

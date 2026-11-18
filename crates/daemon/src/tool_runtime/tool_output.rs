@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 /// Command output is the noisiest source, so it keeps less inline.
 pub const TOOL_OUTPUT_COMMAND_CHARS: usize = 8_000;
+/// Spill files older than this are pruned (3 days).
 pub const TOOL_OUTPUT_RETENTION_MS: i64 = 3 * 24 * 60 * 60_000;
+/// The hard spill-file size cap (64 MiB).
 pub const TOOL_OUTPUT_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Host-owned generated data under `data/tool-output`, never the
@@ -54,6 +56,7 @@ pub struct ToolOutputWriter {
 }
 
 impl ToolOutputWriter {
+    /// Opens (or resumes) a spill file under the session's tool-output dir.
     pub fn open_at(root: &Path, session_id: Option<&str>, tool: &str) -> std::io::Result<Self> {
         std::fs::create_dir_all(root)?;
         let session = session_id
@@ -88,6 +91,7 @@ impl ToolOutputWriter {
         })
     }
 
+    /// Appends text to the spill file.
     pub fn write(&mut self, text: &str) {
         if text.is_empty() || self.file.is_none() {
             return;
@@ -109,6 +113,7 @@ impl ToolOutputWriter {
         }
     }
 
+    /// Closes the spill: path plus total/inline byte counts.
     pub fn close(&mut self) -> (PathBuf, usize, usize) {
         self.file.take();
         prune_tool_output(&self.root);

@@ -30,6 +30,7 @@ pub struct WakeAssembly<'a> {
     pub facts: Value,
 }
 
+/// Assembles the wake text the scheduled turn opens with.
 pub fn assemble_wake_text(assembly: &WakeAssembly<'_>) -> String {
     let mut lines = Vec::with_capacity(7);
     lines.push(format!(

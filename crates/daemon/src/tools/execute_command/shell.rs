@@ -8,6 +8,7 @@
 
 /// Shell family the command text is written for; it decides the flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which shell dialect a resolved shell speaks (Windows, POSIX, WSL).
 pub enum ShellDialect {
     Posix,
     Powershell,
@@ -15,6 +16,7 @@ pub enum ShellDialect {
 }
 
 impl ShellDialect {
+    /// The dialect's wire spelling (`cmd`, `sh`, `wsl`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Posix => "posix",
@@ -26,6 +28,7 @@ impl ShellDialect {
 
 /// A launch plan for spawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A concrete shell: executable path plus the dialect it speaks.
 pub struct ResolvedShell {
     /// Program for spawn: either a PATH name or an absolute path.
     pub executable: String,
@@ -49,6 +52,7 @@ pub const SHELL_PRESETS: [&str; 9] = [
     "sh",
 ];
 
+/// Whether a preset spelling names a shell (`pwsh`, `cmd`, `sh`…).
 pub fn is_shell_preset(value: &str) -> bool {
     SHELL_PRESETS.contains(&value)
 }
@@ -62,6 +66,7 @@ pub fn is_shell_setting_value(value: &str) -> bool {
 /// The slice of the process environment the resolver reads. Tests build
 /// it directly; production reads the real one.
 #[derive(Debug, Clone)]
+/// The environment a command runs with (injected, never read from the host).
 pub struct ShellEnvironment {
     pub is_windows: bool,
     pub path: String,
@@ -73,6 +78,7 @@ pub struct ShellEnvironment {
 }
 
 impl ShellEnvironment {
+    /// Builds the environment from the current process (production path).
     pub fn from_process() -> Self {
         let get = |key: &str| std::env::var(key).ok();
         Self {

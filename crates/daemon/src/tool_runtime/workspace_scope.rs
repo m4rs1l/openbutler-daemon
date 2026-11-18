@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// Where a target sits relative to the trusted roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where a path sits relative to the trusted roots.
 pub enum WorkspaceScope {
     Workspace,
     Outside,

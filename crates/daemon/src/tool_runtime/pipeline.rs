@@ -22,7 +22,9 @@ use crate::tool_runtime::workspace_scope::WorkspaceScope;
 /// Host control metadata: stripped before execution — a host option is never
 /// a tool or server argument (timeout.ts L1).
 pub const TOOL_TIMEOUT_FIELD: &str = "_timeoutSeconds";
+/// The default tool timeout when settings carries none (source: 60 s).
 pub const DEFAULT_TOOL_TIMEOUT_SECONDS: u64 = 60;
+/// The hard ceiling every tool timeout is clamped to (source: 500 s).
 pub const MAX_TOOL_TIMEOUT_SECONDS: u64 = 500;
 /// The model-facing inline budget for one tool result (registry L454).
 pub const MAX_TOOL_RESULT_CHARS: usize = 16_000;
@@ -49,6 +51,8 @@ pub trait AskPort: Send + Sync + std::fmt::Debug {
 /// Everything a tool needs, owned by the host: the validated input (the
 /// timeout field already removed), the policy in force, and the paths.
 #[derive(Debug, Clone)]
+/// What one tool call runs with: ids, arguments, timeout and the
+/// approval decision — assembled before the gate, never after.
 pub struct ToolCallContext {
     pub input: Value,
     pub timeout_seconds: u64,
@@ -92,6 +96,8 @@ impl ToolCallContext {
     /// The same construction with a question channel (the batch loop
     /// wires the runner in; `new` stays the no-channel shape tests use).
     #[allow(clippy::too_many_arguments)]
+    /// Derives a context carrying the question port (the ask tool awaits
+    /// through it).
     pub fn with_ask(
         input: Value,
         approval_mode: ApprovalMode,
@@ -151,6 +157,8 @@ pub fn tool_timeout_seconds(value: Option<&Value>) -> Result<u64, String> {
 /// One native tool. `scope` and `execute` are plain functions — the
 /// definition carries no state, so tools are values, not closures.
 #[derive(Clone)]
+/// One registered tool: identity, input schema, effect declaration,
+/// and the executor. Values, not services — the registry holds these.
 pub struct ToolDefinition {
     pub provider_id: &'static str,
     pub name: &'static str,
@@ -168,6 +176,7 @@ pub struct ToolDefinition {
 }
 
 impl ToolDefinition {
+    /// The tool's effect as the sidecar sees it (denotation JSON).
     pub fn effect(&self) -> Value {
         serde_json::from_str(self.effect_json).unwrap_or_else(|error| {
             panic!("catalog effect declarations must be valid JSON: {error}")
@@ -183,6 +192,8 @@ impl ToolDefinition {
 /// The gate's answer. `gate_reason` values are the source's strings
 /// (registry L349): `outside-workspace`, `unknown-scope`, `manual-review`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// The gate's verdict before anything runs: allow, deny, or the
+/// manual-review reason.
 pub enum GateDecision {
     AutoApproved,
     NeedsApproval { gate_reason: &'static str },
@@ -191,6 +202,7 @@ pub enum GateDecision {
 /// What the approval channel answered. Auto-approval passes `Approved`
 /// without consulting any channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// What an approval resolves to: approved, denied, or timed out.
 pub enum ApprovalOutcome {
     Approved,
     Declined,
@@ -266,6 +278,8 @@ pub fn policy_failure(message: &str) -> Value {
     })
 }
 
+/// The model-visible refusal when a proposal could not be recorded
+/// (write-ahead failure stops the run).
 pub fn proposal_failure(message: &str) -> Value {
     json!({
         "status": "error",
@@ -273,6 +287,7 @@ pub fn proposal_failure(message: &str) -> Value {
     })
 }
 
+/// The model-visible refusal when a denial could not be recorded.
 pub fn approval_failure(message: &str) -> Value {
     json!({
         "status": "error",
@@ -283,6 +298,8 @@ pub fn approval_failure(message: &str) -> Value {
 /// What one call produced, and whether the agent run must stop after it.
 /// Only a plain decline or a fail-closed error stops the run (L365).
 #[derive(Debug)]
+/// One completed call: the model-visible result plus the state the
+/// ledger records.
 pub struct CallOutcome {
     pub result: Value,
     pub run_stopped: bool,

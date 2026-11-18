@@ -23,6 +23,7 @@ struct Pending {
 }
 
 impl PairingCodes {
+    /// An empty pairing-code store (codes minted on demand).
     pub fn new() -> Self {
         Self {
             pending: Mutex::new(None),

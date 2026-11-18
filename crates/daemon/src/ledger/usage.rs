@@ -29,6 +29,7 @@ use super::LedgerError;
 /// agent.ts L591). Built where the call ends; identities (session, provider,
 /// workspace, run kind) are added by whoever owns the row.
 #[derive(Debug, Clone)]
+/// One step's usage as the sidecar reports it (cost when stated).
 pub struct StepUsageReport {
     /// When the provider call began — the source resets it in `prepareStep`,
     /// so the duration covers the request and not the work between requests.
@@ -54,6 +55,7 @@ pub struct StepUsageReport {
 /// The eight token counts (`UsageTokens`, recorder.ts L12-23), stored as
 /// signed integers for SQLite; wire values convert losslessly.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// The token counts of one request (input/output/cached/reasoning).
 pub struct UsageTokens {
     pub input_tokens: Option<i64>,
     pub no_cache_tokens: Option<i64>,
@@ -69,6 +71,7 @@ pub struct UsageTokens {
 /// `turnId` and `headers` are absent because this path never sets them in
 /// the source either; the table keeps the columns as NULL.
 #[derive(Debug, Clone)]
+/// Usage plus its identities: request id, model, generation.
 pub struct UsageInput {
     pub session_id: String,
     pub event_id: Option<String>,
@@ -82,6 +85,7 @@ pub struct UsageInput {
 
 /// The row as the table stores it; only `record_usage` consumes it.
 #[derive(Debug, Clone)]
+/// One persisted usage row (the state.db table shape).
 pub struct UsageRow {
     id: String,
     at_ms: i64,
