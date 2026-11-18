@@ -58,7 +58,7 @@ impl TurnRunner {
         });
         // The queue becomes visible the moment it exists (the source's
         // `requestManualApproval` publishes before it resolves).
-        self.publish_now(state, turn_id, None, true);
+        self.publish_now(state, Some(turn_id), None, true);
         let mut stop_poll = tokio::time::interval(Duration::from_millis(100));
         stop_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tokio::select! {

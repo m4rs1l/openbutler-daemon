@@ -50,6 +50,8 @@ impl TurnExecutor for RecordingExecutor {
         false
     }
 
+    fn compact(self: Arc<Self>, _session_id: String, _recovery: bool) {}
+
     fn answer(&self, _session_id: &str, _question_id: &str, _answer: Option<String>) -> bool {
         false
     }

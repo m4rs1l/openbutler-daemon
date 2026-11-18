@@ -48,6 +48,11 @@ pub trait TurnExecutor: Send + Sync {
         message_id: &str,
         action: crate::agent::QueueAction,
     ) -> Result<(), String>;
+    /// `session.compact`: run (or defer) the session's compaction — the
+    /// source's fire-and-forget `controller.compact`, whose failures
+    /// become `Could not compact the session: …` notices, never the
+    /// response.
+    fn compact(self: Arc<Self>, session_id: String, recovery: bool);
 }
 
 /// The production executor: one shared door (spawned on first use — an
@@ -219,6 +224,24 @@ impl TurnExecutor for DoorExecutor {
             None => Err("This message is no longer queued.".to_owned()),
         }
     }
+
+    fn compact(self: Arc<Self>, session_id: String, recovery: bool) {
+        // Like spawn_turn: the response is already gone; failures
+        // become notices on the record.
+        Handle::current().spawn(async move {
+            let outcome = async {
+                let runner = self
+                    .runner_for(&session_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                runner.compact(recovery).await
+            }
+            .await;
+            if let Err(error) = outcome {
+                report_compact_error(&self.data_dir, &session_id, &error);
+            }
+        });
+    }
 }
 
 /// The legacy `enqueueMessage` image conversion: decode each payload
@@ -252,6 +275,24 @@ fn convert_images(
 /// A record that cannot be read cannot carry the notice — the legacy
 /// controller held it in memory instead, and this build has no memory.
 pub(crate) fn report_turn_error(data_dir: &Path, session_id: &str, error: &str) {
+    push_session_notice(
+        data_dir,
+        session_id,
+        format!("Could not send the message: {error}"),
+    );
+}
+
+/// The compact path's counterpart (daemon-host L3518): setup failures
+/// that happened before the engine.
+pub(crate) fn report_compact_error(data_dir: &Path, session_id: &str, error: &str) {
+    push_session_notice(
+        data_dir,
+        session_id,
+        format!("Could not compact the session: {error}"),
+    );
+}
+
+fn push_session_notice(data_dir: &Path, session_id: &str, text: String) {
     let Some(path) = state::record_path(data_dir, session_id) else {
         return;
     };
@@ -264,7 +305,7 @@ pub(crate) fn report_turn_error(data_dir: &Path, session_id: &str, error: &str) 
             turn_id: None,
             ..SessionEntryMeta::default()
         },
-        text: format!("Could not send the message: {error}"),
+        text,
         detail: None,
         tone: Some(NoticeTone::Error),
         cause: None,

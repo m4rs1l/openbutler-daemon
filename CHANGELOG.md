@@ -7,6 +7,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `session.compact` end to end: the fire-and-forget dispatch arm
+  (`recovery` validated, seam reached), `TurnExecutor::compact`, and
+  the runner hooks (`agent/compact.rs`) — busy deferral stored under
+  the `active_current` lock and served by the drain at the run's end,
+  the empty-conversation notice, the row lifecycle (running inside the
+  engine's `on_start` → done/failed in place), the archive-once
+  conversation swap, and the refusal notices with the
+  `compaction:<reason>` cause band. Six pins: four in
+  `session_compact.rs`, the busy e2e in `agent_loop.rs`, and the
+  engine's `on_start` fired-once. `TurnExecutor` gained the `compact`
+  seam (all doubles updated); `publish_now` now carries an optional
+  turn id (a standalone compaction has no active turn, like the
+  source's `activeTurnId`).
 - Compaction engine (`compaction/engine.rs`): `compact_conversation`
   with the measured budget arithmetic (both skips with zero calls, the
   output ceiling, window slack), byte-exact guard sentences

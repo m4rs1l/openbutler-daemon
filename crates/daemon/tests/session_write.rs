@@ -57,6 +57,8 @@ impl TurnExecutor for RecordingExecutor {
     fn is_busy(&self, _session_id: &str) -> bool {
         *self.busy.lock().unwrap()
     }
+
+    fn compact(self: Arc<Self>, _session_id: String, _recovery: bool) {}
 }
 
 /// A sink that accepts every frame: the snapshot-event gate requires

@@ -35,9 +35,7 @@ use openbutler_protocol::{
 use serde_json::{Value, json};
 
 use crate::agent::TurnRequest;
-use crate::agent::providers::TeamInfo;
 use crate::ledger;
-use crate::settings::schema::TeamRole;
 use crate::state::{self, WorkspaceFilter};
 
 /// The one dispatch point: validate the envelope, route the action, answer.
@@ -397,6 +395,23 @@ pub fn handle(
             }
             success(request, json!({ "accepted": true }))
         }
+        "session.compact" => {
+            // Source (daemon-host L3514): `recovery` is validated when
+            // present and the request is fire-and-forget — the
+            // controller owns deferral (queued while a run is busy).
+            let recovery = match request.get("recovery") {
+                None => false,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return failure(request, "recovery must be a boolean.".to_owned()),
+            };
+            let Some(executor) = host.executor() else {
+                return failure(request, "The host has no turn executor.".to_owned());
+            };
+            if let Some(session_id) = state.current_session.clone() {
+                executor.compact(session_id, recovery);
+            }
+            success(request, json!({ "accepted": true }))
+        }
         "session.queue" => {
             // Source (daemon-host L3544-3552): requireString(sessionId,
             // 64) + requireString(messageId, 64) + the closed
@@ -712,59 +727,31 @@ fn prepare_send(
         meta.provider_id = provider_id;
         meta.model_id = model_id;
     }
-    let settings = host.settings();
-    let loaded = settings
-        .as_ref()
-        .ok_or_else(|| "settings are not loaded".to_owned())?;
-    let provider_url = loaded
-        .store
-        .providers
-        .get(&meta.provider_id)
-        .and_then(|provider| provider.url.clone());
-    let workspace_root = meta
-        .workspace_root
-        .clone()
-        .or_else(|| loaded.store.default_workspace_root.clone());
-    let team = loaded.store.team.as_ref().map(|team| TeamInfo {
-        team_name: team.team_name.clone(),
-        member_name: team.member_name.clone(),
-        hub: matches!(team.role, TeamRole::Hub),
-    });
-    // The turn owns the policy and the shell label it runs with; both are
-    // captured here, where settings are the single read authority.
-    let approval_mode = loaded.store.approval_mode;
-    let command_shell = loaded.store.command_shell.clone();
-    let approval_timeout_seconds = loaded.store.approval_timeout_seconds;
-    drop(settings);
-    let secrets = crate::settings::load_secrets(data_dir).map_err(|error| error.to_string())?;
-    let provider_api_key = secrets
-        .providers
-        .get(&meta.provider_id)
-        .and_then(|secret| secret.keys.first().cloned());
+    let context = crate::agent::context::resolve_turn_context(host, data_dir, &meta)?;
     // The runtime view every published frame carries, until the full
     // `toRuntimeView` port lands with `session.attach`. Model facts come
     // from this turn's own choice; catalog-backed fields stay empty
     // rather than guessed (documented bootstrap in agent-loop.md).
     host.set_runtime_view(bootstrap_runtime_view(
         &meta,
-        workspace_root.as_deref(),
-        approval_mode,
+        context.workspace_root.as_deref(),
+        context.approval_mode,
     ));
     crate::agent::context::prepare_turn(
         data_dir,
         crate::agent::context::TurnInputs {
             meta: &meta,
-            workspace_root,
-            provider_url,
-            provider_api_key,
-            team,
+            workspace_root: context.workspace_root,
+            provider_url: context.provider_url,
+            provider_api_key: context.provider_api_key,
+            team: context.team,
             home: None,
             source,
             text,
             images,
-            approval_mode,
-            command_shell,
-            approval_timeout_seconds,
+            approval_mode: context.approval_mode,
+            command_shell: context.command_shell,
+            approval_timeout_seconds: context.approval_timeout_seconds,
         },
     )
 }

@@ -48,6 +48,8 @@ impl TurnExecutor for RecordingExecutor {
     fn is_busy(&self, _session_id: &str) -> bool {
         *self.busy.lock().unwrap()
     }
+
+    fn compact(self: Arc<Self>, _session_id: String, _recovery: bool) {}
 }
 
 fn request(id: &str, action: &str, pairs: &[(&str, Value)]) -> DaemonRequest {

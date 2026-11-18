@@ -115,6 +115,31 @@ pub(super) fn push_notice(
     state.dirty = true;
 }
 
+/// A notice the compaction hooks write: the turn is optional (a
+/// standalone compaction has no active turn — the source's `addEntry`
+/// stamps `activeTurnId` only when one is running) and a refusal
+/// carries its classification band as `cause`.
+pub(super) fn push_scoped_notice(
+    state: &mut SessionState,
+    turn_id: Option<&str>,
+    text: &str,
+    tone: Option<NoticeTone>,
+    cause: Option<&str>,
+) {
+    state.record.entries.push(SessionEntry::Notice {
+        meta: SessionEntryMeta {
+            at: Some(Utc::now().timestamp_millis()),
+            turn_id: turn_id.map(str::to_owned),
+            ..SessionEntryMeta::default()
+        },
+        text: text.to_owned(),
+        detail: None,
+        tone,
+        cause: cause.map(str::to_owned),
+    });
+    state.dirty = true;
+}
+
 /// The settled tool entry: written after execution with `running: false`,
 /// the display text and the duration — `onToolResult` (L1576-1593). The
 /// running-start row belongs to the streaming surface (c3); persistence

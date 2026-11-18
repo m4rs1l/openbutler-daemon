@@ -167,25 +167,7 @@ pub fn prepare_turn(
         command_shell,
         approval_timeout_seconds,
     } = inputs;
-    let home = home
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(default_home);
-    // The label travels only when a workspace is known; the assembly
-    // still needs a root, so it falls back to the process directory.
-    let env_workspace = workspace_root.clone().unwrap_or_else(|| {
-        std::env::current_dir()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default()
-    });
-    let env = PromptEnvironment {
-        data_root: data_dir.to_path_buf(),
-        workspace_root: PathBuf::from(env_workspace),
-        home,
-        codex_home: None,
-        builtin_skill_dir: None,
-        team,
-    };
-    let system = build_system(PromptRole::Agent, &env).map_err(|error| error.to_string())?;
+    let system = build_turn_system(data_dir, workspace_root.as_deref(), home, team)?;
     Ok(super::TurnRequest {
         text,
         source,
@@ -200,6 +182,113 @@ pub fn prepare_turn(
         approval_mode,
         command_shell,
         approval_timeout_seconds,
+    })
+}
+
+/// The agent prompt from live context — one assembly for the turn and
+/// for `session.compact`, which must share it or the two would drift
+/// (the source's frozen prompt is one string for both requests).
+pub(crate) fn build_turn_system(
+    data_dir: &std::path::Path,
+    workspace_root: Option<&str>,
+    home: Option<&std::path::Path>,
+    team: Option<TeamInfo>,
+) -> Result<Option<String>, String> {
+    let home = home
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(default_home);
+    // The label travels only when a workspace is known; the assembly
+    // still needs a root, so it falls back to the process directory.
+    let env_workspace = workspace_root.map(str::to_owned).unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    });
+    let env = PromptEnvironment {
+        data_root: data_dir.to_path_buf(),
+        workspace_root: PathBuf::from(env_workspace),
+        home,
+        codex_home: None,
+        builtin_skill_dir: None,
+        team,
+    };
+    build_system(PromptRole::Agent, &env).map_err(|error| error.to_string())
+}
+
+/// Everything a turn (or a compaction) resolves from live settings:
+/// provider transport, the provider secret, the workspace, team, the
+/// policy trio, and the model's declared budget. Settings are the
+/// single read authority; the second consumer is the compaction
+/// engine, which must share this resolution or the two would drift.
+pub struct TurnContext {
+    pub provider_url: Option<String>,
+    pub provider_api_key: Option<String>,
+    pub workspace_root: Option<String>,
+    pub team: Option<TeamInfo>,
+    pub approval_mode: crate::settings::ApprovalMode,
+    pub command_shell: Option<String>,
+    pub approval_timeout_seconds: Option<u64>,
+    /// The model's declared context window (`modelSpecs.*.context`).
+    pub context_window: Option<i64>,
+    /// The model's declared output ceiling (`modelSpecs.*.output`).
+    pub output_limit: Option<u64>,
+}
+
+/// Resolve the settings half of a request: live settings first (the
+/// guard drops before the secret read, like the source), then the
+/// provider key from `config.yaml`.
+pub fn resolve_turn_context(
+    host: &crate::dispatch::Host,
+    data_dir: &std::path::Path,
+    meta: &openbutler_protocol::session::SessionMeta,
+) -> Result<TurnContext, String> {
+    let settings = host.settings();
+    let loaded = settings
+        .as_ref()
+        .ok_or_else(|| "settings are not loaded".to_owned())?;
+    let provider_url = loaded
+        .store
+        .providers
+        .get(&meta.provider_id)
+        .and_then(|provider| provider.url.clone());
+    let workspace_root = meta
+        .workspace_root
+        .clone()
+        .or_else(|| loaded.store.default_workspace_root.clone());
+    let team = loaded.store.team.as_ref().map(|team| TeamInfo {
+        team_name: team.team_name.clone(),
+        member_name: team.member_name.clone(),
+        hub: matches!(team.role, crate::settings::schema::TeamRole::Hub),
+    });
+    let approval_mode = loaded.store.approval_mode;
+    let command_shell = loaded.store.command_shell.clone();
+    let approval_timeout_seconds = loaded.store.approval_timeout_seconds;
+    let specs = loaded
+        .store
+        .providers
+        .get(&meta.provider_id)
+        .and_then(|provider| provider.model_specs.as_ref())
+        .and_then(|specs| specs.get(&meta.model_id));
+    let context_window = specs
+        .and_then(|spec| spec.context)
+        .map(|value| value as i64);
+    let output_limit = specs.and_then(|spec| spec.output);
+    drop(settings);
+    let secrets = crate::settings::load_secrets(data_dir).map_err(|error| error.to_string())?;
+    let provider_api_key = secrets
+        .providers
+        .get(&meta.provider_id)
+        .and_then(|secret| secret.keys.first().cloned());
+    Ok(TurnContext {
+        provider_url,
+        provider_api_key,
+        workspace_root,
+        team,
+        approval_mode,
+        command_shell,
+        approval_timeout_seconds,
+        context_window,
+        output_limit,
     })
 }
 

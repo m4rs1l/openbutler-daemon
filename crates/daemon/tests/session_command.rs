@@ -59,6 +59,8 @@ impl TurnExecutor for RecordingExecutor {
     fn is_busy(&self, _session_id: &str) -> bool {
         false
     }
+
+    fn compact(self: Arc<Self>, _session_id: String, _recovery: bool) {}
 }
 
 fn request(id: &str, action: &str, pairs: &[(&str, Value)]) -> DaemonRequest {
@@ -198,7 +200,7 @@ fn command_routes_new_to_the_draft_arm() {
 }
 
 #[test]
-fn command_resolves_compact_to_the_not_yet_routed_action() {
+fn command_resolves_compact_to_the_routed_action() {
     let dir = temp_data_dir("cmd-compact");
     let host = Host::new();
     let mut state = DispatchState::new();
@@ -206,18 +208,16 @@ fn command_resolves_compact_to_the_not_yet_routed_action() {
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
 
-    // Resolution succeeds; `session.compact` itself lands with the
-    // runtime slice (M2) — the switch reports the unrouted action.
+    // Resolution and routing: `session.compact` is live, so the
+    // command reaches the arm's own executor gate (the seam itself is
+    // pinned in session_compact.rs).
     let response = call(
         &host,
         &dir,
         &mut state,
         request("1", "session.command", &[("name", json!("/compact"))]),
     );
-    assert_eq!(
-        failure_text(response),
-        "Unknown IPC action: session.command"
-    );
+    assert_eq!(failure_text(response), "The host has no turn executor.");
 }
 
 #[test]

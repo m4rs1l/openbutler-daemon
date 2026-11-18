@@ -18,6 +18,7 @@
 //!   in `docs/agent-loop.md`.
 
 mod approval;
+mod compact;
 pub mod context;
 mod entry;
 pub mod events;
@@ -182,6 +183,13 @@ pub struct TurnRunner {
     /// The chat's workspace binding (the source's
     /// `sessionWorkspaceRoot`): the steering refusal's bypass input.
     session_workspace: std::sync::Mutex<Option<String>>,
+    /// A compaction requested while a turn runs: stored under the
+    /// `active_current` lock (compact.rs) so the drain's take after
+    /// the run can never miss it, and served when the run ends.
+    pending_compaction: std::sync::Mutex<Option<bool>>,
+    /// The running turn's id — the source's `activeTurnId`, which
+    /// stamps notices and roster frames while a run is live.
+    active_turn_id: std::sync::Mutex<Option<String>>,
 }
 
 /// The queue — the drain duty is the runner's `drain_active` flag.
@@ -254,6 +262,8 @@ impl TurnRunner {
             drain_active: AtomicBool::new(false),
             active_current: std::sync::Mutex::new(None),
             session_workspace: std::sync::Mutex::new(None),
+            pending_compaction: std::sync::Mutex::new(None),
+            active_turn_id: std::sync::Mutex::new(None),
         })
     }
 
@@ -306,6 +316,10 @@ impl TurnRunner {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(request.clone());
         *self
+            .active_turn_id
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(turn_id.clone());
+        *self
             .session_workspace
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
@@ -313,7 +327,7 @@ impl TurnRunner {
         push_user_entry(&mut state, &request, &turn_id);
         // Admission save: the message on disk before any provider call.
         self.save(&mut state)?;
-        self.publish_now(&state, &turn_id, None, true);
+        self.publish_now(&state, Some(&turn_id), None, true);
 
         let mut call = sidecar_call(&turn_id, &request.provider_key);
         call.provider.url = request.provider_url.clone();
@@ -503,7 +517,7 @@ impl TurnRunner {
                                             biased;
                                             outcome = &mut pending => break outcome,
                                             _ = self.publish_notify.notified() => {
-                                                self.publish_now(&state, &turn_id, None, true);
+                                                self.publish_now(&state, Some(&turn_id), None, true);
                                             }
                                         }
                                     };
@@ -581,6 +595,10 @@ impl TurnRunner {
             .active_current
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self
+            .active_turn_id
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         if outcome == TurnOutcome::Completed && !final_reply.is_empty() {
             state.record.conversation.push(json!({
                 "role": "assistant",
@@ -591,7 +609,7 @@ impl TurnRunner {
         self.save(&mut state)?;
         // The turn is over: the roster learns `busy: false` with the
         // settled record (the outcome stamp, the final assistant text).
-        self.publish_now(&state, &turn_id, None, false);
+        self.publish_now(&state, Some(&turn_id), None, false);
 
         Ok(TurnReport { turn_id, outcome })
     }
@@ -653,7 +671,7 @@ impl TurnRunner {
                                 turn_id,
                                 &mut reply,
                             );
-                            self.publish_now(state, turn_id, assistant_index, true);
+                            self.publish_now(state, Some(turn_id), assistant_index, true);
                         }
                         SidecarEvent::ReasoningDelta { delta, .. } => {
                             // A signature-only delta (empty text) is not
@@ -670,7 +688,7 @@ impl TurnRunner {
                                 &delta,
                                 turn_id,
                             );
-                            self.publish_now(state, turn_id, assistant_index, true);
+                            self.publish_now(state, Some(turn_id), assistant_index, true);
                         }
                         SidecarEvent::ToolCall {
                             name,
@@ -690,7 +708,7 @@ impl TurnRunner {
                                 name,
                                 arguments,
                             });
-                            self.publish_now(state, turn_id, assistant_index, true);
+                            self.publish_now(state, Some(turn_id), assistant_index, true);
                         }
                         SidecarEvent::Usage { .. } => {}
                         SidecarEvent::Finish { .. } => break,
@@ -746,7 +764,7 @@ impl TurnRunner {
         };
         // The step's notices and outcome land in one publish; the stream
         // is over, so nothing carries a streaming index any more.
-        self.publish_now(state, turn_id, None, true);
+        self.publish_now(state, Some(turn_id), None, true);
         DrainResult {
             outcome,
             reply,
@@ -771,7 +789,7 @@ impl TurnRunner {
     fn publish_now(
         &self,
         state: &SessionState,
-        turn_id: &str,
+        turn_id: Option<&str>,
         streaming_index: Option<usize>,
         busy: bool,
     ) {
@@ -794,7 +812,7 @@ impl TurnRunner {
             },
             run: RunState {
                 busy,
-                running_turn_id: Some(turn_id.to_owned()),
+                running_turn_id: turn_id.map(str::to_owned),
                 pending_approval: queued.as_ref().map(|pending| pending.request.clone()),
                 pending_approval_id: queued.as_ref().map(|pending| pending.request_id.clone()),
                 pending_question: self

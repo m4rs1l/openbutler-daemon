@@ -87,12 +87,66 @@ fn call_count(log: &PathBuf) -> usize {
 }
 
 #[tokio::test]
+async fn on_start_fires_once_for_a_forced_attempt_and_never_for_a_skip() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let log = temp_log("onstart");
+    let (door, _) = SidecarDoor::spawn(config(Some(log.clone()))).await.unwrap();
+
+    // Below the trigger with no force: the guard returns before the
+    // hook — zero fires, zero calls.
+    let fired = AtomicUsize::new(0);
+    let skipped = request("basic");
+    let outcome = compact_conversation(
+        &door,
+        skipped.clone(),
+        Some(&|| {
+            fired.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        CompactOutcome::Skipped {
+            reason: SkipReason::BelowThreshold
+        }
+    ));
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        0,
+        "a skipped attempt never opens the row"
+    );
+
+    // Forced: the hook fires once before the summarisation call.
+    let fired = AtomicUsize::new(0);
+    let mut forced = request("basic");
+    forced.force = true;
+    let outcome = compact_conversation(
+        &door,
+        forced,
+        Some(&|| {
+            fired.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, CompactOutcome::Compacted { .. }));
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        1,
+        "exactly one row per attempt"
+    );
+    assert_eq!(call_count(&log), 1, "one summarisation call");
+}
+
+#[tokio::test]
 async fn without_a_window_the_trigger_never_fires() {
     let log = temp_log("nowindow");
     let (door, _) = SidecarDoor::spawn(config(Some(log.clone()))).await.unwrap();
     let mut request = request("basic");
     request.context_window = None;
-    let outcome = compact_conversation(&door, request).await.unwrap();
+    let outcome = compact_conversation(&door, request, None).await.unwrap();
     assert!(matches!(
         outcome,
         CompactOutcome::Skipped {
@@ -107,7 +161,9 @@ async fn without_a_window_the_trigger_never_fires() {
 async fn below_the_trigger_is_a_skip_not_a_call() {
     let log = temp_log("below");
     let (door, _) = SidecarDoor::spawn(config(Some(log.clone()))).await.unwrap();
-    let outcome = compact_conversation(&door, request("basic")).await.unwrap();
+    let outcome = compact_conversation(&door, request("basic"), None)
+        .await
+        .unwrap();
     assert!(matches!(
         outcome,
         CompactOutcome::Skipped {
@@ -123,7 +179,7 @@ async fn force_compacts_and_builds_the_checkpoint() {
     let (door, _) = SidecarDoor::spawn(config(None)).await.unwrap();
     let mut request = request("basic");
     request.force = true;
-    let outcome = compact_conversation(&door, request).await.unwrap();
+    let outcome = compact_conversation(&door, request, None).await.unwrap();
     let CompactOutcome::Compacted { result } = outcome else {
         panic!("expected compaction, got {outcome:?}");
     };
@@ -155,7 +211,7 @@ async fn a_length_finish_is_a_named_refusal() {
     let mut request = request("length");
     request.force = true;
     request.output_limit = Some(16_384);
-    let error = compact_conversation(&door, request)
+    let error = compact_conversation(&door, request, None)
         .await
         .expect_err("length must refuse");
     assert_eq!(
@@ -170,7 +226,7 @@ async fn a_tool_call_finish_is_a_text_only_refusal() {
     let (door, _) = SidecarDoor::spawn(config(None)).await.unwrap();
     let mut request = request("tool");
     request.force = true;
-    let error = compact_conversation(&door, request)
+    let error = compact_conversation(&door, request, None)
         .await
         .expect_err("tool calls must refuse");
     assert_eq!(
@@ -185,7 +241,7 @@ async fn an_empty_summary_is_a_refusal() {
     let (door, _) = SidecarDoor::spawn(config(None)).await.unwrap();
     let mut request = request("empty");
     request.force = true;
-    let error = compact_conversation(&door, request)
+    let error = compact_conversation(&door, request, None)
         .await
         .expect_err("empty must refuse");
     assert_eq!(
@@ -200,7 +256,7 @@ async fn a_stream_error_surfaces_its_message() {
     let (door, _) = SidecarDoor::spawn(config(None)).await.unwrap();
     let mut request = request("error");
     request.force = true;
-    let error = compact_conversation(&door, request)
+    let error = compact_conversation(&door, request, None)
         .await
         .expect_err("stream errors throw");
     assert!(error.contains("slow down"), "error text travels: {error}");
@@ -215,7 +271,7 @@ async fn an_oversized_attempt_is_data_not_an_exception() {
     request.previous_context = Some(50_000);
     let context_estimate = estimate_context_tokens("", &request.messages, &json!({}));
     request.previous_context_estimate = Some(context_estimate);
-    let outcome = compact_conversation(&door, request).await.unwrap();
+    let outcome = compact_conversation(&door, request, None).await.unwrap();
     let CompactOutcome::Impossible {
         reason,
         window,
@@ -243,7 +299,7 @@ async fn a_summary_that_does_not_shrink_is_not_applied() {
     let context_estimate = estimate_context_tokens("", &request.messages, &json!({}));
     request.previous_context = Some(160_000);
     request.previous_context_estimate = Some(context_estimate);
-    let outcome = compact_conversation(&door, request).await.unwrap();
+    let outcome = compact_conversation(&door, request, None).await.unwrap();
     let CompactOutcome::Impossible {
         reason,
         estimated_tokens,
@@ -274,7 +330,7 @@ async fn the_sliced_chain_summarises_then_checkpoints() {
     request.previous_context = Some(7_000);
     request.previous_context_estimate = Some(context_estimate);
 
-    let outcome = compact_conversation(&door, request).await.unwrap();
+    let outcome = compact_conversation(&door, request, None).await.unwrap();
     let CompactOutcome::Compacted { result } = outcome else {
         panic!("expected the chain to compact, got {outcome:?}");
     };
@@ -294,7 +350,7 @@ async fn recovery_appends_its_documented_suffix() {
     let mut request = request("echo");
     request.force = true;
     request.recovery = true;
-    let outcome = compact_conversation(&door, request).await.unwrap();
+    let outcome = compact_conversation(&door, request, None).await.unwrap();
     let CompactOutcome::Compacted { result } = outcome else {
         panic!("expected compaction, got {outcome:?}");
     };

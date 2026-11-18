@@ -124,7 +124,7 @@ pub enum ImpossibleReason {
 }
 
 impl ImpossibleReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             ImpossibleReason::ExceedsWindow => "exceeds-window",
             ImpossibleReason::NoReduction => "no-reduction",
@@ -139,6 +139,7 @@ impl ImpossibleReason {
 pub async fn compact_conversation(
     door: &SidecarDoor,
     request: CompactionRequest,
+    on_start: Option<&(dyn Fn() + Send + Sync)>,
 ) -> Result<CompactOutcome, String> {
     let prompt = if request.recovery {
         format!("{COMPACTION_PROMPT}{RECOVERY_SUFFIX}")
@@ -227,7 +228,7 @@ pub async fn compact_conversation(
         if let Some(window) = window
             && !request.messages.is_empty()
         {
-            match compact_by_slicing(door, &request, window).await? {
+            match compact_by_slicing(door, &request, window, on_start).await? {
                 Some(Sliced::Result(result)) => {
                     return Ok(CompactOutcome::Compacted {
                         result: CompactionResult {
@@ -279,6 +280,12 @@ pub async fn compact_conversation(
         max_output,
         tool_set_to_sidecar(&request.tools),
     );
+    // The source fires `onStart` here: after the budget arithmetic, the
+    // row exists from the first moment the stream can begin (C3's
+    // session hook inserts the running compaction row).
+    if let Some(on_start) = on_start {
+        on_start();
+    }
     let drained = drain_call(door, call).await?;
     let summary = interpret_summary(&drained, max_output)?;
 
@@ -350,6 +357,7 @@ async fn compact_by_slicing(
     door: &SidecarDoor,
     request: &CompactionRequest,
     window: i64,
+    on_start: Option<&(dyn Fn() + Send + Sync)>,
 ) -> Result<Option<Sliced>, String> {
     let system_estimate = estimate_text_tokens(&request.system);
     let prompt_estimate = estimate_text_tokens(COMPACTION_PROMPT);
@@ -366,6 +374,11 @@ async fn compact_by_slicing(
     };
     if slices.len() < 2 {
         return Ok(None);
+    }
+    // The chain fires the hook once, before the first note (the source
+    // calls `onStart` here; the nested forced call reuses a no-op).
+    if let Some(on_start) = on_start {
+        on_start();
     }
 
     // One transcript row spans the whole chain; the recursion below
@@ -472,7 +485,7 @@ async fn compact_by_slicing(
     nested.force = true;
     // The recursion crosses the async boundary through a box; the
     // synthetic request always forces, so it terminates.
-    let outcome = Box::pin(compact_conversation(door, nested)).await?;
+    let outcome = Box::pin(compact_conversation(door, nested, None)).await?;
     Ok(Some(match outcome {
         CompactOutcome::Compacted { result } => Sliced::Result(result),
         CompactOutcome::Impossible { reason, cause, .. } => {

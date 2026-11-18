@@ -162,6 +162,16 @@ impl TurnRunner {
                     &error.to_string(),
                 );
             }
+            // A compaction requested while this run was busy runs now:
+            // the source serves it at the next step boundary, and the
+            // run's end is its fallback when no step follows (the
+            // boundary itself arrives with the auto-trigger slice).
+            if let Some(recovery) = self.take_pending_compaction() {
+                let runner = Arc::clone(&self);
+                tokio::spawn(async move {
+                    let _ = runner.compact(recovery).await;
+                });
+            }
         }
     }
 
