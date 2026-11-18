@@ -114,7 +114,7 @@ fn bounded_limit(limit: Option<&Value>) -> i64 {
 
 /// A read-only connection, or `None` when the database does not exist:
 /// reading must never bring a database into being.
-fn open_readonly(data_dir: &Path) -> Result<Option<Connection>, LedgerError> {
+pub(super) fn open_readonly(data_dir: &Path) -> Result<Option<Connection>, LedgerError> {
     let path = data_dir.join("state.db");
     if !path.exists() {
         return Ok(None);

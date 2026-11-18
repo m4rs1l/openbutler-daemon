@@ -10,6 +10,7 @@ pub mod config;
 pub mod dispatch;
 pub mod ledger;
 pub mod listen_target;
+pub mod schedule;
 pub mod server;
 pub mod settings;
 pub mod shape;

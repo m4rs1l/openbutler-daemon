@@ -131,7 +131,8 @@ fn tool_action_schema() -> String {
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS openbutler_action_transitions_request_idx
-            ON openbutler_action_transitions(request_id, id);"
+            ON openbutler_action_transitions(request_id, id);
+        CREATE TABLE IF NOT EXISTS openbutler_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
     )
 }
 

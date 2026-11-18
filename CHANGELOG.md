@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Schedule engine (`schedule/{wall,format,runtime,describe,wake}.rs`):
+  the pure scheduler half ported from `tools/schedule.ts` — wall-clock
+  occurrence math (server-local only, DST-gap walk with round-trip
+  verification), durable run state in `openbutler_state` (count+1,
+  8000-code-point report truncation, error-then-start clearing), the
+  seven-adapter description line (including `≥` and the EN dash), the
+  wake text in the source's line order (LATE boundary exclusive), and
+  interval-only trigger-due keys. `ledger/state.rs` adds the
+  `openbutler_state` read/write surface, and the `LedgerWriter` schema
+  now creates that table (it never existed on a fresh database — the
+  writer's own marker upsert would have failed). 17 pins.
 - Schedule store (`state/schedules.rs`): schedules moved out of
   `settings.yaml` entirely (owner ruling: schedules are records, not
   configuration) into their own `schedules.json` — the bare-list shape,

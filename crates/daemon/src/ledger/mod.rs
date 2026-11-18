@@ -5,10 +5,12 @@
 //! never create the database; `LedgerWriter` is the one writable open.
 
 mod feed;
+mod state;
 mod usage;
 mod writer;
 
 pub use feed::{list_actions, list_events, retry_event};
+pub use state::StateReader;
 pub use usage::{StepUsageReport, UsageInput, UsageRow, UsageTokens};
 pub use writer::{LedgerWriter, TOOL_ACTION_STATES, ToolActionState, ToolActionUpdate};
 
