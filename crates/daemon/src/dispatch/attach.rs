@@ -90,10 +90,7 @@ pub fn attach_chat(
     let Some(chat_value) = request.payload.get("chatSessionId") else {
         return Err("Choose a chat or a session to attach.".to_owned());
     };
-    let chat_session_id = chat_value.as_str().unwrap_or_default().to_owned();
-    if chat_session_id.is_empty() || chat_session_id.len() > 64 {
-        return Err("chatSessionId must be a non-empty string under 64 bytes.".to_owned());
-    }
+    let chat_session_id = super::require(Some(chat_value), "chatSessionId", 64)?;
     let Some(view) = load_view(data_dir, &chat_session_id) else {
         return Err(CHAT_NOT_FOUND.to_owned());
     };

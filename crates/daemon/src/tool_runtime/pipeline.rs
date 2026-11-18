@@ -400,7 +400,11 @@ pub async fn run_tool_call(
     if let Err(error) = write(ToolActionState::Proposed, None, None) {
         let message = error.to_string();
         let result = proposal_failure(&message);
-        let _ = write(ToolActionState::Failed, Some(result.clone()), Some(message));
+        // The worst path (the call failed *and* the ledger write):
+        // never silent — the run still carries the tool result.
+        if let Err(error) = write(ToolActionState::Failed, Some(result.clone()), Some(message)) {
+            eprintln!("openbutler-daemon: ledger action write: {error}");
+        }
         return CallOutcome {
             result,
             run_stopped: true,
@@ -438,7 +442,11 @@ pub async fn run_tool_call(
     {
         let message = format!("The tool was not run. {error}");
         let result = json!({ "status": "error", "error": message });
-        let _ = write(ToolActionState::Failed, Some(result.clone()), Some(message));
+        // The worst path (the call failed *and* the ledger write):
+        // never silent — the run still carries the tool result.
+        if let Err(error) = write(ToolActionState::Failed, Some(result.clone()), Some(message)) {
+            eprintln!("openbutler-daemon: ledger action write: {error}");
+        }
         return CallOutcome {
             result,
             run_stopped: false,
@@ -465,7 +473,12 @@ pub async fn run_tool_call(
                  before retrying. {error}"
             );
             let result = json!({ "status": "error", "error": message });
-            let _ = write(ToolActionState::Failed, Some(result.clone()), Some(message));
+            // The worst path (the call failed *and* the ledger write):
+            // never silent — the run still carries the tool result.
+            if let Err(error) = write(ToolActionState::Failed, Some(result.clone()), Some(message))
+            {
+                eprintln!("openbutler-daemon: ledger action write: {error}");
+            }
             CallOutcome {
                 result,
                 run_stopped: false,

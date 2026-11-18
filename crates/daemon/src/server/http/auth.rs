@@ -80,10 +80,16 @@ pub fn persistent_session_token(data_dir: &Path) -> std::io::Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    // The source refuses when the token cannot be stored
+    // (`Pairing could not store a token on this host.`, L3984) — an
+    // in-memory-only token would hand the next boot a different one
+    // and silently invalidate every paired cookie.
     if let Some(parent) = file.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)
+            .map_err(|_| std::io::Error::other("Pairing could not store a token on this host."))?;
     }
-    let _ = write_private(&file, token.as_bytes());
+    write_private(&file, token.as_bytes())
+        .map_err(|_| std::io::Error::other("Pairing could not store a token on this host."))?;
     Ok(token)
 }
 

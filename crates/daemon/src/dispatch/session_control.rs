@@ -3,6 +3,7 @@
 //! and reaches the turn executor through a seam. The router wraps each
 //! result in the envelope; nothing here builds responses.
 
+use super::require as require_string;
 use openbutler_protocol::entry::UserEntrySource;
 use serde_json::{Value, json};
 
@@ -58,12 +59,7 @@ pub fn approve(
     let Some(approved) = decision else {
         return Err("Approval decision must be allow, deny, or always.".to_owned());
     };
-    let approval_id = match request.get("approvalId").and_then(Value::as_str) {
-        Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-        _ => {
-            return Err("approvalId must be a non-empty string under 64 bytes.".to_owned());
-        }
-    };
+    let approval_id = require_string(request.get("approvalId"), "approvalId", 64)?;
     let Some(session_id) = state.current_session.clone() else {
         return Err(CHAT_NOT_FOUND.to_owned());
     };
@@ -102,7 +98,9 @@ pub fn stop(
             if !keep_queue {
                 host.bump_stop_generation(lane_key);
             }
-            let _ = schedule::cancel_pending_schedule_events(data_dir, lane_key, keep_queue);
+            // The source's cancel runs inside the handler — its failure
+            // fails the request (never a silent skip).
+            schedule::cancel_pending_schedule_events(data_dir, lane_key, keep_queue)?;
         }
         let _ = executor.stop(&session_id, keep_queue);
     }
@@ -144,18 +142,8 @@ pub fn queue(
     // requireString(messageId, 64) + the closed `queueAction` set,
     // then manage through the seam — the runner's refusals are this
     // action's error text.
-    let session_id = match request.get("sessionId").and_then(Value::as_str) {
-        Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-        _ => {
-            return Err("sessionId must be a non-empty string under 64 bytes.".to_owned());
-        }
-    };
-    let message_id = match request.get("messageId").and_then(Value::as_str) {
-        Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-        _ => {
-            return Err("messageId must be a non-empty string under 64 bytes.".to_owned());
-        }
-    };
+    let session_id = require_string(request.get("sessionId"), "sessionId", 64)?;
+    let message_id = require_string(request.get("messageId"), "messageId", 64)?;
     let action = match request.get("queueAction").and_then(Value::as_str) {
         Some("steer") => QueueAction::Steer,
         Some("remove") => QueueAction::Remove,
@@ -181,12 +169,7 @@ pub fn answer(
 ) -> Result<Value, String> {
     // Source (daemon-host L3532-3544): requireString(questionId, 64) +
     // the two answer shapes, then accept immediately.
-    let question_id = match request.get("questionId").and_then(Value::as_str) {
-        Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-        _ => {
-            return Err("questionId must be a non-empty string under 64 bytes.".to_owned());
-        }
-    };
+    let question_id = require_string(request.get("questionId"), "questionId", 64)?;
     let answer = match request.get("answer") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) => {
@@ -221,18 +204,8 @@ pub fn select_model(
     // requireString(modelId, 512), the pick waits at the turn
     // boundary, and the settings record is best effort — a failed
     // remember logs and still answers accepted.
-    let provider_id = match request.get("providerId").and_then(Value::as_str) {
-        Some(value) if !value.is_empty() && value.len() <= 256 => value.to_owned(),
-        _ => {
-            return Err("providerId must be a non-empty string under 256 bytes.".to_owned());
-        }
-    };
-    let model_id = match request.get("modelId").and_then(Value::as_str) {
-        Some(value) if !value.is_empty() && value.len() <= 512 => value.to_owned(),
-        _ => {
-            return Err("modelId must be a non-empty string under 512 bytes.".to_owned());
-        }
-    };
+    let provider_id = require_string(request.get("providerId"), "providerId", 256)?;
+    let model_id = require_string(request.get("modelId"), "modelId", 512)?;
     if let Some(session_id) = state.current_session.clone() {
         host.queue_model_pick(&session_id, provider_id.clone(), model_id.clone());
     }

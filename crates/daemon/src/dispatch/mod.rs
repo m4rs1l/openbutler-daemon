@@ -352,6 +352,17 @@ fn load_view(data_dir: &Path, session_id: &str) -> Option<SessionView> {
     state::read_session_view(&path, session_id)
 }
 
+/// `requireString(value, name, max)`: the protocol validator with its
+/// fixed message, answered as this router's error type.
+pub(crate) fn require(
+    value: Option<&serde_json::Value>,
+    name: &'static str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    openbutler_protocol::payload::require_string(value, name, max_bytes)
+        .map_err(|error| error.to_string())
+}
+
 /// Failure envelope for a dispatched request.
 fn failure(request: &DaemonRequest, error: String) -> DaemonResponse {
     envelope_failure(&request.id, &error)
