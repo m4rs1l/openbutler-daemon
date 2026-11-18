@@ -12,6 +12,7 @@ pub mod ledger;
 pub mod listen_target;
 pub mod server;
 pub mod settings;
+pub mod shape;
 pub mod sidecar;
 pub mod state;
 pub mod tool_runtime;

@@ -1,9 +1,11 @@
-//! `schedule.manage`: the settings-only half of the schedule actions.
+//! `schedule.manage`: the schedule actions over their own store.
 //!
 //! Source: `daemon-host.ts` `schedule.manage` → `schedule-service.ts`
 //! `executeBackground` (read 2026-11-16). This slice owns `capabilities`
-//! and the CRUD that persists through settings; `run`, `list` and `log`
-//! need the ledger and scheduler runtime and are not implemented here.
+//! and the CRUD persisted in `schedules.json` (schedules left the
+//! settings file entirely — owner ruling 2026-11-18); `run`, `list` and
+//! `log` need the ledger and scheduler runtime and are not implemented
+//! here.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -12,7 +14,11 @@ use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use serde_json::{Map, Value, json};
 
 use crate::dispatch::{envelope_failure, envelope_success};
-use crate::settings::{LoadedSettings, SettingsError, load_settings, save_settings, schema};
+use crate::shape::is_absolute_path;
+use crate::state::schedules::{
+    ScheduleState, ScheduleTrigger, load as load_schedules, parse_schedule_state,
+    save as save_schedules,
+};
 
 use openbutler_protocol::payload::require_string;
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -30,11 +36,7 @@ const CAPABILITIES: [&str; 7] = [
 ];
 
 /// The single dispatch point for `schedule.manage`.
-pub(crate) fn handle_schedule_manage(
-    host: &crate::dispatch::Host,
-    data_dir: &Path,
-    request: &DaemonRequest,
-) -> DaemonResponse {
+pub(crate) fn handle_schedule_manage(data_dir: &Path, request: &DaemonRequest) -> DaemonResponse {
     let Some(input) = request.get("input").and_then(Value::as_object) else {
         return fail(request, "input must be an object.".to_owned());
     };
@@ -51,15 +53,15 @@ pub(crate) fn handle_schedule_manage(
         );
     }
 
-    let mut loaded = match load_settings(data_dir) {
-        Ok(loaded) => loaded,
+    let mut schedules = match load_schedules(data_dir) {
+        Ok(schedules) => schedules,
         Err(error) => return fail(request, error.to_string()),
     };
 
     match action.as_str() {
-        "add" | "update" => match add_or_update(&mut loaded, input, data_dir) {
+        "add" | "update" => match add_or_update(&mut schedules, input) {
             Ok(schedule) => {
-                if let Err(error) = persist(host, data_dir, &mut loaded) {
+                if let Err(error) = save_schedules(data_dir, &schedules) {
                     return fail(request, error.to_string());
                 }
                 success(
@@ -74,9 +76,7 @@ pub(crate) fn handle_schedule_manage(
                 Ok(id) => id,
                 Err(error) => return fail(request, error.to_string()),
             };
-            let Some(index) = loaded
-                .store
-                .schedules
+            let Some(index) = schedules
                 .iter()
                 .position(|candidate| candidate.id == schedule_id)
             else {
@@ -84,12 +84,12 @@ pub(crate) fn handle_schedule_manage(
             };
             match action.as_str() {
                 "remove" => {
-                    loaded.store.schedules.remove(index);
+                    schedules.remove(index);
                 }
-                "enable" => loaded.store.schedules[index].enabled = true,
-                _ => loaded.store.schedules[index].enabled = false,
+                "enable" => schedules[index].enabled = true,
+                _ => schedules[index].enabled = false,
             }
-            if let Err(error) = persist(host, data_dir, &mut loaded) {
+            if let Err(error) = save_schedules(data_dir, &schedules) {
                 return fail(request, error.to_string());
             }
             success(
@@ -179,11 +179,9 @@ fn capabilities() -> Vec<Value> {
 /// add/update: parse, validate, canonicalise, insert or replace — the
 /// source order, so the first failing rule is the message the client sees.
 fn add_or_update(
-    loaded: &mut LoadedSettings,
+    schedules: &mut Vec<ScheduleState>,
     input: &Map<String, Value>,
-    data_dir: &Path,
 ) -> Result<Value, String> {
-    let _ = data_dir;
     let Some(schedule_input) = input.get("schedule").and_then(Value::as_object) else {
         return Err("schedule must be an object.".to_owned());
     };
@@ -210,9 +208,7 @@ fn add_or_update(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        let taken: BTreeSet<String> = loaded
-            .store
-            .schedules
+        let taken: BTreeSet<String> = schedules
             .iter()
             .map(|candidate| candidate.id.clone())
             .collect();
@@ -227,7 +223,7 @@ fn add_or_update(
         } else {
             raw.get("id")
                 .and_then(Value::as_str)
-                .and_then(|id| loaded.store.schedules.iter().find(|c| c.id == id))
+                .and_then(|id| schedules.iter().find(|c| c.id == id))
         };
         // No sender session on the wire in this build: the source falls
         // back to `senderSessionId ?? ''`, and there is no sender here.
@@ -239,34 +235,21 @@ fn add_or_update(
 
     let record: Map<String, Value> = raw;
     let mut schedule =
-        schema::parse_schedule_state(&Value::Object(record)).map_err(|error| error.0)?;
+        parse_schedule_state(&Value::Object(record)).map_err(|error| error.to_string())?;
     schedule.trigger = normalize_schedule_trigger(schedule.trigger);
     validate_schedule_trigger(&schedule.trigger)?;
     schedule.workspace_root = canonical_scope_root(&schedule.workspace_root)?;
 
-    let index = loaded
-        .store
-        .schedules
+    let index = schedules
         .iter()
         .position(|candidate| candidate.id == schedule.id);
     match (action_is_add, index) {
         (true, Some(_)) => return Err("A schedule with that id already exists.".to_owned()),
         (false, None) => return Err("Schedule does not exist.".to_owned()),
-        (true, None) => loaded.store.schedules.push(schedule.clone()),
-        (false, Some(at)) => loaded.store.schedules[at] = schedule.clone(),
+        (true, None) => schedules.push(schedule.clone()),
+        (false, Some(at)) => schedules[at] = schedule.clone(),
     }
     serde_json::to_value(&schedule).map_err(|error| error.to_string())
-}
-
-/// Save through the transaction boundary, then refresh the host's live
-/// copy — the same pairing the `permissions.set-mode` action uses.
-fn persist(
-    host: &crate::dispatch::Host,
-    data_dir: &Path,
-    loaded: &mut LoadedSettings,
-) -> Result<(), SettingsError> {
-    save_settings(data_dir, loaded)?;
-    host.reload_settings(data_dir)
 }
 
 /// `generateScheduleId`: readable slug plus four hex characters, never
@@ -303,7 +286,7 @@ fn generate_schedule_id(name: &str, taken: &BTreeSet<String>) -> Result<String, 
 /// Normalise a submitted trigger to its stored form: an ISO value that
 /// carries an explicit offset becomes a server-local `YYYY-MM-DDTHH:MM`,
 /// so every later reader compares like with like.
-fn normalize_schedule_trigger(mut trigger: schema::ScheduleTrigger) -> schema::ScheduleTrigger {
+fn normalize_schedule_trigger(mut trigger: ScheduleTrigger) -> ScheduleTrigger {
     if let Value::Object(options) = &mut trigger.options {
         for key in ["at", "from", "to"] {
             let Some(Value::String(text)) = options.get(key).cloned() else {
@@ -352,7 +335,7 @@ fn parse_instant(value: &str) -> Option<DateTime<Local>> {
 }
 
 /// Adapter-specific trigger validation with the source's exact messages.
-fn validate_schedule_trigger(trigger: &schema::ScheduleTrigger) -> Result<(), String> {
+fn validate_schedule_trigger(trigger: &ScheduleTrigger) -> Result<(), String> {
     let options = match &trigger.options {
         Value::Object(options) => options.clone(),
         _ => {
@@ -451,7 +434,7 @@ fn validate_schedule_trigger(trigger: &schema::ScheduleTrigger) -> Result<(), St
             let path_ok = options
                 .get("path")
                 .and_then(Value::as_str)
-                .is_some_and(schema::is_absolute_path);
+                .is_some_and(is_absolute_path);
             if !path_ok {
                 return Err("filesystem.path must be an absolute path.".to_owned());
             }
@@ -531,7 +514,7 @@ fn canonical_scope_root(path: &str) -> Result<String, String> {
     } else {
         requested.to_owned()
     };
-    let absolute = if schema::is_absolute_path(&expanded) {
+    let absolute = if is_absolute_path(&expanded) {
         std::path::PathBuf::from(expanded)
     } else {
         std::env::current_dir()

@@ -581,7 +581,7 @@ pub fn handle(
             }
             Err(error) => failure(request, error.to_string()),
         },
-        "schedule.manage" => schedule::handle_schedule_manage(host, data_dir, request),
+        "schedule.manage" => schedule::handle_schedule_manage(data_dir, request),
         "ledger.events" => match ledger::list_events(data_dir, request.get("limit")) {
             Ok(rows) => success(
                 request,

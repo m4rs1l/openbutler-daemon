@@ -1,5 +1,6 @@
-//! `schedule.manage` pins: the capability list, the settings-only CRUD
-//! (add/update/remove/enable/disable), and the source's exact refusals.
+//! `schedule.manage` pins: the capability list, the CRUD persisted in
+//! the schedule's own store (`schedules.json` — never `settings.yaml`),
+//! and the source's exact refusals.
 //!
 //! Source: `daemon-host.ts` `schedule.manage` → `schedule-service.ts`
 //! `executeBackground` (read 2026-11-16). The runtime half — `run`,
@@ -113,8 +114,12 @@ fn add_persists_a_generated_id_and_survives_reload() {
     );
     assert_eq!(result["schedule"]["enabled"], true, "enabled defaults on");
 
-    let saved = fs::read_to_string(dir.join("settings.yaml")).expect("settings written");
-    assert!(saved.contains(id), "the schedule lands in settings.yaml");
+    let saved = fs::read_to_string(dir.join("schedules.json")).expect("store written");
+    assert!(saved.contains(id), "the schedule lands in schedules.json");
+    assert!(
+        !dir.join("settings.yaml").exists(),
+        "a schedule is not configuration: the settings file never appears"
+    );
 }
 
 #[test]
@@ -191,7 +196,7 @@ fn duplicate_ids_and_missing_schedules_are_refused() {
 }
 
 #[test]
-fn enable_disable_and_remove_rewrite_settings() {
+fn enable_disable_and_remove_rewrite_the_store() {
     let dir = temp_data_dir("toggle");
     let host = Host::new();
     host.reload_settings(&dir).expect("boot load");
@@ -208,9 +213,9 @@ fn enable_disable_and_remove_rewrite_settings() {
     ));
     assert_eq!(disabled["status"], "completed");
     assert_eq!(disabled["scheduleId"], "a");
-    let saved = fs::read_to_string(dir.join("settings.yaml")).expect("settings written");
+    let saved = fs::read_to_string(dir.join("schedules.json")).expect("store written");
     assert!(
-        saved.contains("enabled: false"),
+        saved.contains("\"enabled\": false"),
         "disable persists: {saved}"
     );
 
@@ -220,8 +225,11 @@ fn enable_disable_and_remove_rewrite_settings() {
         json!({ "action": "enable", "scheduleId": "a" }),
     ));
     assert_eq!(enabled["saved"], true);
-    let saved = fs::read_to_string(dir.join("settings.yaml")).expect("settings written");
-    assert!(saved.contains("enabled: true"), "enable persists: {saved}");
+    let saved = fs::read_to_string(dir.join("schedules.json")).expect("store written");
+    assert!(
+        saved.contains("\"enabled\": true"),
+        "enable persists: {saved}"
+    );
 
     let removed = success_json(apply(
         &host,
@@ -229,8 +237,8 @@ fn enable_disable_and_remove_rewrite_settings() {
         json!({ "action": "remove", "scheduleId": "a" }),
     ));
     assert_eq!(removed["saved"], true);
-    let saved = fs::read_to_string(dir.join("settings.yaml")).expect("settings written");
-    assert!(!saved.contains("enabled:"), "the schedule is gone: {saved}");
+    let saved = fs::read_to_string(dir.join("schedules.json")).expect("store written");
+    assert!(!saved.contains("\"a\""), "the schedule is gone: {saved}");
 
     let after = failure_text(apply(
         &host,

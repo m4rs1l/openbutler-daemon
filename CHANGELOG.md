@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Schedule store (`state/schedules.rs`): schedules moved out of
+  `settings.yaml` entirely (owner ruling: schedules are records, not
+  configuration) into their own `schedules.json` — the bare-list shape,
+  the per-schedule parser messages and the list/duplicate refusals moved
+  byte-preserved from the settings half. Writes take the host's store
+  lock and the one atomic writer; the settings file no longer carries
+  `schedules`/`backgroundTasks` (both now refused by name), and the
+  schedule CRUD pins that a schedule never creates or rewrites
+  `settings.yaml`. A neutral `shape` module (record/id/length/absolute
+  checks) keeps the schema and the store from importing each other.
 - Usage accounting (`ledger/usage.rs`, the source's `onStepUsage` →
   `recordUsage`): one `state.db` row per model request for chat turns
   and compaction alike — `sessionId:startedAt:attempt` key with

@@ -12,9 +12,10 @@ use serde_json::{Map, Value};
 
 use super::SettingsError;
 use crate::listen_target::{ListenTargetError, parse_listen_target};
+use crate::shape::{as_record, is_absolute_path, is_id_token, js_len};
 
-/// Top-level keys a settings document may carry (22, insertion order).
-pub const KNOWN_KEYS: [&str; 22] = [
+/// Top-level keys a settings document may carry (20, insertion order).
+pub const KNOWN_KEYS: [&str; 20] = [
     "providers",
     "mcpServers",
     "providerOrder",
@@ -30,8 +31,6 @@ pub const KNOWN_KEYS: [&str; 22] = [
     "roles",
     "approvalTimeoutSeconds",
     "commandShell",
-    "schedules",
-    "backgroundTasks",
     "defaultWorkspaceRoot",
     "daemon",
     "telegram",
@@ -89,15 +88,6 @@ const TEAM_KEYS: [&str; 7] = [
     "hubFingerprint",
     "teamId",
 ];
-const SCHEDULE_KEYS: [&str; 7] = [
-    "id",
-    "name",
-    "enabled",
-    "workspaceRoot",
-    "originSessionId",
-    "instruction",
-    "trigger",
-];
 const TELEGRAM_KEYS: [&str; 5] = ["enabled", "tokenEnv", "workspaceRoot", "chatId", "userId"];
 const MODEL_SPEC_KEYS: [&str; 5] = ["name", "context", "output", "reasoning", "payload"];
 
@@ -108,12 +98,6 @@ const CUSTODIAN_REPORT_GAP_RANGE: (u64, u64) = (0, 3_600);
 
 fn known(keys: &[&str]) -> String {
     keys.join(", ")
-}
-
-/// The record check behind every `typeof x === 'object' && x !== null &&
-/// !Array.isArray(x)` in the source.
-fn as_record(value: &Value) -> Option<&Map<String, Value>> {
-    value.as_object()
 }
 
 /// `Array.isArray` + every item a string — the legacy `stringArray`.
@@ -131,18 +115,9 @@ fn string_array(value: &Value, where_: &str) -> Result<Vec<String>, SettingsErro
     Ok(out)
 }
 
-/// JS `String.length`: UTF-16 code units. Length limits in the contract are
-/// written against it, so a byte count here would accept what JavaScript
-/// rejects (and split the two implementations at an astral character).
-fn js_len(value: &str) -> usize {
-    value.chars().map(char::len_utf16).sum()
-}
-
 /// The compact JSON size the source measures with `JSON.stringify`.
 fn json_size(value: &Value) -> Result<usize, SettingsError> {
-    serde_json::to_string(value)
-        .map(|text| text.len())
-        .map_err(|error| SettingsError(error.to_string()))
+    crate::shape::json_size(value).map_err(SettingsError)
 }
 
 /// `/^[A-Za-z_][A-Za-z0-9_]*$/` — an environment-variable name.
@@ -153,21 +128,6 @@ fn is_environment_name(value: &str) -> bool {
         _ => return false,
     }
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
-/// `/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/` — schedule ids and adapters.
-fn is_id_token(value: &str, max: usize) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.is_empty() || bytes.len() > max {
-        return false;
-    }
-    let first = bytes[0];
-    if !first.is_ascii_alphanumeric() {
-        return false;
-    }
-    bytes[1..]
-        .iter()
-        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-')
 }
 
 /// `/^[A-Za-z0-9][A-Za-z0-9_-]{0,58}$/` — MCP server ids (59 max).
@@ -198,23 +158,6 @@ fn is_header_name(value: &str) -> bool {
                         | b'-'
                 )
         })
-}
-
-/// `path.isAbsolute` on the host platform (the daemon loads its own file).
-pub(crate) fn is_absolute_path(value: &str) -> bool {
-    #[cfg(windows)]
-    {
-        let bytes = value.as_bytes();
-        (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && (bytes[2] == b'\\' || bytes[2] == b'/'))
-            || value.starts_with("\\\\")
-    }
-    #[cfg(not(windows))]
-    {
-        value.starts_with('/')
-    }
 }
 
 /// The opaque-option-bag rule: a mapping of bounded size with no prototype
@@ -422,26 +365,6 @@ impl serde::Serialize for McpServerState {
     }
 }
 
-/// One scheduled instruction (`{adapter, options}` trigger).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScheduleState {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub workspace_root: String,
-    pub origin_session_id: String,
-    pub instruction: String,
-    pub trigger: ScheduleTrigger,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScheduleTrigger {
-    pub adapter: String,
-    pub options: Value,
-}
-
 /// Telegram channel settings. `token_env` is an environment-variable *name*;
 /// a literal token in the document is rejected at parse.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -526,7 +449,6 @@ pub struct SettingsStore {
     pub roles: Option<BTreeMap<String, RoleBinding>>,
     pub approval_timeout_seconds: Option<u64>,
     pub command_shell: Option<String>,
-    pub schedules: Vec<ScheduleState>,
     pub default_workspace_root: Option<String>,
     pub daemon: Option<DaemonSettings>,
     pub telegram: Option<TelegramSettings>,
@@ -559,7 +481,6 @@ pub fn default_settings() -> SettingsStore {
         roles: None,
         approval_timeout_seconds: None,
         command_shell: None,
-        schedules: Vec::new(),
         default_workspace_root: None,
         daemon: None,
         telegram: None,
@@ -770,36 +691,6 @@ pub fn parse_store(doc: &Map<String, Value>) -> Result<SettingsStore, SettingsEr
     }
     if let Some(value) = doc.get("approvalTimeoutSeconds") {
         settings.approval_timeout_seconds = Some(timeout_seconds(value, "approvalTimeoutSeconds")?);
-    }
-    // `backgroundTasks` reads through as `schedules` — same list, old key.
-    let raw_schedules = match doc.get("schedules") {
-        Some(value) if !value.is_null() => Some(value),
-        _ => doc.get("backgroundTasks"),
-    };
-    if let Some(value) = raw_schedules {
-        let Some(items) = value.as_array() else {
-            return Err(SettingsError(
-                "schedules must be a list of up to 256 schedules.".to_owned(),
-            ));
-        };
-        if items.len() > 256 {
-            return Err(SettingsError(
-                "schedules must be a list of up to 256 schedules.".to_owned(),
-            ));
-        }
-        let mut schedules = Vec::with_capacity(items.len());
-        for item in items {
-            schedules.push(parse_schedule_state(item)?);
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        for schedule in &schedules {
-            if !seen.insert(schedule.id.as_str()) {
-                return Err(SettingsError(
-                    "schedules contains duplicate schedule ids.".to_owned(),
-                ));
-            }
-        }
-        settings.schedules = schedules;
     }
     if let Some(value) = doc.get("defaultWorkspaceRoot") {
         let Some(text) = value.as_str() else {
@@ -1257,108 +1148,6 @@ fn environment_references(
         out.insert(key.clone(), reference_text.to_owned());
     }
     Ok(out)
-}
-
-pub(crate) fn parse_schedule_state(raw: &Value) -> Result<ScheduleState, SettingsError> {
-    let Some(record) = as_record(raw) else {
-        return Err(SettingsError("A Schedule must be a mapping.".to_owned()));
-    };
-    for key in record.keys() {
-        if !SCHEDULE_KEYS.contains(&key.as_str()) {
-            return Err(SettingsError(format!(
-                "Schedule {key} is not a supported setting."
-            )));
-        }
-    }
-    let id = record.get("id").and_then(Value::as_str).unwrap_or("");
-    if !is_id_token(id, 64) {
-        return Err(SettingsError(
-            "Schedule id must use 1-64 letters, digits, underscores, or dashes.".to_owned(),
-        ));
-    }
-    let name = record.get("name").and_then(Value::as_str).unwrap_or("");
-    if name.trim().is_empty() || js_len(name) > 128 {
-        return Err(SettingsError(
-            "Schedule name must use 1-128 characters.".to_owned(),
-        ));
-    }
-    let enabled = match record.get("enabled") {
-        None | Some(Value::Null) => true,
-        Some(Value::Bool(flag)) => *flag,
-        Some(_) => {
-            return Err(SettingsError(
-                "Schedule enabled must be a boolean.".to_owned(),
-            ));
-        }
-    };
-    let workspace_root = record
-        .get("workspaceRoot")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if js_len(workspace_root) > 32_768 || !is_absolute_path(workspace_root) {
-        return Err(SettingsError(
-            "Schedule workspaceRoot must be an absolute path.".to_owned(),
-        ));
-    }
-    let origin_session_id = match record.get("originSessionId") {
-        None | Some(Value::Null) => String::new(),
-        Some(Value::String(text)) if js_len(text) <= 256 => text.clone(),
-        Some(_) => {
-            return Err(SettingsError(
-                "Schedule originSessionId must be a session id under 256 characters.".to_owned(),
-            ));
-        }
-    };
-    let instruction = record
-        .get("instruction")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if instruction.trim().is_empty() || js_len(instruction) > 16_000 {
-        return Err(SettingsError(
-            "Schedule instruction must use 1-16000 characters.".to_owned(),
-        ));
-    }
-    let Some(trigger) = record.get("trigger").and_then(as_record) else {
-        return Err(SettingsError(
-            "Schedule trigger must contain adapter and options.".to_owned(),
-        ));
-    };
-    for key in trigger.keys() {
-        if key != "adapter" && key != "options" {
-            return Err(SettingsError(
-                "Schedule trigger must contain adapter and options.".to_owned(),
-            ));
-        }
-    }
-    let adapter = trigger.get("adapter").and_then(Value::as_str).unwrap_or("");
-    if !is_id_token(adapter, 64) {
-        return Err(SettingsError(
-            "Schedule trigger adapter is invalid.".to_owned(),
-        ));
-    }
-    let Some(options) = trigger.get("options").and_then(as_record) else {
-        return Err(SettingsError(
-            "Schedule trigger options must be a mapping under 16000 characters.".to_owned(),
-        ));
-    };
-    let size = json_size(&Value::Object(options.clone()))?;
-    if size > 16_000 {
-        return Err(SettingsError(
-            "Schedule trigger options must be a mapping under 16000 characters.".to_owned(),
-        ));
-    }
-    Ok(ScheduleState {
-        id: id.to_owned(),
-        name: name.to_owned(),
-        enabled,
-        workspace_root: workspace_root.to_owned(),
-        origin_session_id,
-        instruction: instruction.to_owned(),
-        trigger: ScheduleTrigger {
-            adapter: adapter.to_owned(),
-            options: Value::Object(options.clone()),
-        },
-    })
 }
 
 fn parse_telegram_settings(raw: &Value) -> Result<TelegramSettings, SettingsError> {

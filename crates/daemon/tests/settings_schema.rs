@@ -38,7 +38,7 @@ fn load_err(root: &Path) -> String {
     load_settings(root).unwrap_err().to_string()
 }
 
-const KNOWN_TOP: &str = "providers, mcpServers, providerOrder, defaultProvider, defaultModel, reasoning, showReasoning, theme, approvalMode, autoReviewTimeoutSeconds, autoReviewProvider, autoReviewModel, roles, approvalTimeoutSeconds, commandShell, schedules, backgroundTasks, defaultWorkspaceRoot, daemon, telegram, team, custodian";
+const KNOWN_TOP: &str = "providers, mcpServers, providerOrder, defaultProvider, defaultModel, reasoning, showReasoning, theme, approvalMode, autoReviewTimeoutSeconds, autoReviewProvider, autoReviewModel, roles, approvalTimeoutSeconds, commandShell, defaultWorkspaceRoot, daemon, telegram, team, custodian";
 
 const KNOWN_PROVIDER: &str =
     "enabled, keys, models, url, npm, options, routing, modelRouting, payload, modelSpecs";
@@ -52,7 +52,6 @@ fn missing_files_load_the_empty_machine() {
     assert_eq!(settings.default_provider, "");
     assert_eq!(settings.default_model, "");
     assert_eq!(settings.approval_mode, ApprovalMode::Workspace);
-    assert!(settings.schedules.is_empty());
     assert!(settings.roles.is_none());
 
     let secrets = load_secrets(&root).expect("absent secrets are empty");
@@ -130,15 +129,6 @@ roles:
     model: gpt-x
 approvalTimeoutSeconds: 120
 commandShell: pwsh
-schedules:
-  - id: morning
-    name: Morning brief
-    workspaceRoot: C:\work
-    instruction: Summarize the inbox.
-    trigger:
-      adapter: daily
-      options:
-        at: "08:00"
 defaultWorkspaceRoot: C:\work
 daemon:
   listen: 127.0.0.1:45278
@@ -189,14 +179,6 @@ custodian:
     assert_eq!(roles["review"].provider, "vercel");
     assert_eq!(roles["review"].model, "gpt-x");
     assert_eq!(roles["custodian"].provider, "vercel");
-
-    let schedule = &settings.schedules[0];
-    assert_eq!(schedule.id, "morning");
-    assert!(schedule.enabled, "enabled defaults to true");
-    assert_eq!(schedule.origin_session_id, "");
-    assert_eq!(schedule.workspace_root, absolute_root());
-    assert_eq!(schedule.trigger.adapter, "daily");
-    assert_eq!(schedule.trigger.options["at"], "08:00");
 
     assert_eq!(
         settings.default_workspace_root.as_deref(),
@@ -348,71 +330,32 @@ fn validation_refuses_by_name_and_range() {
 }
 
 #[test]
-fn schedules_validate_ids_names_and_triggers() {
-    let root = scratch("schedules");
+fn schedules_are_not_settings_anymore() {
+    let root = scratch("schedules-left-settings");
     let abs = absolute_root();
 
+    // The document half moved to `schedules.json`; a settings file that
+    // still carries the old key is refused by name (owner ruling
+    // 2026-11-18: schedules are records, not configuration).
     put(
         &root,
         "settings.yaml",
-        "schedules:\n  - id: \"bad id!\"\n    name: n\n    instruction: i\n    trigger: {adapter: daily, options: {}}\n",
+        "schedules:\n  - id: ok\n    name: n\n    instruction: i\n    trigger: {adapter: daily, options: {}}\n",
     );
     assert_eq!(
         load_err(&root),
-        "Schedule id must use 1-64 letters, digits, underscores, or dashes."
+        format!("schedules is not a setting openbutler knows (known: {KNOWN_TOP})")
     );
 
+    let _ = abs;
     put(
         &root,
         "settings.yaml",
-        "schedules:\n  - id: ok\n    name: \"\"\n    instruction: i\n    trigger: {adapter: daily, options: {}}\n",
-    );
-    assert_eq!(load_err(&root), "Schedule name must use 1-128 characters.");
-
-    put(
-        &root,
-        "settings.yaml",
-        &format!(
-            "schedules:\n  - id: ok\n    name: n\n    workspaceRoot: {abs}\n    instruction: \"\"\n    trigger: {{adapter: daily, options: {{}}}}\n"
-        ),
+        "backgroundTasks:\n  - id: ok\n    name: n\n    instruction: i\n    trigger: {adapter: daily, options: {}}\n",
     );
     assert_eq!(
         load_err(&root),
-        "Schedule instruction must use 1-16000 characters."
-    );
-
-    put(
-        &root,
-        "settings.yaml",
-        &format!(
-            "schedules:\n  - id: ok\n    name: n\n    workspaceRoot: {abs}\n    instruction: i\n    trigger: {{options: {{}}, bogus: 1}}\n"
-        ),
-    );
-    assert_eq!(
-        load_err(&root),
-        "Schedule trigger must contain adapter and options."
-    );
-
-    put(
-        &root,
-        "settings.yaml",
-        &format!(
-            "schedules:\n  - id: ok\n    name: n\n    workspaceRoot: {abs}\n    instruction: i\n    trigger: {{options: {{}}}}\n"
-        ),
-    );
-    assert_eq!(load_err(&root), "Schedule trigger adapter is invalid.");
-
-    // The pre-rename key reads through; duplicates are refused.
-    put(
-        &root,
-        "settings.yaml",
-        &format!(
-            "backgroundTasks:\n  - id: a\n    name: n\n    workspaceRoot: {abs}\n    instruction: i\n    trigger: {{adapter: daily, options: {{}}}}\n  - id: a\n    name: n\n    workspaceRoot: {abs}\n    instruction: i\n    trigger: {{adapter: daily, options: {{}}}}\n"
-        ),
-    );
-    assert_eq!(
-        load_err(&root),
-        "schedules contains duplicate schedule ids."
+        format!("backgroundTasks is not a setting openbutler knows (known: {KNOWN_TOP})")
     );
 }
 

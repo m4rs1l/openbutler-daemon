@@ -14,6 +14,7 @@ mod paths;
 mod projects;
 mod record;
 mod save;
+pub mod schedules;
 
 pub use attachments::{
     MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES, decode_base64_image, image_type_from_bytes,

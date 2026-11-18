@@ -16,9 +16,8 @@ pub use remember::remember_provider_model;
 pub use save::save_settings;
 pub use schema::{
     ApprovalMode, CustodianSettings, DaemonSettings, McpServerState, ModalCredentials,
-    ProviderModelSpec, ProviderSecrets, ProviderState, RoleBinding, ScheduleState, ScheduleTrigger,
-    SecretsStore, SettingsStore, TeamRole, TeamSettings, TelegramSettings, Theme, WorkerCaps,
-    default_settings,
+    ProviderModelSpec, ProviderSecrets, ProviderState, RoleBinding, SecretsStore, SettingsStore,
+    TeamRole, TeamSettings, TelegramSettings, Theme, WorkerCaps, default_settings,
 };
 
 /// A settings refusal. The message *is* the contract: closed schemas report

@@ -163,10 +163,6 @@ fn build_settings_document(store: &SettingsStore) -> Result<Value, SettingsError
     {
         document.insert("commandShell".to_owned(), json!(shell));
     }
-    document.insert(
-        "schedules".to_owned(),
-        serde_json::to_value(&store.schedules).map_err(|error| SettingsError(error.to_string()))?,
-    );
     if let Some(root) = &store.default_workspace_root
         && !root.is_empty()
     {
