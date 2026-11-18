@@ -36,6 +36,9 @@ pub trait TurnExecutor: Send + Sync {
     /// (id-guarded; a stale id no-ops like the source's
     /// `answerQuestion`). `None` is the dismissal the source sends.
     fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool;
+    /// Whether a session's run is still live (`session.new` refuses to
+    /// open a chat while the current one runs).
+    fn is_busy(&self, session_id: &str) -> bool;
     /// `session.queue`: steers or removes one queued message of the
     /// session (id-guarded like the source's `manageQueuedMessage`);
     /// the runner's refusals are the client's error text.
@@ -169,6 +172,16 @@ impl TurnExecutor for DoorExecutor {
             }
             None => false,
         }
+    }
+
+    /// Whether a session's run is still live (`session.new` refuses to
+    /// open a chat while the current one runs).
+    fn is_busy(&self, session_id: &str) -> bool {
+        self.runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .is_some_and(|runner| runner.is_turn_active())
     }
 
     fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool {

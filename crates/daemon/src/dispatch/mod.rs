@@ -10,6 +10,7 @@ pub mod fanout;
 mod host;
 mod schedule;
 pub mod session_send;
+mod session_write;
 
 pub use host::{DispatchState, Host};
 
@@ -25,9 +26,7 @@ use openbutler_protocol::entry::UserEntrySource;
 use openbutler_protocol::runtime::LocalClientKind;
 use openbutler_protocol::runtime::RuntimeViewData;
 use openbutler_protocol::runtime::view::{ApprovalMode, ReasoningSupport};
-use openbutler_protocol::session::{
-    AttachResult, RunState, SessionSnapshotData, SessionView, read,
-};
+use openbutler_protocol::session::{AttachResult, SessionView, read};
 use openbutler_protocol::{
     DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, InlineAttachment, SessionEntriesRange,
     validate_request,
@@ -191,63 +190,8 @@ pub fn handle(
                 LocalClientKind::Terminal => UserEntrySource::Terminal,
             });
 
-            let approval_mode = host
-                .settings()
-                .as_ref()
-                .map(|loaded| loaded.store.approval_mode)
-                .unwrap_or(crate::settings::schema::ApprovalMode::Workspace);
-            let workspace_root = view
-                .meta
-                .workspace_root
-                .clone()
-                .or_else(|| {
-                    host.settings()
-                        .as_ref()
-                        .and_then(|loaded| loaded.store.default_workspace_root.clone())
-                })
-                // The source always resolves a scope root — the daemon's
-                // own working directory when nothing else names one
-                // (`resolveInteractiveScope({cwd: process.cwd()})`).
-                .or_else(|| {
-                    std::env::current_dir()
-                        .ok()
-                        .map(|path| path.display().to_string())
-                });
-            let runtime = host.runtime_view().unwrap_or_else(|| {
-                bootstrap_runtime_view(&view.meta, workspace_root.as_deref(), approval_mode)
-            });
-
-            // The tail window (windowedSnapshotData, L3824): entries
-            // sliced from the front, absolute markers, streaming index
-            // translated into the window.
-            let total = view.entries.len() as i64;
-            let from = entries_window
-                .map(|window| (total - window).max(0))
-                .unwrap_or(0);
-            let mut windowed = view.clone();
-            if entries_window.is_some() {
-                // `split_off(at)` returns the tail and leaves the head;
-                // the window is the tail (and keeps the absolute start).
-                let tail = windowed.entries.split_off(from as usize);
-                windowed.entries = tail;
-            }
-            let snapshot = SessionSnapshotData {
-                session: windowed,
-                run: RunState {
-                    busy: false,
-                    running_turn_id: None,
-                    pending_approval: None,
-                    pending_approval_id: None,
-                    pending_question: None,
-                    queued_message_count: 0,
-                    first_queued_message: None,
-                    queued_messages: Vec::new(),
-                    session_save_error: None,
-                    streaming_assistant_index: None,
-                },
-                entries_from: entries_window.map(|_| from),
-                total_entries: entries_window.map(|_| total),
-            };
+            let (snapshot, runtime, workspace_root) =
+                session_write::chat_snapshot(host, view, entries_window);
             let result = AttachResult {
                 host_entry: std::env::current_exe()
                     .ok()
@@ -261,20 +205,7 @@ pub fn handle(
                 saved_sessions: state::list_sessions(data_dir, &WorkspaceFilter::Any)
                     .unwrap_or_default(),
             };
-            // The attachChat snapshot event rides behind the answer
-            // (L1459): queued as a pending frame, flushed by the
-            // connection after it writes the response.
-            if state.sink.is_some() {
-                let event = openbutler_protocol::DaemonEvent::Snapshot {
-                    version: openbutler_protocol::DAEMON_PROTOCOL_VERSION,
-                    snapshot,
-                    runtime,
-                };
-                if let Ok(mut bytes) = serde_json::to_vec(&event) {
-                    bytes.push(b'\n');
-                    state.pending_events.push(bytes);
-                }
-            }
+            session_write::queue_attach_event(state, snapshot, runtime);
             success(
                 request,
                 serde_json::to_value(result).unwrap_or_else(|_| json!({})),
@@ -327,6 +258,34 @@ pub fn handle(
                 },
             },
         },
+        "session.new" => match session_write::new_chat(host, data_dir, state, request) {
+            Ok(()) => success(request, json!({ "accepted": true })),
+            Err(error) => failure(request, error),
+        },
+        "session.flush" => match session_write::flush(data_dir, state) {
+            Ok(()) => success(request, json!({ "saved": true })),
+            Err(error) => failure(request, error),
+        },
+        "session.add-entry" => match session_write::add_entry(data_dir, state, request) {
+            Ok(()) => success(request, json!({ "accepted": true })),
+            Err(error) => failure(request, error),
+        },
+        "runtime.save-reasoning" => match session_write::save_reasoning(data_dir, state, request) {
+            Ok(()) => success(request, json!({ "saved": true })),
+            Err(error) => failure(request, error),
+        },
+        "runtime.save-show-reasoning" => {
+            match session_write::save_show_reasoning(data_dir, state, request) {
+                Ok(()) => success(request, json!({ "saved": true })),
+                Err(error) => failure(request, error),
+            }
+        }
+        "runtime.save-approval-mode" => {
+            match session_write::save_approval_mode(data_dir, host, request) {
+                Ok(()) => success(request, json!({ "saved": true })),
+                Err(error) => failure(request, error),
+            }
+        }
         "session.send" => {
             let message = request.get("message").cloned().unwrap_or(Value::Null);
             let parsed = match session_send::parse_queued_message(&message) {

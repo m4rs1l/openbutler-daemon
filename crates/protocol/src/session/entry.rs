@@ -247,4 +247,17 @@ impl SessionEntry {
             | SessionEntry::Tool { meta, .. } => meta,
         }
     }
+
+    /// The mutable shared metadata of this entry, whatever its body.
+    pub fn meta_mut(&mut self) -> &mut SessionEntryMeta {
+        match self {
+            SessionEntry::User { meta, .. }
+            | SessionEntry::Assistant { meta, .. }
+            | SessionEntry::Notice { meta, .. }
+            | SessionEntry::Divider { meta, .. }
+            | SessionEntry::Reasoning { meta, .. }
+            | SessionEntry::Compaction { meta, .. }
+            | SessionEntry::Tool { meta, .. } => meta,
+        }
+    }
 }

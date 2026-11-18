@@ -46,6 +46,10 @@ impl TurnExecutor for RecordingExecutor {
         true
     }
 
+    fn is_busy(&self, _session_id: &str) -> bool {
+        false
+    }
+
     fn answer(&self, _session_id: &str, _question_id: &str, _answer: Option<String>) -> bool {
         false
     }

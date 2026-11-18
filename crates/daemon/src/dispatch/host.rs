@@ -39,6 +39,9 @@ pub struct DispatchState {
     /// Frames an action wants sent *after* its response (the attach
     /// snapshot event rides behind the answer, daemon-host.ts L1459).
     pub(super) pending_events: Vec<Vec<u8>>,
+    /// View-only binding: set when the attached chat belongs to a worker
+    /// session (arrives with the workers slice); notices stay postable.
+    pub read_only: bool,
 }
 
 impl DispatchState {

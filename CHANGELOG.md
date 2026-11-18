@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Disk-side chat mutations at the dispatch surface: `session.new`
+  (busy-gated draft creation with the attach snapshot event),
+  `session.flush`, `session.add-entry` (the `parseSessionEntry` port
+  with the view-only gate), and the preference writes
+  `runtime.save-reasoning` / `runtime.save-show-reasoning`
+  (session-scoped) plus `runtime.save-approval-mode`
+  (machine-wide, reloads the host copy). `TurnExecutor` gained
+  `is_busy`; the attach snapshot builder moved to
+  `dispatch/session_write.rs` as the single authority shared by
+  `attach` and `session.new`.
 - The visible send queue behind `session.send`: `TurnRunner::enqueue`
   pushes mid-run messages onto the roster (published the moment they
   join, legacy L2130), a drain loop runs them as their own turns after
@@ -218,3 +228,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (endpoint derivation, accept loop, backpressure), and action dispatch.
 - Workspace structure: centralised dependency versions, the
   `unsafe_code = "forbid"` lint, CI gates, MIT license.
+
+### Changed
+
+- Module boundaries now follow authority, with no behavior change:
+  - `agent/mod.rs` keeps the runner types, lifecycle and the turn itself;
+    the visible queue and steering moved to `agent/queue.rs`, the approval
+    queue to `agent/approval.rs`, the ask/answer queue to `agent/question.rs`,
+    and transcript entry construction to `agent/entry.rs`.
+  - `dispatch/mod.rs` is the router only; the shared record (`DispatchState`
+    and `Host`) lives in `dispatch/host.rs`.
+  - `src/tools/` holds only what the model calls (one folder per tool); the
+    gate, ledger sequence, timeout, formatting and result bounding moved to
+    `src/tool_runtime/` (`pipeline.rs`, `catalog.rs`, `format.rs`,
+    `workspace_scope.rs`, `tool_output.rs`).
+  - Both transport doors sit under `src/server/` (`socket/` for IPC,
+    `http/` for the browser surface), each keeping its own authority.

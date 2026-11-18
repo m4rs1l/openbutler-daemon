@@ -60,6 +60,10 @@ impl TurnExecutor for RecordingExecutor {
         Ok(())
     }
 
+    fn is_busy(&self, _session_id: &str) -> bool {
+        false
+    }
+
     fn answer(&self, session_id: &str, question_id: &str, answer: Option<String>) -> bool {
         self.answers
             .lock()
