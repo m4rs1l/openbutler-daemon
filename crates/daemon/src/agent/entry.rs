@@ -1,6 +1,7 @@
 //! Transcript entry construction: one owner message, one assistant block,
 //! one tool row and one notice - how they are built, grown and settled.
 use super::*;
+use openbutler_protocol::entry::EntryInternal;
 
 /// The model-visible user message: host-context labels in front of the raw
 /// text, parts array (`queuedUserMessageToModelMessage`). Labels never enter
@@ -203,6 +204,39 @@ pub(super) fn grow_assistant(
     state.dirty = true;
 }
 
+/// A streamed compaction delta grows one assistant entry tagged with
+/// the compaction provenance (source `appendStreamedText(text,
+/// 'compaction')`): the checkpoint can never read as the turn's
+/// answer, and the separate index cell makes the source's merge guard
+/// structural.
+pub(super) fn grow_compaction_text(
+    state: &mut SessionState,
+    assistant_index: &mut Option<usize>,
+    delta: &str,
+    turn_id: Option<&str>,
+) {
+    match *assistant_index {
+        Some(index) => {
+            if let SessionEntry::Assistant { text, .. } = &mut state.record.entries[index] {
+                text.push_str(delta);
+            }
+        }
+        None => {
+            state.record.entries.push(SessionEntry::Assistant {
+                meta: SessionEntryMeta {
+                    at: Some(Utc::now().timestamp_millis()),
+                    turn_id: turn_id.map(str::to_owned),
+                    internal: Some(EntryInternal::Compaction),
+                    ..SessionEntryMeta::default()
+                },
+                text: delta.to_owned(),
+            });
+            *assistant_index = Some(state.record.entries.len() - 1);
+        }
+    }
+    state.dirty = true;
+}
+
 /// Thinking grows one reasoning entry, spliced **before** the streamed
 /// assistant entry when one exists (`appendStreamedReasoning`); otherwise it
 /// appends at the end, and the assistant that follows lands after it.
@@ -212,7 +246,8 @@ pub(super) fn grow_reasoning(
     reasoning_started_at: &mut Option<i64>,
     assistant_index: &mut Option<usize>,
     delta: &str,
-    turn_id: &str,
+    turn_id: Option<&str>,
+    internal: Option<EntryInternal>,
 ) {
     if let Some(index) = *reasoning_index {
         if let SessionEntry::Reasoning { text, .. } = &mut state.record.entries[index] {
@@ -224,7 +259,8 @@ pub(super) fn grow_reasoning(
     let entry = SessionEntry::Reasoning {
         meta: SessionEntryMeta {
             at: Some(Utc::now().timestamp_millis()),
-            turn_id: Some(turn_id.to_owned()),
+            turn_id: turn_id.map(str::to_owned),
+            internal,
             ..SessionEntryMeta::default()
         },
         text: delta.to_owned(),

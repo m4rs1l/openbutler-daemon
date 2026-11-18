@@ -300,6 +300,19 @@ async fn a_standalone_compaction_swaps_the_conversation_and_lands_the_row() {
         calls.starts_with("compact:"),
         "call ids carry the compact tag: {calls}"
     );
+    // The checkpoint text streamed while it was produced, tagged with
+    // the compaction provenance so it can never read as an answer.
+    let streamed = record["entries"].as_array().and_then(|entries| {
+        entries
+            .iter()
+            .find(|entry| entry["kind"] == "assistant" && entry["internal"] == "compaction")
+            .and_then(|entry| entry["text"].as_str())
+    });
+    assert_eq!(
+        streamed,
+        Some("Hello world"),
+        "the streamed checkpoint entry carries the compaction provenance"
+    );
 }
 
 #[tokio::test]

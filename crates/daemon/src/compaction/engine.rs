@@ -37,6 +37,18 @@ const RECOVERY_SUFFIX: &str = "\n\nThis is a one-time recovery from a full conte
 /// The synthetic notes message that opens the final sliced request.
 const SLICED_NOTES_PREFIX: &str = "Merged continuation notes covering the full transcript before the newest dialogue, produced by summarizing it slice by slice:\n\n";
 
+/// The session hooks the engine fires around and during the main
+/// stream — the source's `onStart` / `onTextDelta` /
+/// `onReasoningDelta` callbacks in one Copy bundle. The sliced chain
+/// fires `on_start` only: its note streams stay internal and never
+/// touch the transcript.
+#[derive(Default, Clone, Copy)]
+pub struct EngineHooks<'a> {
+    pub on_start: Option<&'a (dyn Fn() + Send + Sync)>,
+    pub on_text: Option<&'a (dyn Fn(&str) + Send + Sync)>,
+    pub on_reasoning: Option<&'a (dyn Fn(&str) + Send + Sync)>,
+}
+
 /// Everything one compaction attempt needs. The caller resolves the
 /// provider from settings and owns the door; the engine owns the
 /// arithmetic and the stream.
@@ -139,7 +151,7 @@ impl ImpossibleReason {
 pub async fn compact_conversation(
     door: &SidecarDoor,
     request: CompactionRequest,
-    on_start: Option<&(dyn Fn() + Send + Sync)>,
+    hooks: EngineHooks<'_>,
 ) -> Result<CompactOutcome, String> {
     let prompt = if request.recovery {
         format!("{COMPACTION_PROMPT}{RECOVERY_SUFFIX}")
@@ -228,7 +240,7 @@ pub async fn compact_conversation(
         if let Some(window) = window
             && !request.messages.is_empty()
         {
-            match compact_by_slicing(door, &request, window, on_start).await? {
+            match compact_by_slicing(door, &request, window, hooks.on_start).await? {
                 Some(Sliced::Result(result)) => {
                     return Ok(CompactOutcome::Compacted {
                         result: CompactionResult {
@@ -283,10 +295,10 @@ pub async fn compact_conversation(
     // The source fires `onStart` here: after the budget arithmetic, the
     // row exists from the first moment the stream can begin (C3's
     // session hook inserts the running compaction row).
-    if let Some(on_start) = on_start {
+    if let Some(on_start) = hooks.on_start {
         on_start();
     }
-    let drained = drain_call(door, call).await?;
+    let drained = drain_call(door, call, hooks).await?;
     let summary = interpret_summary(&drained, max_output)?;
 
     // The checkpoint: conversation data only - system instructions and
@@ -485,7 +497,7 @@ async fn compact_by_slicing(
     nested.force = true;
     // The recursion crosses the async boundary through a box; the
     // synthetic request always forces, so it terminates.
-    let outcome = Box::pin(compact_conversation(door, nested, None)).await?;
+    let outcome = Box::pin(compact_conversation(door, nested, EngineHooks::default())).await?;
     Ok(Some(match outcome {
         CompactOutcome::Compacted { result } => Sliced::Result(result),
         CompactOutcome::Impossible { reason, cause, .. } => {
@@ -525,7 +537,7 @@ async fn stream_notes(
     let call = build_call(request, &system, messages, Some(max_output), Vec::new());
     // Everything here is data: a door failure is a note failure, not a
     // thrown error.
-    let drained = drain_call(door, call).await?;
+    let drained = drain_call(door, call, EngineHooks::default()).await?;
     if let Some(error) = drained.stream_error {
         return Err(error);
     }
@@ -643,7 +655,11 @@ fn tool_set_to_sidecar(tools: &Value) -> Vec<SidecarTool> {
         .collect()
 }
 
-async fn drain_call(door: &SidecarDoor, call: SidecarCall) -> Result<Drain, String> {
+async fn drain_call(
+    door: &SidecarDoor,
+    call: SidecarCall,
+    hooks: EngineHooks<'_>,
+) -> Result<Drain, String> {
     let mut stream = door
         .call(Lane::Interactive, call)
         .await
@@ -651,7 +667,19 @@ async fn drain_call(door: &SidecarDoor, call: SidecarCall) -> Result<Drain, Stri
     let mut drain = Drain::default();
     while let Some(item) = stream.next().await {
         match item {
-            Ok(SidecarEvent::TextDelta { delta, .. }) => drain.text.push_str(&delta),
+            Ok(SidecarEvent::TextDelta { delta, .. }) => {
+                if let Some(hook) = hooks.on_text {
+                    hook(&delta);
+                }
+                drain.text.push_str(&delta);
+            }
+            Ok(SidecarEvent::ReasoningDelta { delta, .. }) => {
+                // The summarisation collects text only; the hook keeps
+                // the visible thought stream (source onReasoningDelta).
+                if let Some(hook) = hooks.on_reasoning {
+                    hook(&delta);
+                }
+            }
             Ok(SidecarEvent::ToolCall { .. }) => drain.tool_calls += 1,
             Ok(SidecarEvent::Finish { finish_reason, .. }) => drain.finish = finish_reason,
             Ok(SidecarEvent::Usage {

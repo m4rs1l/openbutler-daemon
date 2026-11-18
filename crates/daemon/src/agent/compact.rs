@@ -15,14 +15,17 @@ use chrono::Utc;
 use serde_json::Value;
 
 use openbutler_protocol::SessionEntryMeta;
-use openbutler_protocol::entry::{CompactionStatus, NoticeTone, SessionEntry};
+use openbutler_protocol::entry::{CompactionStatus, EntryInternal, NoticeTone, SessionEntry};
 use openbutler_protocol::sidecar::SidecarProvider;
 
 use super::context::{build_turn_system, compaction_budget, resolve_turn_context};
-use super::entry::push_scoped_notice;
+use super::entry::{
+    finish_reasoning_block, grow_compaction_text, grow_reasoning, push_scoped_notice,
+};
 use super::{SessionState, TurnRequest, TurnRunner};
 use crate::compaction::{
-    CompactOutcome, CompactionRequest, CompactionResult, ImpossibleReason, compact_conversation,
+    CompactOutcome, CompactionRequest, CompactionResult, EngineHooks, ImpossibleReason,
+    compact_conversation,
 };
 use crate::state;
 use crate::tool_runtime::catalog::{native_definition, sidecar_tool};
@@ -36,6 +39,47 @@ const RECOVERY_NOTICE: &str = "Recovering compaction: earlier reasoning is omitt
 
 /// The empty-conversation notice (L2754).
 const EMPTY_NOTICE: &str = "There is no conversation to compact.";
+
+/// The streamed-entry cells shared by the engine hooks: one entry
+/// grows for the whole summarisation with the compaction provenance
+/// (the source's `streamedAssistantEntry` + the `internal` merge
+/// guard — here separate index cells make the guard structural).
+/// Std mutexes: every section is short and never spans an await.
+#[derive(Default)]
+struct CompactionStream {
+    assistant: std::sync::Mutex<Option<usize>>,
+    reasoning: std::sync::Mutex<Option<usize>>,
+    reasoning_started_at: std::sync::Mutex<Option<i64>>,
+}
+
+impl CompactionStream {
+    /// The thought block ends at settle (source `flushStreamedEntries`
+    /// → `finishStreamedReasoning`): stamp the duration once.
+    fn finish_reasoning(&self, state: &mut SessionState) {
+        let mut index = self
+            .reasoning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut started = self
+            .reasoning_started_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        finish_reasoning_block(state, &mut index, &mut started);
+    }
+}
+
+/// What both paths share when settling: whose transcript the row and
+/// the notices belong to, which provider/model the refusal notice
+/// names, the run state the publish carries, and the stream cells to
+/// close.
+struct SettleContext<'a> {
+    row_turn: Option<String>,
+    notice_turn: Option<&'a str>,
+    provider_id: &'a str,
+    model_id: &'a str,
+    busy: bool,
+    stream: &'a CompactionStream,
+}
 
 impl TurnRunner {
     /// `session.compact` on the runner: a busy run defers the request
@@ -175,15 +219,29 @@ impl TurnRunner {
 
         let on_start =
             self.on_start_hook(compaction_turn.clone(), None, meta.context_tokens, recovery);
-        match compact_conversation(&self.door, request, Some(&on_start)).await {
+        // No active turn here: the streamed entry carries no turn id
+        // (source addEntry stamps activeTurnId, undefined).
+        let stream = CompactionStream::default();
+        let entry_turn: Option<String> = None;
+        let text_hook = self.stream_text_hook(&stream, &entry_turn);
+        let reasoning_hook = self.stream_reasoning_hook(&stream, &entry_turn);
+        let hooks = EngineHooks {
+            on_start: Some(&on_start),
+            on_text: Some(&text_hook),
+            on_reasoning: Some(&reasoning_hook),
+        };
+        match compact_conversation(&self.door, request, hooks).await {
             Ok(outcome) => {
                 self.settle_outcome(
                     outcome,
-                    compaction_turn,
-                    None,
-                    &meta.provider_id,
-                    &meta.model_id,
-                    false,
+                    SettleContext {
+                        row_turn: compaction_turn,
+                        notice_turn: None,
+                        provider_id: &meta.provider_id,
+                        model_id: &meta.model_id,
+                        busy: false,
+                        stream: &stream,
+                    },
                 )
                 .await;
             }
@@ -193,6 +251,7 @@ impl TurnRunner {
                     format!("Compaction failed: {error}"),
                     NoticeTone::Error,
                     false,
+                    &stream,
                 )
                 .await;
             }
@@ -271,15 +330,27 @@ impl TurnRunner {
             recovery,
         );
         let notice_turn = active_turn.as_deref();
-        match compact_conversation(&self.door, request, Some(&on_start)).await {
+        let stream = CompactionStream::default();
+        let entry_turn = active_turn.clone();
+        let text_hook = self.stream_text_hook(&stream, &entry_turn);
+        let reasoning_hook = self.stream_reasoning_hook(&stream, &entry_turn);
+        let hooks = EngineHooks {
+            on_start: Some(&on_start),
+            on_text: Some(&text_hook),
+            on_reasoning: Some(&reasoning_hook),
+        };
+        match compact_conversation(&self.door, request, hooks).await {
             Ok(outcome) => {
                 self.settle_outcome(
                     outcome,
-                    row_turn,
-                    notice_turn,
-                    &meta.provider_id,
-                    &meta.model_id,
-                    true,
+                    SettleContext {
+                        row_turn,
+                        notice_turn,
+                        provider_id: &meta.provider_id,
+                        model_id: &meta.model_id,
+                        busy: true,
+                        stream: &stream,
+                    },
                 )
                 .await;
             }
@@ -291,6 +362,7 @@ impl TurnRunner {
                     ),
                     NoticeTone::Warn,
                     true,
+                    &stream,
                 )
                 .await;
             }
@@ -343,21 +415,93 @@ impl TurnRunner {
         }
     }
 
+    /// The streamed-text hook: one entry grows with the compaction
+    /// provenance while the engine streams (source
+    /// `queueStreamDelta('assistant', …, 'compaction')` — the empty
+    /// guard and the per-delta publish included).
+    fn stream_text_hook<'a>(
+        &'a self,
+        stream: &'a CompactionStream,
+        entry_turn: &'a Option<String>,
+    ) -> impl Fn(&str) + Send + Sync + 'a {
+        move |delta: &str| {
+            if delta.is_empty() {
+                return;
+            }
+            let Ok(mut state) = self.state.try_lock() else {
+                return;
+            };
+            let mut index = stream
+                .assistant
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            grow_compaction_text(&mut state, &mut index, delta, entry_turn.as_deref());
+            let live = *index;
+            drop(index);
+            self.publish_now(&state, entry_turn.as_deref(), live, true);
+        }
+    }
+
+    /// The streamed-thought hook (source
+    /// `queueStreamDelta('reasoning', …, 'compaction')`), spliced
+    /// before the streamed assistant entry.
+    fn stream_reasoning_hook<'a>(
+        &'a self,
+        stream: &'a CompactionStream,
+        entry_turn: &'a Option<String>,
+    ) -> impl Fn(&str) + Send + Sync + 'a {
+        move |delta: &str| {
+            if delta.is_empty() {
+                return;
+            }
+            let Ok(mut state) = self.state.try_lock() else {
+                return;
+            };
+            let mut reasoning = stream
+                .reasoning
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut started = stream
+                .reasoning_started_at
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut assistant = stream
+                .assistant
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            grow_reasoning(
+                &mut state,
+                &mut reasoning,
+                &mut started,
+                &mut assistant,
+                delta,
+                entry_turn.as_deref(),
+                Some(EntryInternal::Compaction),
+            );
+            let live = *assistant;
+            drop(reasoning);
+            drop(started);
+            drop(assistant);
+            self.publish_now(&state, entry_turn.as_deref(), live, true);
+        }
+    }
+
     /// The outcome arms shared by both paths (source identical at
     /// L2818 and L2374): compacted swaps, impossible refuses as data,
     /// skipped stays silent.
-    async fn settle_outcome(
-        &self,
-        outcome: CompactOutcome,
-        row_turn: Option<String>,
-        notice_turn: Option<&str>,
-        provider_id: &str,
-        model_id: &str,
-        busy: bool,
-    ) {
+    async fn settle_outcome(&self, outcome: CompactOutcome, ctx: SettleContext<'_>) {
+        let SettleContext {
+            row_turn,
+            notice_turn,
+            provider_id,
+            model_id,
+            busy,
+            stream,
+        } = ctx;
         match outcome {
             CompactOutcome::Compacted { result } => {
                 let mut state = self.state.lock().await;
+                stream.finish_reasoning(&mut state);
                 apply_compaction(&mut state, &result, row_turn);
                 let _ = self.save(&mut state);
                 self.publish_now(&state, notice_turn, None, busy);
@@ -370,6 +514,7 @@ impl TurnRunner {
                 cause,
             } => {
                 let mut state = self.state.lock().await;
+                stream.finish_reasoning(&mut state);
                 fail_running_compaction(&mut state);
                 let notice = refusal_notice(
                     reason,
@@ -406,8 +551,10 @@ impl TurnRunner {
         text: String,
         tone: NoticeTone,
         busy: bool,
+        stream: &CompactionStream,
     ) {
         let mut state = self.state.lock().await;
+        stream.finish_reasoning(&mut state);
         fail_running_compaction(&mut state);
         push_scoped_notice(&mut state, notice_turn, &text, Some(tone), None);
         let _ = self.save(&mut state);

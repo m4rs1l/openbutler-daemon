@@ -695,7 +695,8 @@ impl TurnRunner {
                                 &mut reasoning_started_at,
                                 &mut assistant_index,
                                 &delta,
-                                turn_id,
+                                Some(turn_id),
+                                None,
                             );
                             self.publish_now(state, Some(turn_id), assistant_index, true);
                         }

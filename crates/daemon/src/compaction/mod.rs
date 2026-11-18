@@ -29,7 +29,7 @@ pub use core::{
     estimate_text_tokens, estimate_tokens,
 };
 pub use engine::{
-    CompactOutcome, CompactionRequest, CompactionResult, ImpossibleReason, SkipReason,
+    CompactOutcome, CompactionRequest, CompactionResult, EngineHooks, ImpossibleReason, SkipReason,
     compact_conversation,
 };
 pub use projection::{

@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Streamed checkpoint deltas (`EngineHooks` + `agent/compact.rs`
+  stream cells): the summarisation's text and thought stream into the
+  transcript while it runs — one growing entry per attempt, tagged
+  `internal: compaction` (the provenance the source's merge guard
+  keeps apart from the answer), a per-delta roster publish with the
+  live index, and the reasoning duration stamped at settle
+  (`finish_reasoning_block`). The engine's `on_start` parameter grew
+  into the hooks bundle the source passes; the sliced chain fires the
+  row hook only — its note streams stay internal. Two pins: the
+  engine hooks (both deltas counted around one forced call) and the
+  e2e provenance (`Hello world` joined under the compaction tag).
 - Compaction at the step boundary (`TurnRunner::compact_at_boundary`):
   every model request asks once, before the next call is built — the
   queued request serves forced (the promise the deferral notice made),
