@@ -1,13 +1,15 @@
-//! The activity ledger over `state.db`: read feeds, and the write-ahead
-//! tool-action writer.
+//! The activity ledger over `state.db`: read feeds, the write-ahead
+//! tool-action writer, and the per-request usage sink.
 //!
 //! Source: `activity-ledger.ts` (read 2026-11-16 and 2026-11-17). Reads
 //! never create the database; `LedgerWriter` is the one writable open.
 
 mod feed;
+mod usage;
 mod writer;
 
 pub use feed::{list_actions, list_events, retry_event};
+pub use usage::{StepUsageReport, UsageInput, UsageRow, UsageTokens};
 pub use writer::{LedgerWriter, TOOL_ACTION_STATES, ToolActionState, ToolActionUpdate};
 
 /// One refusal from the ledger surface. The message *is* the contract.

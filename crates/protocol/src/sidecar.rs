@@ -141,6 +141,20 @@ pub enum SidecarEvent {
         reasoning_tokens: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         total_tokens: Option<u64>,
+        /// The input-token split the accounting row stores (`usage.inputTokenDetails`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        no_cache_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_read_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_write_tokens: Option<u64>,
+        /// The output-text split (`usage.outputTokenDetails.textTokens`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_tokens: Option<u64>,
+        /// Raw provider usage, where an inline cost may sit
+        /// (`usage.raw`, forwarded untouched).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw: Option<Value>,
     },
     #[serde(rename = "finish")]
     Finish {
@@ -149,6 +163,10 @@ pub enum SidecarEvent {
         finish_reason: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<Value>,
+        /// The provider's own response id (`finish-step.response.id`) →
+        /// the usage row's `generation_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_id: Option<String>,
     },
     #[serde(rename = "error")]
     Error {

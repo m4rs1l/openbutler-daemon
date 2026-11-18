@@ -140,7 +140,9 @@ fn tool_action_schema() -> String {
 /// tool-action schema. One host, one writer — the start lock elsewhere in
 /// the daemon keeps that true.
 pub struct LedgerWriter {
-    connection: Connection,
+    /// Visible to the sibling writers in this module tree only — the one
+    /// writable open stays the sole way into the database.
+    pub(super) connection: Connection,
 }
 
 impl LedgerWriter {
@@ -149,6 +151,7 @@ impl LedgerWriter {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.execute_batch(&tool_action_schema())?;
+        connection.execute_batch(&super::usage::usage_schema())?;
         Ok(LedgerWriter { connection })
     }
 

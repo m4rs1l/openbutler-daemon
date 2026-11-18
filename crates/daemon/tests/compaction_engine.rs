@@ -164,6 +164,7 @@ async fn the_hooks_fire_around_and_during_the_main_call() {
             texts.fetch_add(1, Ordering::SeqCst);
         }),
         on_reasoning: None,
+        on_usage: None,
     };
     let outcome = compact_conversation(&door, forced, hooks).await.unwrap();
     assert!(matches!(outcome, CompactOutcome::Compacted { .. }));

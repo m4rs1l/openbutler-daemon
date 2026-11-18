@@ -4,5 +4,6 @@
   "finishReason": "tool-calls",
   "providerMetadata": {
     "openai": { "cachedPromptTokens": 1024, "reasoning": { "id": "rs_abc" } }
-  }
+  },
+  "responseId": "resp_xyz"
 }

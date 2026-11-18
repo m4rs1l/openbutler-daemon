@@ -7,6 +7,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Usage accounting (`ledger/usage.rs`, the source's `onStepUsage` →
+  `recordUsage`): one `state.db` row per model request for chat turns
+  and compaction alike — `sessionId:startedAt:attempt` key with
+  `INSERT OR IGNORE`, the eight token counts, duration/timezone
+  stamps, `usage_source`, and cost from the provider's own statement
+  (`provider-inline` or `none`; no price catalog exists in this build,
+  so `catalog-estimate` waits for the runtime model catalog). The
+  door's `usage` event now carries the input/output detail splits and
+  `raw`; `finish` carries `providerMetadata` and `responseId`, stashed
+  from the `finish-step` part (real-runner verified: the response id
+  reaches the row end to end). Turn rows land per step with the
+  turn's step index as `attempt`; compaction rows fire per drained
+  request — notes only on success, the nested forced call inherits
+  the hook.
 - Streamed checkpoint deltas (`EngineHooks` + `agent/compact.rs`
   stream cells): the summarisation's text and thought stream into the
   transcript while it runs — one growing entry per attempt, tagged

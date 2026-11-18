@@ -8,12 +8,13 @@
 //! Source: legacy `compaction.ts` L183-410 (`compactConversation`) and
 //! L684-916 (`compactBySlicing`, `streamNotesRequest`), read 2026-11-18.
 //!
-//! Adaptations, both documented: the `onStart`/`onStepUsage`/`onTextDelta`
-//! callbacks of the source land with the session hooks (C3) that need
-//! them, so this engine reports usage inside [`CompactionResult`] and
-//! emits no transcript rows itself; cancellation (`abortSignal`) has no
-//! caller yet and arrives with the same slice.
+//! The source's session callbacks map as: `onStart`/`onTextDelta`/
+//! `onReasoningDelta` landed with the session hooks (C3a/C3b-2) and
+//! `onStepUsage` lands with `EngineHooks::on_usage`, fired per drained
+//! request; cancellation (`abortSignal`) has no caller yet and arrives
+//! with the same slice.
 
+use chrono::Utc;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -27,6 +28,7 @@ use super::core::{
 };
 use super::projection::{project_transcript, recovery_messages, without_executors};
 use super::slicing::split_into_slices;
+use crate::ledger::{StepUsageReport, UsageTokens};
 use crate::sidecar::{Lane, SidecarDoor};
 use openbutler_protocol::sidecar::{SidecarCall, SidecarEvent, SidecarProvider, SidecarTool};
 
@@ -38,15 +40,21 @@ const RECOVERY_SUFFIX: &str = "\n\nThis is a one-time recovery from a full conte
 const SLICED_NOTES_PREFIX: &str = "Merged continuation notes covering the full transcript before the newest dialogue, produced by summarizing it slice by slice:\n\n";
 
 /// The session hooks the engine fires around and during the main
-/// stream — the source's `onStart` / `onTextDelta` /
-/// `onReasoningDelta` callbacks in one Copy bundle. The sliced chain
-/// fires `on_start` only: its note streams stay internal and never
-/// touch the transcript.
+/// stream - the source's `onStart` / `onTextDelta` /
+/// `onReasoningDelta` / `onStepUsage` callbacks in one Copy bundle.
+/// The sliced chain reuses `on_usage` (the source's note requests fire
+/// `onStepUsage` too) but never the transcript hooks: its note streams
+/// stay internal.
 #[derive(Default, Clone, Copy)]
 pub struct EngineHooks<'a> {
     pub on_start: Option<&'a (dyn Fn() + Send + Sync)>,
     pub on_text: Option<&'a (dyn Fn(&str) + Send + Sync)>,
     pub on_reasoning: Option<&'a (dyn Fn(&str) + Send + Sync)>,
+    /// One ledger row per drained model request (`onStepUsage`,
+    /// compaction.ts L329/L881): fired by the call sites, not by the
+    /// stream, because the source's note requests fire it only on
+    /// success (L873 returns before the callback).
+    pub on_usage: Option<&'a (dyn Fn(&StepUsageReport) + Send + Sync)>,
 }
 
 /// Everything one compaction attempt needs. The caller resolves the
@@ -240,7 +248,8 @@ pub async fn compact_conversation(
         if let Some(window) = window
             && !request.messages.is_empty()
         {
-            match compact_by_slicing(door, &request, window, hooks.on_start).await? {
+            match compact_by_slicing(door, &request, window, hooks.on_start, hooks.on_usage).await?
+            {
                 Some(Sliced::Result(result)) => {
                     return Ok(CompactOutcome::Compacted {
                         result: CompactionResult {
@@ -299,6 +308,14 @@ pub async fn compact_conversation(
         on_start();
     }
     let drained = drain_call(door, call, hooks).await?;
+    // One ledger row per model request (`onStepUsage`): fired even when
+    // the interpretation below refuses — the source records the step
+    // before anyone reads it.
+    if let Some(report) = &drained.report
+        && let Some(on_usage) = hooks.on_usage
+    {
+        on_usage(report);
+    }
     let summary = interpret_summary(&drained, max_output)?;
 
     // The checkpoint: conversation data only - system instructions and
@@ -342,8 +359,16 @@ pub async fn compact_conversation(
         result: CompactionResult {
             summary,
             messages,
-            input_tokens: drained.usage.as_ref().and_then(|usage| usage.input),
-            output_tokens: drained.usage.as_ref().and_then(|usage| usage.output),
+            input_tokens: drained
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.input_tokens)
+                .map(|tokens| tokens as u64),
+            output_tokens: drained
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.output_tokens)
+                .map(|tokens| tokens as u64),
             before_tokens: estimated_context,
             after_tokens,
         },
@@ -370,6 +395,7 @@ async fn compact_by_slicing(
     request: &CompactionRequest,
     window: i64,
     on_start: Option<&(dyn Fn() + Send + Sync)>,
+    on_usage: Option<&(dyn Fn(&StepUsageReport) + Send + Sync)>,
 ) -> Result<Option<Sliced>, String> {
     let system_estimate = estimate_text_tokens(&request.system);
     let prompt_estimate = estimate_text_tokens(COMPACTION_PROMPT);
@@ -404,6 +430,7 @@ async fn compact_by_slicing(
             request,
             NotesJob::Slice { messages: slice },
             note_each,
+            on_usage,
         )
         .await;
         match note {
@@ -446,6 +473,7 @@ async fn compact_by_slicing(
                 SLICED_NOTE_MIN_TOKENS
                     .max(notes_budget / 2)
                     .min(note_ceiling),
+                on_usage,
             )
             .await;
             match note {
@@ -497,7 +525,16 @@ async fn compact_by_slicing(
     nested.force = true;
     // The recursion crosses the async boundary through a box; the
     // synthetic request always forces, so it terminates.
-    let outcome = Box::pin(compact_conversation(door, nested, EngineHooks::default())).await?;
+    let outcome = {
+        // The nested forced call inherits the accounting hook (the source
+        // spreads `...options`, keeping `onStepUsage`) while its transcript
+        // hooks stay off (`onStart: () => {}` — no second row).
+        let nested_hooks = EngineHooks {
+            on_usage,
+            ..EngineHooks::default()
+        };
+        Box::pin(compact_conversation(door, nested, nested_hooks)).await?
+    };
     Ok(Some(match outcome {
         CompactOutcome::Compacted { result } => Sliced::Result(result),
         CompactOutcome::Impossible { reason, cause, .. } => {
@@ -520,6 +557,7 @@ async fn stream_notes(
     request: &CompactionRequest,
     job: NotesJob,
     max_output: i64,
+    on_usage: Option<&(dyn Fn(&StepUsageReport) + Send + Sync)>,
 ) -> Result<String, String> {
     let (system, messages) = match job {
         NotesJob::Slice { messages } => {
@@ -546,6 +584,13 @@ async fn stream_notes(
     {
         return Err(format!("the note stream finished as {finish}"));
     }
+    // The source fires `onStepUsage` on a successful note only — both
+    // failure paths above return before its callback (compaction.ts L873).
+    if let Some(report) = &drained.report
+        && let Some(on_usage) = on_usage
+    {
+        on_usage(report);
+    }
     let trimmed = drained.text.trim();
     if trimmed.is_empty() {
         return Err("the model returned empty notes".to_owned());
@@ -554,20 +599,23 @@ async fn stream_notes(
 }
 
 /// What one drained call produced, before any policy interprets it.
+/// What one drained call produced, before any policy interprets it —
+/// plus the accounting report the call sites fire (the source's
+/// `onStepUsage` payload, assembled where the call ends).
 #[derive(Default)]
 struct Drain {
     text: String,
     tool_calls: usize,
     finish: Option<String>,
-    usage: Option<Usage>,
+    usage: Option<UsageTokens>,
+    usage_raw: Option<Value>,
+    provider_metadata: Option<Value>,
+    response_id: Option<String>,
+    /// Present iff a `finish` or `error` step ended the call — the source
+    /// records only finished steps (`onStepFinish`), never a crashed or
+    /// cancelled stream.
+    report: Option<StepUsageReport>,
     stream_error: Option<String>,
-}
-
-#[derive(Default)]
-struct Usage {
-    input: Option<u64>,
-    output: Option<u64>,
-    reasoning: Option<u64>,
 }
 
 /// The guards, in the source's order: stream error, length, then the
@@ -583,11 +631,11 @@ fn interpret_summary(drained: &Drain, max_output: Option<i64>) -> Result<String,
     let usage = drained.usage.as_ref();
     if drained.finish.as_deref() == Some("length") {
         let used = usage
-            .and_then(|usage| usage.output)
+            .and_then(|usage| usage.output_tokens)
             .map(|tokens| format!("{tokens} tokens used"))
             .unwrap_or_else(|| "usage unavailable".to_owned());
         let reasoning = usage
-            .and_then(|usage| usage.reasoning)
+            .and_then(|usage| usage.reasoning_tokens)
             .map(|tokens| format!("; {tokens} reasoning tokens"))
             .unwrap_or_default();
         return Err(format!(
@@ -660,6 +708,9 @@ async fn drain_call(
     call: SidecarCall,
     hooks: EngineHooks<'_>,
 ) -> Result<Drain, String> {
+    // When the provider call began — the source resets this in
+    // `prepareStep`, so the duration covers the request itself.
+    let started_at_ms = Utc::now().timestamp_millis();
     let mut stream = door
         .call(Lane::Interactive, call)
         .await
@@ -681,17 +732,38 @@ async fn drain_call(
                 }
             }
             Ok(SidecarEvent::ToolCall { .. }) => drain.tool_calls += 1,
-            Ok(SidecarEvent::Finish { finish_reason, .. }) => drain.finish = finish_reason,
+            Ok(SidecarEvent::Finish {
+                finish_reason,
+                provider_metadata,
+                response_id,
+                ..
+            }) => {
+                drain.finish = finish_reason;
+                drain.provider_metadata = provider_metadata;
+                drain.response_id = response_id;
+            }
             Ok(SidecarEvent::Usage {
                 prompt_tokens,
                 completion_tokens,
                 reasoning_tokens,
+                total_tokens,
+                no_cache_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                text_tokens,
+                raw,
                 ..
             }) => {
-                drain.usage = Some(Usage {
-                    input: prompt_tokens,
-                    output: completion_tokens,
-                    reasoning: reasoning_tokens,
+                drain.usage_raw = raw;
+                drain.usage = Some(UsageTokens {
+                    input_tokens: prompt_tokens.map(|value| value as i64),
+                    output_tokens: completion_tokens.map(|value| value as i64),
+                    reasoning_tokens: reasoning_tokens.map(|value| value as i64),
+                    total_tokens: total_tokens.map(|value| value as i64),
+                    no_cache_tokens: no_cache_tokens.map(|value| value as i64),
+                    cache_read_tokens: cache_read_tokens.map(|value| value as i64),
+                    cache_write_tokens: cache_write_tokens.map(|value| value as i64),
+                    text_tokens: text_tokens.map(|value| value as i64),
                 });
             }
             Ok(SidecarEvent::Error { message, kind, .. }) => {
@@ -707,6 +779,28 @@ async fn drain_call(
                 }
             }
         }
+    }
+    // A finished or errored step is what the source records
+    // (`onStepFinish`); a stream that never reported an outcome produces
+    // no row. Each summarisation request is its own single-step stream,
+    // so the attempt is 1 (the source's stepCount per streamText).
+    let ended_at_ms = Utc::now().timestamp_millis();
+    if drain.finish.is_some() || drain.stream_error.is_some() {
+        let status = if drain.finish.is_some() && drain.finish.as_deref() != Some("error") {
+            "ok"
+        } else {
+            "error"
+        };
+        drain.report = Some(StepUsageReport {
+            started_at_ms,
+            ended_at_ms,
+            attempt: 1,
+            status,
+            tokens: drain.usage.clone().unwrap_or_default(),
+            usage_raw: drain.usage_raw.clone(),
+            provider_metadata: drain.provider_metadata.clone(),
+            response_id: drain.response_id.clone(),
+        });
     }
     Ok(drain)
 }

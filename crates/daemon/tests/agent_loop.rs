@@ -181,7 +181,7 @@ async fn chat(
     mock.bodies.lock().unwrap().push(body);
     match scenario.as_str() {
         "basic" => sse(&format!(
-            "{}{}data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n",
+            "{}{}data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}}}\n\ndata: [DONE]\n\n",
             chunk(json!({"role": "assistant", "content": "Hello"})),
             chunk(json!({"content": " world"})),
         )),
@@ -1949,4 +1949,145 @@ async fn the_boundary_compacts_automatically_above_the_trigger() {
     );
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// --- usage accounting (onStepUsage -> the ledger) ---------------------------
+
+/// One finished step -> one `openbutler_usage` row: the source's key,
+/// run kind, status, and the token counts the fake stated.
+#[tokio::test]
+async fn a_turn_records_one_usage_row_per_model_request() {
+    let root = temp_root("usage");
+    seed_session(&root);
+    let (addr, _mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
+        .await
+        .expect("open");
+
+    runner
+        .send(request("basic", addr, UserEntrySource::Terminal))
+        .await
+        .expect("turn");
+
+    let rows = usage_rows(&root);
+    assert_eq!(rows.len(), 1, "one model request, one row: {rows:?}");
+    let row = &rows[0];
+    assert_eq!(
+        row.id,
+        format!("{}:{}:1", SESSION_ID, row.at_ms),
+        "the source's primary key: sessionId:startedAt:attempt"
+    );
+    assert_eq!(row.run_kind, "chat");
+    assert_eq!(row.status, "ok");
+    assert_eq!(row.attempt, 1);
+    assert_eq!(row.provider_id, "openai-compatible");
+    assert_eq!(row.model_id, "test-model");
+    assert_eq!(
+        (row.input_tokens, row.output_tokens, row.total_tokens),
+        (Some(10), Some(5), Some(15))
+    );
+    assert_eq!(row.usage_source, "provider");
+    assert_eq!(
+        row.cost_source.as_deref(),
+        Some("none"),
+        "the fake states no cost"
+    );
+    assert!(row.duration_ms >= 0, "duration is recorded");
+    assert_eq!(
+        row.generation_id.as_deref(),
+        Some("c1"),
+        "the provider's response id travels through finish-step"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The turn's step index is the source's stepCount: a tool round-trip
+/// records attempt 1, then 2 — one row per model request, never one per
+/// turn.
+#[tokio::test]
+async fn each_step_of_a_tool_turn_records_its_attempt() {
+    let root = temp_root("usage-steps");
+    seed_session(&root);
+    let (addr, _mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
+        .await
+        .expect("open");
+
+    let mut req = request("batch", addr, UserEntrySource::Terminal);
+    req.workspace_root = Some(root.display().to_string());
+    let turn = runner.send(req).await.expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    let rows = usage_rows(&root);
+    let attempts: Vec<i64> = rows.iter().map(|row| row.attempt).collect();
+    assert_eq!(attempts, vec![1, 2], "one row per step, in order: {rows:?}");
+    assert!(
+        rows.iter()
+            .all(|row| row.run_kind == "chat" && row.status == "ok"),
+        "chat rows, all settled: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.workspace_root.as_deref() == Some(root.to_str().unwrap())),
+        "the turn's workspace travels: {rows:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[derive(Debug)]
+struct UsageRowView {
+    id: String,
+    at_ms: i64,
+    run_kind: String,
+    status: String,
+    attempt: i64,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    usage_source: String,
+    cost_source: Option<String>,
+    duration_ms: i64,
+    generation_id: Option<String>,
+    provider_id: String,
+    model_id: String,
+    workspace_root: Option<String>,
+}
+
+fn usage_rows(root: &Path) -> Vec<UsageRowView> {
+    let connection = rusqlite::Connection::open(root.join("state.db")).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT id, at_ms, run_kind, status, attempt, input_tokens, output_tokens,
+                    total_tokens, usage_source, cost_source, duration_ms, generation_id,
+                    provider_id, model_id, workspace_root
+             FROM openbutler_usage ORDER BY at_ms, attempt",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok(UsageRowView {
+                id: row.get(0)?,
+                at_ms: row.get(1)?,
+                run_kind: row.get(2)?,
+                status: row.get(3)?,
+                attempt: row.get(4)?,
+                input_tokens: row.get(5)?,
+                output_tokens: row.get(6)?,
+                total_tokens: row.get(7)?,
+                usage_source: row.get(8)?,
+                cost_source: row.get(9)?,
+                duration_ms: row.get(10)?,
+                generation_id: row.get(11)?,
+                provider_id: row.get(12)?,
+                model_id: row.get(13)?,
+                workspace_root: row.get(14)?,
+            })
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
 }

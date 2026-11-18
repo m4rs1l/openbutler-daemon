@@ -103,8 +103,19 @@ export async function runCall(call, { signal, emit }) {
     stopWhen: isStepCount(1),
   });
 
+  // The finish part carries usage and the reason; the step's identity
+  // (response id, provider metadata) sits on the preceding finish-step
+  // part — stashed here to travel with the same call's finish event.
+  let stepStash = null;
+
   for await (const part of result.fullStream) {
     switch (part.type) {
+      case "finish-step":
+        stepStash = {
+          providerMetadata: part.providerMetadata ?? null,
+          responseId: part.response?.id ?? null,
+        };
+        break;
       case "text-delta":
         emit({ type: "text-delta", id: call.id, delta: part.text });
         break;
@@ -138,11 +149,18 @@ export async function runCall(call, { signal, emit }) {
           completionTokens: usage.outputTokens ?? null,
           reasoningTokens: usage.outputTokenDetails?.reasoningTokens ?? null,
           totalTokens: usage.totalTokens ?? null,
+          noCacheTokens: usage.inputTokenDetails?.noCacheTokens ?? null,
+          cacheReadTokens: usage.inputTokenDetails?.cacheReadTokens ?? null,
+          cacheWriteTokens: usage.inputTokenDetails?.cacheWriteTokens ?? null,
+          textTokens: usage.outputTokenDetails?.textTokens ?? null,
+          raw: usage.raw ?? null,
         });
         emit({
           type: "finish",
           id: call.id,
           finishReason: part.finishReason ?? null,
+          providerMetadata: stepStash?.providerMetadata ?? null,
+          responseId: stepStash?.responseId ?? null,
         });
         break;
       }

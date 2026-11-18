@@ -9,7 +9,7 @@
 //! fix — never a dead end.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use serde_json::Value;
@@ -27,6 +27,7 @@ use crate::compaction::{
     CompactOutcome, CompactionRequest, CompactionResult, EngineHooks, ImpossibleReason,
     compact_conversation,
 };
+use crate::ledger::{LedgerWriter, StepUsageReport, UsageInput};
 use crate::state;
 use crate::tool_runtime::catalog::{native_definition, sidecar_tool};
 
@@ -225,10 +226,42 @@ impl TurnRunner {
         let entry_turn: Option<String> = None;
         let text_hook = self.stream_text_hook(&stream, &entry_turn);
         let reasoning_hook = self.stream_reasoning_hook(&stream, &entry_turn);
+        // One ledger row per summarisation request (`onStepUsage` →
+        // `recordUsage`): best effort — a failed write logs and the
+        // compaction continues, exactly as the source's sink does
+        // (`if (!sink) return` when the writer cannot open).
+        let usage_ledger = Mutex::new(LedgerWriter::open(&self.data_root).ok());
+        let usage_session = self.session_id.clone();
+        let usage_workspace = meta.workspace_root.clone();
+        let usage_provider = meta.provider_id.clone();
+        let usage_model = meta.model_id.clone();
+        let on_usage = {
+            let usage_ledger = &usage_ledger;
+            move |report: &StepUsageReport| {
+                let input = UsageInput {
+                    session_id: usage_session.clone(),
+                    event_id: None,
+                    run_kind: "compaction",
+                    workspace_root: usage_workspace.clone(),
+                    provider_id: usage_provider.clone(),
+                    model_id: usage_model.clone(),
+                    report: report.clone(),
+                };
+                let mut guard = usage_ledger
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(writer) = guard.as_mut()
+                    && let Err(error) = writer.record_usage(&input.row())
+                {
+                    eprintln!("Usage accounting failed: {error}");
+                }
+            }
+        };
         let hooks = EngineHooks {
             on_start: Some(&on_start),
             on_text: Some(&text_hook),
             on_reasoning: Some(&reasoning_hook),
+            on_usage: Some(&on_usage),
         };
         match compact_conversation(&self.door, request, hooks).await {
             Ok(outcome) => {
@@ -334,10 +367,42 @@ impl TurnRunner {
         let entry_turn = active_turn.clone();
         let text_hook = self.stream_text_hook(&stream, &entry_turn);
         let reasoning_hook = self.stream_reasoning_hook(&stream, &entry_turn);
+        // One ledger row per summarisation request (`onStepUsage` →
+        // `recordUsage`): best effort — a failed write logs and the
+        // compaction continues, exactly as the source's sink does
+        // (`if (!sink) return` when the writer cannot open).
+        let usage_ledger = Mutex::new(LedgerWriter::open(&self.data_root).ok());
+        let usage_session = self.session_id.clone();
+        let usage_workspace = meta.workspace_root.clone();
+        let usage_provider = meta.provider_id.clone();
+        let usage_model = meta.model_id.clone();
+        let on_usage = {
+            let usage_ledger = &usage_ledger;
+            move |report: &StepUsageReport| {
+                let input = UsageInput {
+                    session_id: usage_session.clone(),
+                    event_id: None,
+                    run_kind: "compaction",
+                    workspace_root: usage_workspace.clone(),
+                    provider_id: usage_provider.clone(),
+                    model_id: usage_model.clone(),
+                    report: report.clone(),
+                };
+                let mut guard = usage_ledger
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(writer) = guard.as_mut()
+                    && let Err(error) = writer.record_usage(&input.row())
+                {
+                    eprintln!("Usage accounting failed: {error}");
+                }
+            }
+        };
         let hooks = EngineHooks {
             on_start: Some(&on_start),
             on_text: Some(&text_hook),
             on_reasoning: Some(&reasoning_hook),
+            on_usage: Some(&on_usage),
         };
         match compact_conversation(&self.door, request, hooks).await {
             Ok(outcome) => {

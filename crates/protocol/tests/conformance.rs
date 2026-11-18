@@ -698,6 +698,11 @@ fn sidecar_events_round_trip() {
         prompt_tokens,
         reasoning_tokens,
         total_tokens,
+        no_cache_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        text_tokens,
+        raw,
         ..
     } = roundtrip(fixture("sidecar-event-usage"))
     else {
@@ -707,11 +712,18 @@ fn sidecar_events_round_trip() {
     assert_eq!(prompt_tokens, Some(1204));
     assert_eq!(reasoning_tokens, Some(40));
     assert_eq!(total_tokens, Some(1292));
+    assert_eq!(no_cache_tokens, Some(1000));
+    assert_eq!(cache_read_tokens, Some(180));
+    assert_eq!(cache_write_tokens, Some(24));
+    assert_eq!(text_tokens, Some(48));
+    let raw = raw.expect("raw usage must survive");
+    assert_eq!(raw["cost"], "0.0042", "raw stays a provider statement");
 
     let SidecarEvent::Finish {
         id,
         finish_reason,
         provider_metadata,
+        response_id,
     } = roundtrip(fixture("sidecar-event-finish"))
     else {
         panic!("finish vector decodes as finish");
@@ -720,6 +732,7 @@ fn sidecar_events_round_trip() {
     assert_eq!(finish_reason.as_deref(), Some("tool-calls"));
     let metadata = provider_metadata.expect("provider metadata must survive");
     assert_eq!(metadata["openai"]["cachedPromptTokens"], 1024);
+    assert_eq!(response_id.as_deref(), Some("resp_xyz"));
 
     let SidecarEvent::Error {
         id,

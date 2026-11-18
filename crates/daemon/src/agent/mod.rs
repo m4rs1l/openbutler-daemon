@@ -48,7 +48,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::ledger::LedgerWriter;
+use crate::ledger::{LedgerWriter, StepUsageReport, UsageInput, UsageTokens};
 use crate::sidecar::{DoorError, Lane, SidecarDoor, sidecar_call};
 use crate::state::{self, SaveOutcome, SessionRecord, StateError, save_session};
 use crate::tool_runtime::catalog::native_definition;
@@ -215,12 +215,14 @@ struct QueuedQuestion {
     sender: tokio::sync::oneshot::Sender<Option<String>>,
 }
 
-/// One drained step: the outcome, the streamed reply, and the tool
-/// calls collected for the host to execute between steps.
+/// One drained step: the outcome, the streamed reply, the tool
+/// calls collected for the host to execute between steps, and the
+/// accounting report when the step produced a finished outcome.
 struct DrainResult {
     outcome: TurnOutcome,
     reply: String,
     calls: Vec<CollectedCall>,
+    usage: Option<StepUsageReport>,
 }
 
 /// A model-requested tool call awaiting host execution.
@@ -355,6 +357,10 @@ impl TurnRunner {
             })
             .filter_map(|definition| crate::tool_runtime::catalog::sidecar_tool(&definition).ok())
             .collect();
+        // One ledger row per model request (legacy `onStepUsage`): the
+        // writer opens once per turn; a database that will not open means
+        // no rows — the source's absent sink (`if (!sink) return`).
+        let mut usage_ledger = LedgerWriter::open(&self.data_root).ok();
         let mut steps = 0usize;
         let (outcome, final_reply) = loop {
             steps += 1;
@@ -373,6 +379,27 @@ impl TurnRunner {
             let mut step_call = call.clone();
             step_call.messages = Value::Array(state.record.conversation.clone());
             let drained = self.drain(step_call, &mut state, &turn_id).await;
+            // The accounting row lands before anyone reads the outcome —
+            // the source fires `onStepFinish` while the step is still
+            // being processed, failed steps included.
+            if let (Some(writer), Some(report)) = (usage_ledger.as_mut(), drained.usage.as_ref()) {
+                // The turn's step index is the source's stepCount inside
+                // one streamText run (steps already counts this step).
+                let mut report = report.clone();
+                report.attempt = steps as i64;
+                let input = UsageInput {
+                    session_id: self.session_id.clone(),
+                    event_id: None,
+                    run_kind: "chat",
+                    workspace_root: request.workspace_root.clone(),
+                    provider_id: request.provider_key.clone(),
+                    model_id: request.model.clone(),
+                    report,
+                };
+                if let Err(error) = writer.record_usage(&input.row()) {
+                    eprintln!("Usage accounting failed: {error}");
+                }
+            }
             if drained.outcome != TurnOutcome::Completed {
                 break (drained.outcome, drained.reply);
             }
@@ -632,6 +659,9 @@ impl TurnRunner {
         state: &mut SessionState,
         turn_id: &str,
     ) -> DrainResult {
+        // When the provider call began — the source resets this in
+        // `prepareStep`, so the row's duration covers the request.
+        let started_at_ms = Utc::now().timestamp_millis();
         let mut stream = match self.door.call(Lane::Interactive, call).await {
             Ok(stream) => stream,
             Err(error) => {
@@ -640,6 +670,7 @@ impl TurnRunner {
                     outcome: TurnOutcome::Failed,
                     reply: String::new(),
                     calls: Vec::new(),
+                    usage: None,
                 };
             }
         };
@@ -654,6 +685,13 @@ impl TurnRunner {
         let mut run_error: Option<String> = None;
         let mut cancelled = false;
         let mut calls: Vec<CollectedCall> = Vec::new();
+        // Accounting: one row per finished step (legacy `onStepUsage`).
+        let mut usage_tokens: Option<UsageTokens> = None;
+        let mut usage_raw: Option<Value> = None;
+        let mut provider_metadata: Option<Value> = None;
+        let mut response_id: Option<String> = None;
+        let mut finish_seen = false;
+        let mut finish_reason: Option<String> = None;
 
         let mut persist = tokio::time::interval(Duration::from_secs(1));
         persist.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -720,8 +758,42 @@ impl TurnRunner {
                             });
                             self.publish_now(state, Some(turn_id), assistant_index, true);
                         }
-                        SidecarEvent::Usage { .. } => {}
-                        SidecarEvent::Finish { .. } => break,
+                        SidecarEvent::Usage {
+                            prompt_tokens,
+                            completion_tokens,
+                            reasoning_tokens,
+                            total_tokens,
+                            no_cache_tokens,
+                            cache_read_tokens,
+                            cache_write_tokens,
+                            text_tokens,
+                            raw,
+                            ..
+                        } => {
+                            usage_raw = raw;
+                            usage_tokens = Some(UsageTokens {
+                                input_tokens: prompt_tokens.map(|value| value as i64),
+                                output_tokens: completion_tokens.map(|value| value as i64),
+                                reasoning_tokens: reasoning_tokens.map(|value| value as i64),
+                                total_tokens: total_tokens.map(|value| value as i64),
+                                no_cache_tokens: no_cache_tokens.map(|value| value as i64),
+                                cache_read_tokens: cache_read_tokens.map(|value| value as i64),
+                                cache_write_tokens: cache_write_tokens.map(|value| value as i64),
+                                text_tokens: text_tokens.map(|value| value as i64),
+                            });
+                        }
+                        SidecarEvent::Finish {
+                            finish_reason: reason,
+                            provider_metadata: metadata,
+                            response_id: response,
+                            ..
+                        } => {
+                            finish_seen = true;
+                            finish_reason = reason;
+                            provider_metadata = metadata;
+                            response_id = response;
+                            break;
+                        }
                         SidecarEvent::Error { message, .. } => {
                             // The taxonomy always carries a message in
                             // practice; the fallback text is authored here
@@ -763,6 +835,32 @@ impl TurnRunner {
         // The thinking block may end at the stream's end (no later token).
         finish_reasoning_block(state, &mut reasoning_index, &mut reasoning_started_at);
 
+        // One ledger row per finished step (legacy `onStepUsage`): a
+        // cancelled run has no provider outcome to account for, and a
+        // stream that reported neither a finish nor a structured error
+        // produced no step result.
+        let usage = if (finish_seen || run_error.is_some()) && !cancelled {
+            let status = if finish_seen && finish_reason.as_deref() != Some("error") {
+                "ok"
+            } else {
+                "error"
+            };
+            Some(StepUsageReport {
+                started_at_ms,
+                ended_at_ms: Utc::now().timestamp_millis(),
+                // The caller replaces this with the turn's step index —
+                // the source's stepCount inside one streamText run.
+                attempt: 1,
+                status,
+                tokens: usage_tokens.unwrap_or_default(),
+                usage_raw,
+                provider_metadata,
+                response_id,
+            })
+        } else {
+            None
+        };
+
         let outcome = if cancelled {
             push_notice(state, turn_id, "Run cancelled.", None);
             TurnOutcome::Cancelled
@@ -779,6 +877,7 @@ impl TurnRunner {
             outcome,
             reply,
             calls,
+            usage,
         }
     }
 

@@ -126,6 +126,22 @@ fn compact_request(recovery: Option<Value>) -> DaemonRequest {
     }
 }
 
+/// One `openbutler_usage` row as the compaction test reads it: session,
+/// kind, attempt, status, the three token counts, usage source, provider,
+/// model.
+type CompactionUsageRow = (
+    String,
+    String,
+    i64,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    String,
+    String,
+    String,
+);
+
 #[test]
 fn recovery_must_be_a_boolean_when_present() {
     let dir = temp_data_dir("compact-validation");
@@ -313,6 +329,50 @@ async fn a_standalone_compaction_swaps_the_conversation_and_lands_the_row() {
         Some("Hello world"),
         "the streamed checkpoint entry carries the compaction provenance"
     );
+
+    // The summarisation request is accounted for: one row, compaction
+    // kind, the source's key and the tokens the fake stated
+    // (legacy `onStepUsage(report, 'compaction')`).
+    let connection = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id, run_kind, attempt, status, input_tokens, output_tokens,
+                    total_tokens, usage_source, provider_id, model_id
+             FROM openbutler_usage",
+        )
+        .unwrap();
+    let rows: Vec<CompactionUsageRow> = statement
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "one summarisation request, one row: {rows:?}"
+    );
+    let row = &rows[0];
+    assert_eq!(row.0, id, "the row names its session");
+    assert_eq!(row.1, "compaction");
+    assert_eq!(row.2, 1, "each summarisation request is its own run");
+    assert_eq!(row.3, "ok");
+    assert_eq!((row.4, row.5, row.6), (Some(10), Some(5), Some(15)));
+    assert_eq!(row.7, "provider");
+    assert_eq!(row.8, "mock", "the session's provider, as in the source");
+    assert_eq!(row.9, "test-model");
 }
 
 #[tokio::test]
