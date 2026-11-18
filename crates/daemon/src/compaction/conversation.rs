@@ -84,7 +84,7 @@ pub fn parse_tool_reference(message: &Value) -> Option<ToolReference> {
 /// The source writes the record in declaration order (`JSON.stringify` of
 /// the spread), so the rebuilt content is assembled field by field - a
 /// map's key order would not match the original bytes.
-fn reference_content(reference: &ToolReference) -> String {
+pub(super) fn reference_content(reference: &ToolReference) -> String {
     let quote = |value: &str| {
         serde_json::to_string(&Value::String(value.to_owned()))
             .unwrap_or_else(|_| String::from("\"\""))

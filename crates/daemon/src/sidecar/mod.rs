@@ -328,18 +328,19 @@ impl SidecarDoor {
             else {
                 return;
             };
-            let line = match serde_json::to_string(&SidecarCommand::Call(entry.call.clone())) {
-                Ok(line) => line,
-                Err(error) => {
-                    drop(writes);
-                    self.fail_call(
-                        &entry.id,
-                        DoorError::Io(format!("command encoding: {error}")),
-                    )
-                    .await;
-                    continue;
-                }
-            };
+            let line =
+                match serde_json::to_string(&SidecarCommand::Call(Box::new(entry.call.clone()))) {
+                    Ok(line) => line,
+                    Err(error) => {
+                        drop(writes);
+                        self.fail_call(
+                            &entry.id,
+                            DoorError::Io(format!("command encoding: {error}")),
+                        )
+                        .await;
+                        continue;
+                    }
+                };
             if entry.control.is_sent() || entry.control.is_aborted() {
                 drop(writes);
                 continue; // cancelled or expired while queued — try the next entry

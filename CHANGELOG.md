@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Compaction projection layer (`compaction/projection.rs`): the
+  checkpoint's middle part - tool call/result pairing into bounded
+  references (literal excerpts), `missing` markers for unresolved
+  calls, latest-media-batch filtering, reasoning/providerOptions
+  stripping, recovery decoding (readable tool exchanges, only the
+  newest raw reasoning survives), and oldest-first dialogue folding
+  with the structural floor (references, media, system and the newest
+  user message never fold; overshoot beats deleting the request).
+  The `image.ts` media summariser branches arrive with the media
+  tools; image/file results render through the generic part list.
 - Sidecar door: `call` carries `maxOutputTokens` and request-level
   `providerOptions` (the compaction engine's summary budget and its
   reasoning/cache options), both absent from the wire when unset.

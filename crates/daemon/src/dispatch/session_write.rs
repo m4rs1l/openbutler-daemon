@@ -556,8 +556,8 @@ pub fn select_project(
     // The source's `publish(false)`: the connection sees the re-bound
     // chat after its response, through the same pending queue the
     // attach flow uses.
-    let path = state::record_path(data_dir, &session_id).ok_or_else(|| CHAT_NOT_FOUND)?;
-    let view = state::read_session_view(&path, &session_id).ok_or_else(|| CHAT_NOT_FOUND)?;
+    let path = state::record_path(data_dir, &session_id).ok_or(CHAT_NOT_FOUND)?;
+    let view = state::read_session_view(&path, &session_id).ok_or(CHAT_NOT_FOUND)?;
     let (snapshot, runtime, _workspace_root) = chat_snapshot(host, view, None);
     queue_attach_event(state, snapshot, runtime);
     Ok(())

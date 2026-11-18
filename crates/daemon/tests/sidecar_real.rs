@@ -487,17 +487,24 @@ async fn budget_and_provider_options_reach_the_provider_wire() {
     let mut stream = door.call(Lane::Interactive, call).await.unwrap();
     let (events, terminal) = drain(&mut stream).await;
     assert!(terminal.is_none(), "{terminal:?}");
-
-    let bodies = mock.bodies.lock().unwrap();
-    assert_eq!(bodies.len(), 1, "exactly one provider request");
-    let body = &bodies[0];
     assert!(
-        body.contains("\"max_tokens\":16384"),
-        "the output ceiling reaches the provider: {body}"
+        events
+            .iter()
+            .any(|event| matches!(event, SidecarEvent::TextDelta { .. })),
+        "the budget call still streams: {events:?}"
     );
-    assert!(
-        body.contains("\"reasoning_effort\":\"low\""),
-        "request-level provider options reach the provider under its own namespace: {body}"
-    );
+    {
+        let bodies = mock.bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1, "exactly one provider request");
+        let body = &bodies[0];
+        assert!(
+            body.contains("\"max_tokens\":16384"),
+            "the output ceiling reaches the provider: {body}"
+        );
+        assert!(
+            body.contains("\"reasoning_effort\":\"low\""),
+            "request-level provider options reach the provider under its own namespace: {body}"
+        );
+    }
     door.shutdown().await;
 }

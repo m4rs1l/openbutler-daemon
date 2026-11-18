@@ -72,7 +72,7 @@ pub struct SidecarCall {
 #[serde(tag = "type")]
 pub enum SidecarCommand {
     #[serde(rename = "call")]
-    Call(SidecarCall),
+    Call(Box<SidecarCall>),
     #[serde(rename = "cancel")]
     Cancel { id: String },
 }

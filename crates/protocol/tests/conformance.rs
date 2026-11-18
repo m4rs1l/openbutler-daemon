@@ -575,7 +575,7 @@ fn sidecar_commands_round_trip() {
         system,
         tools,
         ..
-    } = call;
+    } = *call;
     assert_eq!(id, "call-01");
     assert!(
         system.is_none(),
