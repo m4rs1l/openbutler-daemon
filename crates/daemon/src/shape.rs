@@ -14,12 +14,10 @@ pub(crate) fn as_record(value: &Value) -> Option<&Map<String, Value>> {
     value.as_object()
 }
 
-/// JS `String.length`: UTF-16 code units. Length limits in the contract are
-/// written against it, so a byte count here would accept what JavaScript
-/// rejects (and split the two implementations at an astral character).
-pub(crate) fn js_len(value: &str) -> usize {
-    value.chars().map(char::len_utf16).sum()
-}
+/// JS `String.length`: UTF-16 code units — the one authority lives in
+/// the protocol crate (`envelope::js_length`); this alias keeps the
+/// daemon's 17 call sites reading the shared name.
+pub(crate) use openbutler_protocol::envelope::js_length as js_len;
 
 /// The compact JSON size the source measures with `JSON.stringify`.
 pub(crate) fn json_size(value: &Value) -> Result<usize, String> {

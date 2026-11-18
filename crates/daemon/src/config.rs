@@ -17,11 +17,6 @@ pub fn data_dir() -> PathBuf {
     default_data_dir()
 }
 
-/// A path inside the data directory.
-pub fn data_path(name: &str) -> PathBuf {
-    data_dir().join(name)
-}
-
 /// The dated scratch root (`getScratchRoot`, legacy `paths.ts` L83):
 /// `<tmpdir>/openbutler/YYYY-MM-DD` — outside the data directory because
 /// it is disposable, dated so a day of scratch can be discarded, and

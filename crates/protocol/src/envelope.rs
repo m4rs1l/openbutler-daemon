@@ -17,7 +17,7 @@ use crate::session::{SessionPatch, SessionSnapshotData};
 /// Counts JS string length: UTF-16 code units, exactly like
 /// `String.prototype.length`. A byte count here would reject ids the
 /// TypeScript gate accepts and split the two implementations.
-fn js_length(value: &str) -> usize {
+pub fn js_length(value: &str) -> usize {
     value.chars().map(char::len_utf16).sum()
 }
 
