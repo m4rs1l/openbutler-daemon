@@ -7,6 +7,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `session.command` normalization and the telegram trio: the registry
+  resolves `/new` / `/compact` / `/stop` before the switch (payload
+  untouched, surface names refused with `Unknown command.`), and the
+  telegram actions answer from the source's disabled/not-configured
+  fallbacks. The unknown-action refusal now prints
+  `Unknown IPC action: <request.action>` — the source's operand and
+  wording (the old port drifted to `Unknown action:` without a pin).
+  Tests: `tests/session_command.rs` (7).
 - Disk-side chat mutations at the dispatch surface: `session.new`
   (busy-gated draft creation with the attach snapshot event),
   `session.flush`, `session.add-entry` (the `parseSessionEntry` port

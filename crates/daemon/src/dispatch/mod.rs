@@ -6,6 +6,7 @@
 //! `host.rs`; per-domain actions that outgrew the router live in
 //! `schedule.rs` and `session_send.rs`.
 
+mod commands;
 pub mod fanout;
 mod host;
 mod schedule;
@@ -49,7 +50,19 @@ pub fn handle(
     if let Err(error) = validate_request(request) {
         return failure(request, error.to_string());
     }
-    match request.action.as_str() {
+    // `session.command` carries a name, not an effect: the registry
+    // resolves it to a request the cases below already implement, so a
+    // name never grows a case of its own (legacy L3492: resolution
+    // before the gate and the switch).
+    let action = if request.action == "session.command" {
+        match commands::daemon_command_action(request) {
+            Ok(target) => target,
+            Err(error) => return failure(request, error),
+        }
+    } else {
+        request.action.as_str()
+    };
+    match action {
         "status" => success(
             request,
             serde_json::to_value(host.status()).unwrap_or_else(|_| json!({})),
@@ -258,6 +271,18 @@ pub fn handle(
                 },
             },
         },
+        "telegram.status" => success(
+            request,
+            json!({ "state": "disabled", "paired": false, "username": null, "error": null }),
+        ),
+        // No telegram service exists in this build, which is exactly the
+        // source's `telegram?.getStatus() ?? disabled` and its
+        // not-configured guard: setup, pairing and the test message
+        // arrive with the telegram slice.
+        "telegram.pair" | "telegram.test" => failure(
+            request,
+            "Telegram is not configured. Run `openbutler telegram setup` first.".to_owned(),
+        ),
         "session.new" => match session_write::new_chat(host, data_dir, state, request) {
             Ok(()) => success(request, json!({ "accepted": true })),
             Err(error) => failure(request, error),
@@ -564,7 +589,10 @@ pub fn handle(
                 Err(error) => failure(request, error.to_string()),
             }
         }
-        other => failure(request, format!("Unknown action: {other}")),
+        other => {
+            let _ = other;
+            failure(request, format!("Unknown IPC action: {}", request.action))
+        }
     }
 }
 
