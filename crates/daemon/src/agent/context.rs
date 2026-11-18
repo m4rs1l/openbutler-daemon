@@ -216,10 +216,10 @@ pub(crate) fn build_turn_system(
 }
 
 /// Everything a turn (or a compaction) resolves from live settings:
-/// provider transport, the provider secret, the workspace, team, the
-/// policy trio, and the model's declared budget. Settings are the
-/// single read authority; the second consumer is the compaction
-/// engine, which must share this resolution or the two would drift.
+/// provider transport, the provider secret, the workspace, team, and
+/// the policy trio. Settings are the single read authority; the
+/// second consumer is the compaction engine, which must share this
+/// resolution or the two would drift.
 pub struct TurnContext {
     pub provider_url: Option<String>,
     pub provider_api_key: Option<String>,
@@ -228,10 +228,6 @@ pub struct TurnContext {
     pub approval_mode: crate::settings::ApprovalMode,
     pub command_shell: Option<String>,
     pub approval_timeout_seconds: Option<u64>,
-    /// The model's declared context window (`modelSpecs.*.context`).
-    pub context_window: Option<i64>,
-    /// The model's declared output ceiling (`modelSpecs.*.output`).
-    pub output_limit: Option<u64>,
 }
 
 /// Resolve the settings half of a request: live settings first (the
@@ -263,16 +259,6 @@ pub fn resolve_turn_context(
     let approval_mode = loaded.store.approval_mode;
     let command_shell = loaded.store.command_shell.clone();
     let approval_timeout_seconds = loaded.store.approval_timeout_seconds;
-    let specs = loaded
-        .store
-        .providers
-        .get(&meta.provider_id)
-        .and_then(|provider| provider.model_specs.as_ref())
-        .and_then(|specs| specs.get(&meta.model_id));
-    let context_window = specs
-        .and_then(|spec| spec.context)
-        .map(|value| value as i64);
-    let output_limit = specs.and_then(|spec| spec.output);
     drop(settings);
     let secrets = crate::settings::load_secrets(data_dir).map_err(|error| error.to_string())?;
     let provider_api_key = secrets
@@ -287,9 +273,36 @@ pub fn resolve_turn_context(
         approval_mode,
         command_shell,
         approval_timeout_seconds,
-        context_window,
-        output_limit,
     })
+}
+
+/// The compaction budget for one session: the record's own window
+/// first, then the model's declared specs (source
+/// `stateContextWindowTokens`, L562 — a chat's recorded window wins,
+/// so a stale or absent field cannot re-tune it silently the other
+/// way). Settings only — no secrets — so a step boundary never reads
+/// the disk. Returns `(window, output)` as token counts.
+pub(crate) fn compaction_budget(
+    host: &crate::dispatch::Host,
+    meta: &openbutler_protocol::session::SessionMeta,
+) -> (Option<i64>, Option<i64>) {
+    let settings = host.settings();
+    let Some(loaded) = settings.as_ref() else {
+        return (meta.context_window_tokens, None);
+    };
+    let specs = loaded
+        .store
+        .providers
+        .get(&meta.provider_id)
+        .and_then(|provider| provider.model_specs.as_ref())
+        .and_then(|specs| specs.get(&meta.model_id));
+    let window = meta.context_window_tokens.or_else(|| {
+        specs
+            .and_then(|spec| spec.context)
+            .map(|value| value as i64)
+    });
+    let output = specs.and_then(|spec| spec.output).map(|value| value as i64);
+    (window, output)
 }
 
 /// The user's home the way the source resolves it: environment first.

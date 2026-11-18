@@ -18,9 +18,9 @@ use openbutler_protocol::SessionEntryMeta;
 use openbutler_protocol::entry::{CompactionStatus, NoticeTone, SessionEntry};
 use openbutler_protocol::sidecar::SidecarProvider;
 
-use super::context::{build_turn_system, resolve_turn_context};
+use super::context::{build_turn_system, compaction_budget, resolve_turn_context};
 use super::entry::push_scoped_notice;
-use super::{SessionState, TurnRunner};
+use super::{SessionState, TurnRequest, TurnRunner};
 use crate::compaction::{
     CompactOutcome, CompactionRequest, CompactionResult, ImpossibleReason, compact_conversation,
 };
@@ -102,27 +102,17 @@ impl TurnRunner {
         self.publish_now(&state, active_turn.as_deref(), None, true);
     }
 
-    /// One standalone compaction attempt.
+    /// One standalone compaction attempt (the arm path: settings and
+    /// the prompt rebuilt here — the source builds them too when no
+    /// run supplies them).
     async fn compact_standalone(&self, recovery: bool) -> Result<(), String> {
         // Snapshot under the lock: the engine must never hold it across
         // the await (the door stream can take minutes).
         let (conversation, compaction_turn, meta) = {
             let state = self.state.lock().await;
-            // The turn the transcript ends in (L2761): the last user
-            // entry's id, whatever it is.
-            let compaction_turn = state
-                .record
-                .entries
-                .iter()
-                .rev()
-                .find_map(|entry| match entry {
-                    SessionEntry::User { meta, .. } => Some(meta.turn_id.clone()),
-                    _ => None,
-                })
-                .flatten();
             (
                 state.record.conversation.clone(),
-                compaction_turn,
+                last_transcript_turn(&state),
                 state.record.meta.clone(),
             )
         };
@@ -143,6 +133,7 @@ impl TurnRunner {
             .upgrade()
             .ok_or_else(|| "the host has dropped".to_owned())?;
         let context = resolve_turn_context(&host, &self.data_root, &meta)?;
+        let (window, output) = compaction_budget(&host, &meta);
         let system = build_turn_system(
             &self.data_root,
             context.workspace_root.as_deref(),
@@ -172,8 +163,8 @@ impl TurnRunner {
             tools,
             archive_path: state::record_path(&self.data_root, &self.session_id)
                 .map(|path| path.display().to_string()),
-            context_window: context.context_window,
-            output_limit: context.output_limit.map(|value| value as i64),
+            context_window: window,
+            output_limit: output,
             previous_context: meta.context_tokens,
             previous_context_estimate: meta.context_estimate_tokens,
             // Manual compaction: skip the trigger and the no-reduction
@@ -182,17 +173,147 @@ impl TurnRunner {
             recovery,
         };
 
-        // The row lands inside `on_start`: budget arithmetic passed, so
-        // this is the first moment the stream can begin (L2793-2806).
-        // The lock is brief and never spans the engine's await.
-        let row_turn = compaction_turn.clone();
-        let before = meta.context_tokens;
-        let on_start = || {
-            // The engine calls this synchronously while no turn runs,
-            // so the runner's state lock is free by construction —
-            // `try_lock` keeps the closure sync (a tokio guard cannot
-            // be taken here), and a contended lock degrades to the
-            // settle path appending its own row (source `else addEntry`).
+        let on_start =
+            self.on_start_hook(compaction_turn.clone(), None, meta.context_tokens, recovery);
+        match compact_conversation(&self.door, request, Some(&on_start)).await {
+            Ok(outcome) => {
+                self.settle_outcome(
+                    outcome,
+                    compaction_turn,
+                    None,
+                    &meta.provider_id,
+                    &meta.model_id,
+                    false,
+                )
+                .await;
+            }
+            Err(error) => {
+                self.fail_compaction(
+                    None,
+                    format!("Compaction failed: {error}"),
+                    NoticeTone::Error,
+                    false,
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
+
+    /// The step-boundary compaction (agent-session L2327, agent.ts
+    /// L426): every model request asks once — forced when a queued
+    /// request waited, automatic otherwise (the engine skips below its
+    /// threshold with zero calls). The caller has released the state
+    /// guard, so the row hook's `try_lock` is free by construction.
+    /// The run's own context decides the request (the source passes
+    /// the step context straight in). Every failure is a notice here:
+    /// a summarisation must never cost the turn (source catch
+    /// L2394-2401 — the warn text with the continue suffix).
+    pub(super) async fn compact_at_boundary(&self, run: &TurnRequest, pending: Option<bool>) {
+        let (conversation, compaction_turn, active_turn, meta) = {
+            let state = self.state.lock().await;
+            let active_turn = self
+                .active_turn_id
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            (
+                state.record.conversation.clone(),
+                last_transcript_turn(&state),
+                active_turn,
+                state.record.meta.clone(),
+            )
+        };
+        let (window, output) = self
+            .host
+            .upgrade()
+            .map(|host| compaction_budget(&host, &meta))
+            .unwrap_or((meta.context_window_tokens, None));
+        let recovery = pending.unwrap_or(false);
+        let request = CompactionRequest {
+            call_tag: "compact".to_owned(),
+            provider: SidecarProvider {
+                key: run.provider_key.clone(),
+                url: run.provider_url.clone(),
+                api_key: run.provider_api_key.clone(),
+            },
+            model: run.model.clone(),
+            provider_options: None,
+            // The run's own system: the request about to go out and
+            // the summarisation share the prefix.
+            system: run.system.clone().unwrap_or_default(),
+            messages: conversation,
+            transcript: None,
+            tools: compaction_tools(
+                &self.data_root,
+                run.workspace_root.as_deref(),
+                run.command_shell.as_deref(),
+            ),
+            archive_path: state::record_path(&self.data_root, &self.session_id)
+                .map(|path| path.display().to_string()),
+            context_window: window,
+            output_limit: output,
+            previous_context: meta.context_tokens,
+            previous_context_estimate: meta.context_estimate_tokens,
+            // Queued request → forced; the automatic half lets the
+            // engine's own trigger decide.
+            force: pending.is_some(),
+            recovery,
+        };
+
+        // The row names the run's turn while a run is live (source
+        // `compactionTurn()`: activeTurnId ?? compactionTurnId).
+        let row_turn = active_turn.clone().or(compaction_turn);
+        let on_start = self.on_start_hook(
+            row_turn.clone(),
+            active_turn.clone(),
+            meta.context_tokens,
+            recovery,
+        );
+        let notice_turn = active_turn.as_deref();
+        match compact_conversation(&self.door, request, Some(&on_start)).await {
+            Ok(outcome) => {
+                self.settle_outcome(
+                    outcome,
+                    row_turn,
+                    notice_turn,
+                    &meta.provider_id,
+                    &meta.model_id,
+                    true,
+                )
+                .await;
+            }
+            Err(error) => {
+                self.fail_compaction(
+                    notice_turn,
+                    format!(
+                        "Compaction failed: {error} The turn continues with the original context."
+                    ),
+                    NoticeTone::Warn,
+                    true,
+                )
+                .await;
+            }
+        }
+    }
+
+    /// The row hook shared by both paths: the row lands from the
+    /// engine's `on_start` (after the budget arithmetic), naming the
+    /// turn; the recovery notice rides beside it.
+    fn on_start_hook(
+        &self,
+        row_turn: Option<String>,
+        notice_turn: Option<String>,
+        before: Option<i64>,
+        recovery: bool,
+    ) -> impl Fn() + Send + Sync + '_ {
+        move || {
+            // Sync hook over the async state lock: both callers have
+            // released the guard before the engine runs, so the lock
+            // is free by construction; `try_lock` keeps the hook sync
+            // (a tokio guard cannot be taken here) and a contended
+            // lock degrades to the settle path appending its own row
+            // (source `else addEntry`).
             let Ok(mut state) = self.state.try_lock() else {
                 return;
             };
@@ -208,29 +329,46 @@ impl TurnRunner {
                 duration_ms: None,
             });
             if recovery {
-                // Info stays unmarked and the standalone compaction has
-                // no active turn, so no turn id (source `addEntry`).
-                push_scoped_notice(&mut state, None, RECOVERY_NOTICE, None, None);
+                push_scoped_notice(
+                    &mut state,
+                    notice_turn.as_deref(),
+                    RECOVERY_NOTICE,
+                    None,
+                    None,
+                );
             }
             state.dirty = true;
             let _ = self.save(&mut state);
-            self.publish_now(&state, None, None, true);
-        };
+            self.publish_now(&state, notice_turn.as_deref(), None, true);
+        }
+    }
 
-        match compact_conversation(&self.door, request, Some(&on_start)).await {
-            Ok(CompactOutcome::Compacted { result }) => {
+    /// The outcome arms shared by both paths (source identical at
+    /// L2818 and L2374): compacted swaps, impossible refuses as data,
+    /// skipped stays silent.
+    async fn settle_outcome(
+        &self,
+        outcome: CompactOutcome,
+        row_turn: Option<String>,
+        notice_turn: Option<&str>,
+        provider_id: &str,
+        model_id: &str,
+        busy: bool,
+    ) {
+        match outcome {
+            CompactOutcome::Compacted { result } => {
                 let mut state = self.state.lock().await;
-                apply_compaction(&mut state, &result, compaction_turn);
+                apply_compaction(&mut state, &result, row_turn);
                 let _ = self.save(&mut state);
-                self.publish_now(&state, None, None, false);
+                self.publish_now(&state, notice_turn, None, busy);
             }
-            Ok(CompactOutcome::Impossible {
+            CompactOutcome::Impossible {
                 reason,
                 window,
                 estimated_tokens,
                 shortfall_tokens,
                 cause,
-            }) => {
+            } => {
                 let mut state = self.state.lock().await;
                 fail_running_compaction(&mut state);
                 let notice = refusal_notice(
@@ -239,40 +377,57 @@ impl TurnRunner {
                     estimated_tokens,
                     shortfall_tokens,
                     cause.as_deref(),
-                    &meta.provider_id,
-                    &meta.model_id,
+                    provider_id,
+                    model_id,
                 );
                 push_scoped_notice(
                     &mut state,
-                    None,
+                    notice_turn,
                     &notice,
                     Some(NoticeTone::Warn),
                     Some(&format!("compaction:{}", reason.as_str())),
                 );
                 let _ = self.save(&mut state);
-                self.publish_now(&state, None, None, false);
+                self.publish_now(&state, notice_turn, None, busy);
             }
-            Ok(CompactOutcome::Skipped { .. }) => {
-                // Unreachable under `force: true`: both guard returns
-                // fire before `on_start`, so no row exists and the
-                // source falls through these outcomes silently too.
-            }
-            Err(error) => {
-                let mut state = self.state.lock().await;
-                fail_running_compaction(&mut state);
-                push_scoped_notice(
-                    &mut state,
-                    None,
-                    &format!("Compaction failed: {error}"),
-                    Some(NoticeTone::Error),
-                    None,
-                );
-                let _ = self.save(&mut state);
-                self.publish_now(&state, None, None, false);
+            CompactOutcome::Skipped { .. } => {
+                // The guards return before `on_start` (an automatic
+                // boundary below its threshold lands here): no row, no
+                // notice — the source falls through silently too.
             }
         }
-        Ok(())
     }
+
+    /// The failure arm shared by both paths: the row (if any) fails
+    /// in place and the caller's text lands as a notice.
+    async fn fail_compaction(
+        &self,
+        notice_turn: Option<&str>,
+        text: String,
+        tone: NoticeTone,
+        busy: bool,
+    ) {
+        let mut state = self.state.lock().await;
+        fail_running_compaction(&mut state);
+        push_scoped_notice(&mut state, notice_turn, &text, Some(tone), None);
+        let _ = self.save(&mut state);
+        self.publish_now(&state, notice_turn, None, busy);
+    }
+}
+
+/// The turn the transcript ends in (source `lastTranscriptTurnId`,
+/// L1996): the last user entry's id, whatever it is.
+fn last_transcript_turn(state: &SessionState) -> Option<String> {
+    state
+        .record
+        .entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            SessionEntry::User { meta, .. } => Some(meta.turn_id.clone()),
+            _ => None,
+        })
+        .flatten()
 }
 
 /// The rewrite: archive once, swap the conversation, kill the measured

@@ -7,6 +7,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Compaction at the step boundary (`TurnRunner::compact_at_boundary`):
+  every model request asks once, before the next call is built — the
+  queued request serves forced (the promise the deferral notice made),
+  the automatic half lets the engine's trigger decide with zero calls
+  below it, failures land as `warn` with the continue suffix so a
+  summarisation never costs the turn, and the budget prefers the
+  record's own window over the model specs (source
+  `stateContextWindowTokens`). The send loop releases the state guard
+  at the boundary so the row hook can take it; the boundary runs on
+  the run's own system/provider/model. Two pins in `agent_loop.rs`
+  (boundary ordering across three calls, auto-trigger above 40,210
+  with the checkpoint already in the first turn request).
 - `session.compact` end to end: the fire-and-forget dispatch arm
   (`recovery` validated, seam reached), `TurnExecutor::compact`, and
   the runner hooks (`agent/compact.rs`) — busy deferral stored under

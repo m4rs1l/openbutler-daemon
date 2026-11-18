@@ -1745,3 +1745,208 @@ fn seed_compactable(root: &Path) {
         SaveOutcome::Skipped => panic!("allowEmpty writes the seed"),
     }
 }
+
+/// The step boundary serves a queued compaction *before the next
+/// model request*: the second turn request carries the checkpoint-first
+/// conversation, not the original one (legacy `compactBeforeStep`,
+/// agent.ts L426 — the safe boundary the request waited for).
+#[tokio::test]
+async fn a_queued_compaction_serves_at_the_step_boundary_before_the_next_request() {
+    let root = temp_root("compact-boundary");
+    seed_compactable(&root);
+    // No modelSpecs: the automatic half stays silent (no budget), so
+    // exactly three calls pin the queued-forced compaction's place.
+    let (addr, mock) = mock_server().await;
+    std::fs::write(
+        root.join("settings.yaml"),
+        format!(
+            "providers:\n  openai-compatible:\n    enabled: true\n    url: http://{addr}/basic\n"
+        ),
+    )
+    .expect("settings");
+    std::fs::write(
+        root.join("config.yaml"),
+        "providers:\n  openai-compatible:\n    keys:\n      - sk-test-not-a-real-key\n",
+    )
+    .expect("config");
+    let door = spawn_door().await;
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    host.reload_settings(&root).expect("settings load");
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+
+    // The batch scenario: first request asks for a tool, the second
+    // finishes — the boundary sits between them.
+    runner.enqueue(request("batch", addr, UserEntrySource::Terminal));
+    for _ in 0..500 {
+        if runner.is_turn_active() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(runner.is_turn_active(), "the turn owns the session");
+    Arc::clone(&runner).compact(false).await.expect("queued");
+
+    // The turn settles (served compaction inline), then the row.
+    for _ in 0..500 {
+        if !runner.is_turn_active() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut landed = false;
+    for _ in 0..400 {
+        let record = saved(&root);
+        if record.entries.iter().any(|entry| {
+            matches!(
+                entry,
+                SessionEntry::Compaction {
+                    status: openbutler_protocol::entry::CompactionStatus::Done,
+                    ..
+                }
+            )
+        }) {
+            landed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(landed, "the queued row settles");
+
+    // The ordering pin: turn call, compaction call, final call — and
+    // the final call already carries the swapped conversation.
+    let bodies = mock.bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 3, "tool turn, compaction, final turn");
+    let final_request: serde_json::Value =
+        serde_json::from_str(&bodies[2]).expect("final request is JSON");
+    assert!(
+        final_request["messages"][0]["content"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("OpenButler conversation summary (context only):")),
+        "the boundary swapped before the next request: {:?}",
+        final_request["messages"][0]
+    );
+    // The queued notice carries the running turn (the source's
+    // addEntry stamps activeTurnId while a run is live).
+    let record = saved(&root);
+    // The run's own user entry (last wins — `lastTranscriptTurnId`):
+    // the seed's entry is a different, older turn.
+    let user_turn = record.entries.iter().rev().find_map(|entry| match entry {
+        SessionEntry::User { meta, .. } => Some(meta.turn_id.clone()),
+        _ => None,
+    });
+    let queued_turn = record.entries.iter().find_map(|entry| match entry {
+        SessionEntry::Notice { meta, text, .. }
+            if text == "Compaction is queued; it runs at the next step boundary or when the run finishes." =>
+        {
+            Some(meta.turn_id.clone())
+        }
+        _ => None,
+    });
+    assert_eq!(
+        queued_turn.flatten(),
+        user_turn.flatten(),
+        "the queued notice names the running turn"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Above the trigger the boundary compacts on its own — before the
+/// first request even goes out (legacy: the callback runs
+/// `compactConversation` without force, the engine's trigger decides).
+#[tokio::test]
+async fn the_boundary_compacts_automatically_above_the_trigger() {
+    let root = temp_root("compact-auto");
+    // Pure byte path: no measured context, so the estimate alone has
+    // to clear the 40,210-token trigger for the 80,420 window.
+    let filler = "lorem ipsum dolor sit amet consectetur ".repeat(4_700); // ~174 KB
+    let json = format!(
+        r#"{{
+  "version": 1,
+  "id": "{SESSION_ID}",
+  "title": "Auto compact",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "providerId": "openai-compatible",
+  "modelId": "test-model",
+  "entries": [
+    {{
+      "kind": "user",
+      "text": "summarize the archive",
+      "source": "terminal",
+      "turnId": "turn-1"
+    }}
+  ],
+  "conversation": [
+    {{ "role": "user", "content": "{filler}" }},
+    {{ "role": "assistant", "content": "acknowledged" }}
+  ]
+}}"#
+    );
+    let record = parse_record(&json).expect("seed record parses");
+    match save_session(&root, &record, true).expect("seed save") {
+        SaveOutcome::Written(_) => {}
+        SaveOutcome::Skipped => panic!("allowEmpty writes the seed"),
+    }
+    let (addr, mock) = mock_server().await;
+    std::fs::write(
+        root.join("settings.yaml"),
+        format!(
+            "providers:\n  openai-compatible:\n    enabled: true\n    url: http://{addr}/basic\n    modelSpecs:\n      test-model:\n        context: 80420\n"
+        ),
+    )
+    .expect("settings");
+    std::fs::write(
+        root.join("config.yaml"),
+        "providers:\n  openai-compatible:\n    keys:\n      - sk-test-not-a-real-key\n",
+    )
+    .expect("config");
+    let door = spawn_door().await;
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    host.reload_settings(&root).expect("settings load");
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+
+    let turn = runner
+        .send(request("basic", addr, UserEntrySource::Terminal))
+        .await
+        .expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    // The compaction ran first (bodies[0]), then the turn request
+    // went out over the compacted conversation (bodies[1]).
+    let bodies = mock.bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2, "auto compaction then one turn call");
+    let turn_request: serde_json::Value =
+        serde_json::from_str(&bodies[1]).expect("turn request is JSON");
+    assert!(
+        turn_request["messages"][0]["content"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("OpenButler conversation summary (context only):")),
+        "the first request already runs on the checkpoint: {:?}",
+        turn_request["messages"][0]
+    );
+    let record = saved(&root);
+    assert!(
+        record.entries.iter().any(|entry| matches!(
+            entry,
+            SessionEntry::Compaction {
+                status: openbutler_protocol::entry::CompactionStatus::Done,
+                ..
+            }
+        )),
+        "the automatic row settles: {:?}",
+        record.entries
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

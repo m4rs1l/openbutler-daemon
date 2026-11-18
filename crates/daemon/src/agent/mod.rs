@@ -358,9 +358,18 @@ impl TurnRunner {
         let mut steps = 0usize;
         let (outcome, final_reply) = loop {
             steps += 1;
-            // The prepareStep admission (L2413): steered messages enter
-            // before this request is built.
+            // The prepareStep order (agent.ts L411/L426): steered
+            // messages enter first, then the compaction boundary runs
+            // — the previous tool batch settled, the next model
+            // request not built. The guard releases so the boundary
+            // (queued-forced or the automatic threshold check) can
+            // take the state, and the request below reads whatever
+            // conversation it leaves.
             self.admit_steered(&mut state, &turn_id, &request);
+            let pending = self.take_pending_compaction();
+            drop(state);
+            self.compact_at_boundary(&request, pending).await;
+            state = self.state.lock().await;
             let mut step_call = call.clone();
             step_call.messages = Value::Array(state.record.conversation.clone());
             let drained = self.drain(step_call, &mut state, &turn_id).await;
