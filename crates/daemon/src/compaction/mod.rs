@@ -12,6 +12,7 @@
 mod conversation;
 mod core;
 mod projection;
+mod slicing;
 
 pub use conversation::{
     COMPACTION_CONTINUE_TEXT, COMPACTION_SUMMARY_MARKER, TOOL_REFERENCE_MARKER, ToolReference,
@@ -30,3 +31,4 @@ pub use projection::{
     fold_oldest_dialogue, project_transcript, recovery_messages, render_tool_result_output,
     without_executors,
 };
+pub use slicing::split_into_slices;

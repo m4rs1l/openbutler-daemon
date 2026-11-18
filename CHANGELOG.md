@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Compaction slice chunker (`compaction/slicing.rs`): greedy
+  transcript chunking that never splits a tool call from its result -
+  a slice closes only while no call inside it is unresolved (the
+  `AI_MissingToolResultsError` lesson from 2026-11-03), a message over
+  the hard cap refuses the chain as data, and an oversized-but-fitting
+  message opens its own slice.
 - Compaction projection layer (`compaction/projection.rs`): the
   checkpoint's middle part - tool call/result pairing into bounded
   references (literal excerpts), `missing` markers for unresolved
