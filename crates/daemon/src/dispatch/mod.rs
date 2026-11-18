@@ -4,12 +4,16 @@
 //! and answers as one protocol response — no other module constructs
 //! responses. The shared record (`Host`, `DispatchState`) lives in
 //! `host.rs`; per-domain actions that outgrew the router live in
-//! `schedule.rs` and `session_send.rs`.
+//! `attach.rs`, `session_control.rs`, `permissions.rs`, `schedule.rs`
+//! and `session_send.rs`.
 
+mod attach;
 mod commands;
 pub mod fanout;
 mod host;
+mod permissions;
 pub(crate) mod schedule;
+mod session_control;
 pub mod session_send;
 pub(crate) mod session_write;
 
@@ -24,15 +28,14 @@ const CUSTODIAN_LOAD_ERROR: &str =
 use std::path::Path;
 
 use openbutler_protocol::entry::UserEntrySource;
-use openbutler_protocol::runtime::LocalClientKind;
 use openbutler_protocol::runtime::RuntimeViewData;
 use openbutler_protocol::runtime::view::{ApprovalMode, ReasoningSupport};
-use openbutler_protocol::session::{AttachResult, SessionView, read};
+use openbutler_protocol::session::{SessionView, read};
 use openbutler_protocol::{
     DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, InlineAttachment, SessionEntriesRange,
     validate_request,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::agent::TurnRequest;
 use crate::ledger;
@@ -94,134 +97,10 @@ pub fn handle(
                 }
             }
         },
-        "attach" => {
-            // Source: daemon-host.ts attach handler (L3312), chat path.
-            // Isolated/schedule/worker/new-chat attachment paths need the
-            // runtime and land with it (M2); without one of them this
-            // request falls to the source's own refusal.
-            let client_kind = match request.payload.get("clientKind") {
-                None => LocalClientKind::Terminal,
-                Some(value) if *value == json!("terminal") => LocalClientKind::Terminal,
-                Some(value) if *value == json!("web") => LocalClientKind::Web,
-                Some(_) => {
-                    return failure(request, "clientKind must be terminal or web.".to_owned());
-                }
-            };
-            // Only a web client may window its attach (L3316).
-            let entries_window = match request.payload.get("entriesWindow") {
-                _ if client_kind != LocalClientKind::Web => None,
-                None | Some(Value::Null) => None,
-                Some(value) => {
-                    let window = value.as_i64().filter(|value| (1..=2000).contains(value));
-                    match window {
-                        Some(window) => Some(window),
-                        None => {
-                            return failure(
-                                request,
-                                "entriesWindow must be an integer between 1 and 2000.".to_owned(),
-                            );
-                        }
-                    }
-                }
-            };
-            if let Some(root) = request.payload.get("workspaceRoot") {
-                let Value::String(path) = root else {
-                    return failure(
-                        request,
-                        "workspaceRoot must be an absolute path on this host (got a non-string). Omit workspaceRoot to use this host's default workspace."
-                            .to_owned(),
-                    );
-                };
-                if !std::path::Path::new(path).is_absolute() {
-                    return failure(
-                        request,
-                        format!(
-                            "workspaceRoot must be an absolute path on this host (got {path:?}). Omit workspaceRoot to use this host's default workspace."
-                        ),
-                    );
-                }
-            }
-            if request
-                .payload
-                .get("isolatedSession")
-                .is_some_and(|value| *value != json!(true))
-                || request
-                    .payload
-                    .get("newChatSession")
-                    .is_some_and(|value| *value != json!(true))
-            {
-                return failure(request, "isolatedSession must be a boolean.".to_owned());
-            }
-            let has_chat = request.payload.get("chatSessionId").is_some();
-            let has_new = request.payload.get("newChatSession") == Some(&json!(true));
-            if has_chat && has_new {
-                return failure(request, "Choose an existing chat or a new chat.".to_owned());
-            }
-            if has_chat
-                && (request.payload.get("isolatedSession").is_some()
-                    || request.payload.get("scheduleId").is_some()
-                    || request.payload.get("workerSessionId").is_some()
-                    || request.payload.get("runningWorkerOf").is_some())
-            {
-                return failure(
-                    request,
-                    "A chat attachment cannot also select a custodian, worker, or background session."
-                        .to_owned(),
-                );
-            }
-            // Every attachment names what it attaches to (L3365): only
-            // the chat path exists in this build.
-            let Some(chat_value) = request.payload.get("chatSessionId") else {
-                return failure(request, "Choose a chat or a session to attach.".to_owned());
-            };
-            let chat_session_id = chat_value.as_str().unwrap_or_default().to_owned();
-            if chat_session_id.is_empty() || chat_session_id.len() > 64 {
-                return failure(
-                    request,
-                    "chatSessionId must be a non-empty string under 64 bytes.".to_owned(),
-                );
-            }
-            let Some(view) = load_view(data_dir, &chat_session_id) else {
-                return failure(request, CHAT_NOT_FOUND.to_owned());
-            };
-
-            // Adopt the chat: subscribe this connection's sink to its
-            // fan-out, replacing any prior subscription (attachChat's
-            // detachClient). A connection without a sink (the sync test
-            // surface) answers but never receives events.
-            if let Some(previous) = state.subscription.take() {
-                host.fanout().unsubscribe(previous);
-            }
-            if let Some(sink) = state.sink.clone() {
-                state.subscription = Some(host.fanout().subscribe(&chat_session_id, sink));
-            }
-            state.current_session = Some(chat_session_id.clone());
-            state.client_kind = Some(match client_kind {
-                LocalClientKind::Web => UserEntrySource::Web,
-                LocalClientKind::Terminal => UserEntrySource::Terminal,
-            });
-
-            let (snapshot, runtime, workspace_root) =
-                session_write::chat_snapshot(host, view, entries_window);
-            let result = AttachResult {
-                host_entry: std::env::current_exe()
-                    .ok()
-                    .map(|path| path.display().to_string()),
-                host_build_id: Some(None), // source run, no build id
-                session_attachments: Some(true),
-                workspace_key: workspace_root.clone(),
-                client_kind: Some(client_kind),
-                snapshot: snapshot.clone(),
-                runtime: runtime.clone(),
-                saved_sessions: state::list_sessions(data_dir, &WorkspaceFilter::Any)
-                    .unwrap_or_default(),
-            };
-            session_write::queue_attach_event(state, snapshot, runtime);
-            success(
-                request,
-                serde_json::to_value(result).unwrap_or_else(|_| json!({})),
-            )
-        }
+        "attach" => match attach::attach_chat(host, data_dir, state, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
         "session.entries-range" => match read::entries_range(&request.payload) {
             Err(error) => failure(request, error.to_string()),
             Ok(range) => match state
@@ -315,232 +194,35 @@ pub fn handle(
                 Err(error) => failure(request, error),
             }
         }
-        "session.send" => {
-            let message = request.get("message").cloned().unwrap_or(Value::Null);
-            let parsed = match session_send::parse_queued_message(&message) {
-                Ok(parsed) => parsed,
-                Err(error) => return failure(request, error),
-            };
-            let Some(session_id) = state.current_session.clone() else {
-                return failure(request, CHAT_NOT_FOUND.to_owned());
-            };
-            let source = state.client_kind.unwrap_or(UserEntrySource::Terminal);
-            let turn = match prepare_send(
-                host,
-                data_dir,
-                &session_id,
-                parsed.text,
-                parsed.images,
-                source,
-            ) {
-                Ok(turn) => turn,
-                Err(error) => {
-                    return failure(request, format!("Could not send the message: {error}"));
-                }
-            };
-            let Some(executor) = host.executor() else {
-                return failure(
-                    request,
-                    "Could not send the message: the host has no turn executor.".to_owned(),
-                );
-            };
-            // The legacy contract: accept first, run in the background.
-            executor.spawn_turn(session_id, turn);
-            success(request, json!({ "accepted": true }))
-        }
-        "session.approve" => {
-            // `parseApprovalDecision` + `requireString(approvalId, 64)`
-            // (daemon-host L3525-3531), then the legacy fire-and-forget
-            // acceptance — a stale approval id no-ops server side.
-            let decision = match request.get("decision").and_then(Value::as_str) {
-                Some("allow" | "always") => Some(true),
-                Some("deny") => Some(false),
-                _ => None,
-            };
-            let Some(approved) = decision else {
-                return failure(
-                    request,
-                    "Approval decision must be allow, deny, or always.".to_owned(),
-                );
-            };
-            let approval_id = match request.get("approvalId").and_then(Value::as_str) {
-                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-                _ => {
-                    return failure(
-                        request,
-                        "approvalId must be a non-empty string under 64 bytes.".to_owned(),
-                    );
-                }
-            };
-            let Some(session_id) = state.current_session.clone() else {
-                return failure(request, CHAT_NOT_FOUND.to_owned());
-            };
-            let Some(executor) = host.executor() else {
-                return failure(request, "The host has no turn executor.".to_owned());
-            };
-            let _ = executor.approve(&session_id, &approval_id, approved);
-            success(request, json!({ "accepted": true }))
-        }
-        "session.stop" => {
-            // Source (daemon-host L3552 → stopPersistentRun →
-            // stopNamedRun L2271): fire-and-forget `stop` with
-            // `keepQueue`/`holdQueue` as plain `=== true` checks — no
-            // validation. A persistent lane also moves its stop
-            // generation (refusing a firing captured before this stop)
-            // and, without `keepQueue`, its pending events go
-            // `ignored` with the source's sentence.
-            let Some(executor) = host.executor() else {
-                return failure(request, "The host has no turn executor.".to_owned());
-            };
-            if let Some(session_id) = state.current_session.clone() {
-                let keep_queue = request.get("keepQueue").and_then(Value::as_bool) == Some(true);
-                // The source resolves the controller back to its
-                // persistent key; this build scans the schedule state
-                // map for the session it minted.
-                let lane_key = schedule::persistent_lane_key(data_dir, &session_id);
-                if let Some(lane_key) = lane_key.as_deref() {
-                    if !keep_queue {
-                        host.bump_stop_generation(lane_key);
-                    }
-                    let _ =
-                        schedule::cancel_pending_schedule_events(data_dir, lane_key, keep_queue);
-                }
-                let _ = executor.stop(&session_id, keep_queue);
-            }
-            success(request, json!({ "accepted": true }))
-        }
-        "session.compact" => {
-            // Source (daemon-host L3514): `recovery` is validated when
-            // present and the request is fire-and-forget — the
-            // controller owns deferral (queued while a run is busy).
-            let recovery = match request.get("recovery") {
-                None => false,
-                Some(Value::Bool(value)) => *value,
-                Some(_) => return failure(request, "recovery must be a boolean.".to_owned()),
-            };
-            let Some(executor) = host.executor() else {
-                return failure(request, "The host has no turn executor.".to_owned());
-            };
-            if let Some(session_id) = state.current_session.clone() {
-                executor.compact(session_id, recovery);
-            }
-            success(request, json!({ "accepted": true }))
-        }
-        "session.queue" => {
-            // Source (daemon-host L3544-3552): requireString(sessionId,
-            // 64) + requireString(messageId, 64) + the closed
-            // `queueAction` set, then manage through the seam — the
-            // runner's refusals are this action's error text.
-            let session_id = match request.get("sessionId").and_then(Value::as_str) {
-                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-                _ => {
-                    return failure(
-                        request,
-                        "sessionId must be a non-empty string under 64 bytes.".to_owned(),
-                    );
-                }
-            };
-            let message_id = match request.get("messageId").and_then(Value::as_str) {
-                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-                _ => {
-                    return failure(
-                        request,
-                        "messageId must be a non-empty string under 64 bytes.".to_owned(),
-                    );
-                }
-            };
-            let action = match request.get("queueAction").and_then(Value::as_str) {
-                Some("steer") => crate::agent::QueueAction::Steer,
-                Some("remove") => crate::agent::QueueAction::Remove,
-                _ => return failure(request, "Invalid queue action.".to_owned()),
-            };
-            if state.current_session.as_deref() != Some(session_id.as_str()) {
-                return failure(request, "The active session has changed.".to_owned());
-            }
-            let Some(executor) = host.executor() else {
-                return failure(request, "The host has no turn executor.".to_owned());
-            };
-            match executor.manage_queue(&session_id, &message_id, action) {
-                Ok(()) => success(request, json!({ "accepted": true })),
-                Err(message) => failure(request, message),
-            }
-        }
-        "session.answer" => {
-            // Source (daemon-host L3532-3544): requireString(questionId,
-            // 64) + the two answer shapes, then accept immediately.
-            let question_id = match request.get("questionId").and_then(Value::as_str) {
-                Some(value) if !value.is_empty() && value.len() <= 64 => value.to_owned(),
-                _ => {
-                    return failure(
-                        request,
-                        "questionId must be a non-empty string under 64 bytes.".to_owned(),
-                    );
-                }
-            };
-            let answer = match request.get("answer") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(text)) => {
-                    if text.len() > 10_000 {
-                        return failure(
-                            request,
-                            "answer must be at most 10000 characters.".to_owned(),
-                        );
-                    }
-                    Some(text.clone())
-                }
-                Some(_) => {
-                    return failure(request, "answer must be a string or null.".to_owned());
-                }
-            };
-            let Some(executor) = host.executor() else {
-                return failure(request, "The host has no turn executor.".to_owned());
-            };
-            if let Some(session_id) = state.current_session.clone() {
-                let _ = executor.answer(&session_id, &question_id, answer);
-            }
-            success(request, json!({ "accepted": true }))
-        }
+        "session.send" => match session_control::send(host, data_dir, state, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "session.approve" => match session_control::approve(host, state, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "session.stop" => match session_control::stop(host, data_dir, state, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "session.compact" => match session_control::compact(host, state, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "session.queue" => match session_control::queue(host, state, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "session.answer" => match session_control::answer(host, state, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
         "session.select-model" => {
-            // Source (daemon-host L3559-3581): requireString(providerId,
-            // 256) + requireString(modelId, 512), the pick waits at the
-            // turn boundary, and the settings record is best effort — a
-            // failed remember logs and still answers accepted.
-            let provider_id = match request.get("providerId").and_then(Value::as_str) {
-                Some(value) if !value.is_empty() && value.len() <= 256 => value.to_owned(),
-                _ => {
-                    return failure(
-                        request,
-                        "providerId must be a non-empty string under 256 bytes.".to_owned(),
-                    );
-                }
-            };
-            let model_id = match request.get("modelId").and_then(Value::as_str) {
-                Some(value) if !value.is_empty() && value.len() <= 512 => value.to_owned(),
-                _ => {
-                    return failure(
-                        request,
-                        "modelId must be a non-empty string under 512 bytes.".to_owned(),
-                    );
-                }
-            };
-            if let Some(session_id) = state.current_session.clone() {
-                host.queue_model_pick(&session_id, provider_id.clone(), model_id.clone());
+            match session_control::select_model(host, data_dir, state, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
             }
-            match record_pick_in_settings(data_dir, &provider_id, &model_id) {
-                Ok(()) => {
-                    // Refresh the host copy so the next read sees the
-                    // remembered list (the source reloads lazily).
-                    if let Err(error) = host.reload_settings(data_dir) {
-                        eprintln!(
-                            "Could not record the picked model {provider_id}/{model_id}: {error}"
-                        );
-                    }
-                }
-                Err(message) => eprintln!(
-                    "Could not record the picked model {provider_id}/{model_id}: {message}"
-                ),
-            }
-            success(request, json!({ "accepted": true }))
         }
         "stop" => {
             host.request_shutdown();
@@ -554,41 +236,10 @@ pub fn handle(
             ),
             Err(error) => failure(request, error.to_string()),
         },
-        "permissions.set-mode" => {
-            // One message covers every rejected value, like the source
-            // check: no typeof branch, four accepted spellings.
-            let mode = request.get("mode").and_then(|value| value.as_str());
-            let canonical = match mode {
-                Some("workspace") => Some(crate::settings::ApprovalMode::Workspace),
-                Some("auto-review") => Some(crate::settings::ApprovalMode::AutoReview),
-                Some("full-access") => Some(crate::settings::ApprovalMode::FullAccess),
-                // The original v1 value migrates to the folder-scoped
-                // default on the way into the store.
-                Some("ask") => Some(crate::settings::ApprovalMode::Workspace),
-                _ => None,
-            };
-            let Some(canonical) = canonical else {
-                return failure(
-                    request,
-                    "mode must be workspace, auto-review, or full-access.".to_owned(),
-                );
-            };
-            // `applyApprovalMode(mode, persist)`: load → mutate → save,
-            // then push to the live runtimes — this build has no runtimes
-            // yet, so the live half is the host's settings copy.
-            let mut loaded = match crate::settings::load_settings(data_dir) {
-                Ok(loaded) => loaded,
-                Err(error) => return failure(request, error.to_string()),
-            };
-            loaded.store.approval_mode = canonical;
-            if let Err(error) = crate::settings::save_settings(data_dir, &mut loaded) {
-                return failure(request, error.to_string());
-            }
-            if let Err(error) = host.reload_settings(data_dir) {
-                return failure(request, error.to_string());
-            }
-            success(request, json!({ "mode": canonical.as_str() }))
-        }
+        "permissions.set-mode" => match permissions::set_mode(host, data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
         "pair.create" => match host.pairing().issue(crate::auth::now_ms()) {
             Ok((code, expires_at)) => {
                 success(request, json!({ "code": code, "expiresAt": expires_at }))
@@ -712,7 +363,7 @@ fn failure(request: &DaemonRequest, error: String) -> DaemonResponse {
 /// The source's remember half (daemon-host L3574-3580): load fresh,
 /// remember the pick, save through the write transaction — best effort;
 /// the caller logs and still answers accepted.
-fn record_pick_in_settings(
+pub(crate) fn record_pick_in_settings(
     data_dir: &Path,
     provider_id: &str,
     model_id: &str,

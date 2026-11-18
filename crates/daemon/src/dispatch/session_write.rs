@@ -182,13 +182,9 @@ fn slice_utf16(text: &str, units: usize) -> String {
     out
 }
 
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
+/// The shared timestamp authority (`ledger::now_iso`) — this module
+/// joins it rather than keeping a second copy.
+use crate::ledger::now_iso;
 
 /// The connection's current chat record — `None` on disk reads back as
 /// the router's fixed miss sentence.
@@ -312,7 +308,7 @@ pub fn add_entry(
     let mut entry = entry;
     let stamp = entry.meta_mut();
     if stamp.at.is_none() {
-        stamp.at = Some(now_ms());
+        stamp.at = Some(chrono::Utc::now().timestamp_millis());
     }
     let is_user = matches!(entry, SessionEntry::User { .. });
     record.entries.push(entry);

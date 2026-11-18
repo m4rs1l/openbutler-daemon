@@ -32,6 +32,6 @@ pub enum LedgerError {
 }
 
 /// The retry marker's timestamp, shaped like JS `toISOString()`.
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
