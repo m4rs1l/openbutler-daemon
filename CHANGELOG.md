@@ -5,6 +5,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The settings schema was split from one 1 561-line
+  `settings/schema.rs` into `settings/schema/` — one module per
+  authority: `mod.rs` (store types + the `parse_store` dispatcher),
+  `provider`, `mcp`, `telegram`, `team` (+ custodian types),
+  `custodian`, `secrets`, `store`, `enums`, `keys`, `helpers`. Largest
+  file 1 478 → 287 lines. Source parity kept by count (16 `derive` /
+  32 `serde` attributes byte-identical to the removed file);
+  sibling-only helpers moved to `pub(super)`, parse entry points stay
+  `pub`; all gates green with the 18 `settings_schema` pins unchanged.
+
 ### Added
 
 - The event pump (`schedule/pump.rs`): pending schedule events are
