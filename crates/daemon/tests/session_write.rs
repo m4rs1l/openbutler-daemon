@@ -18,7 +18,7 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use common::{pretty_session, temp_data_dir, uuid, write_session};
+use common::{bound_state, pretty_session, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_daemon::agent::{TurnExecutor, TurnRequest};
 use openbutler_daemon::dispatch::{self, DispatchState, Host};
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -99,6 +99,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -142,7 +143,7 @@ fn new_refuses_while_the_current_chat_runs() {
     let executor = RecordingExecutor::default();
     *executor.busy.lock().unwrap() = true;
     host.set_executor(Arc::new(executor));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(1);
     write_session(&dir, &id, &pretty_session(&id, None, "Busy chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -158,7 +159,7 @@ fn new_refuses_while_the_current_chat_runs() {
 fn new_creates_an_invisible_draft_and_points_the_connection_at_it() {
     let dir = temp_data_dir("sw-new-ok");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     state.set_sink(Arc::new(AcceptSink));
 
     let response = call(&host, &dir, &mut state, request("1", "session.new", &[]));
@@ -204,7 +205,7 @@ fn new_creates_an_invisible_draft_and_points_the_connection_at_it() {
 fn new_rejects_a_non_string_project_id() {
     let dir = temp_data_dir("sw-new-proj");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let response = call(
         &host,
@@ -229,7 +230,7 @@ fn new_rejects_a_non_string_project_id() {
 fn add_entry_needs_an_open_chat() {
     let dir = temp_data_dir("sw-entry-open");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let response = call(
         &host,
@@ -248,7 +249,7 @@ fn add_entry_needs_an_open_chat() {
 fn add_entry_rejects_malformed_entries_with_the_source_messages() {
     let dir = temp_data_dir("sw-entry-bad");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(2);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -286,7 +287,7 @@ fn add_entry_rejects_malformed_entries_with_the_source_messages() {
 fn add_entry_appends_a_notice_immediately() {
     let dir = temp_data_dir("sw-entry-notice");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(3);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -328,7 +329,7 @@ fn add_entry_appends_a_notice_immediately() {
 fn add_entry_gates_everything_but_notices_on_a_view_only_chat() {
     let dir = temp_data_dir("sw-entry-view");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(4);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -369,7 +370,7 @@ fn add_entry_gates_everything_but_notices_on_a_view_only_chat() {
 fn save_reasoning_persists_with_the_chat() {
     let dir = temp_data_dir("sw-reasoning");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(5);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -409,7 +410,7 @@ fn save_reasoning_persists_with_the_chat() {
 fn save_reasoning_validates_the_variant_id() {
     let dir = temp_data_dir("sw-reasoning-bad");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(6);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -430,7 +431,7 @@ fn save_reasoning_validates_the_variant_id() {
 fn save_show_reasoning_toggles_with_the_chat() {
     let dir = temp_data_dir("sw-show");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(7);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -468,7 +469,7 @@ fn save_approval_mode_lands_in_settings_and_the_live_copy() {
     std::fs::write(dir.join("settings.yaml"), "approvalMode: workspace\n").unwrap();
     let host = Host::new();
     host.reload_settings(&dir).unwrap();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let response = call(
         &host,
@@ -512,7 +513,7 @@ fn save_approval_mode_lands_in_settings_and_the_live_copy() {
 fn flush_passes_for_an_open_chat_and_reports_a_missing_one() {
     let dir = temp_data_dir("sw-flush");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(8);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
 

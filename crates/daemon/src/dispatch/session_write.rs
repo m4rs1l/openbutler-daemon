@@ -397,6 +397,30 @@ pub fn save_approval_mode(
     Ok(())
 }
 
+/// The workspace a chat opens in: the record's own root, the configured
+/// default, then this daemon's working directory — the source's
+/// `resolveInteractiveScope({cwd: process.cwd()})` fallback chain. One
+/// authority: the attach snapshot, the attach binding and the
+/// `session.load` rebind all resolve through here.
+pub(super) fn chat_workspace_root(
+    host: &Host,
+    view: &openbutler_protocol::SessionView,
+) -> Option<String> {
+    view.meta
+        .workspace_root
+        .clone()
+        .or_else(|| {
+            host.settings()
+                .as_ref()
+                .and_then(|loaded| loaded.store.default_workspace_root.clone())
+        })
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|path| path.display().to_string())
+        })
+}
+
 /// The attach snapshot + runtime: workspace resolution, the tail window
 /// (`windowedSnapshotData`, L3824) and a settled run state — the one
 /// builder `attach` and `session.new` share.
@@ -414,23 +438,7 @@ pub(super) fn chat_snapshot(
         .as_ref()
         .map(|loaded| loaded.store.approval_mode)
         .unwrap_or(ApprovalMode::Workspace);
-    let workspace_root = view
-        .meta
-        .workspace_root
-        .clone()
-        .or_else(|| {
-            host.settings()
-                .as_ref()
-                .and_then(|loaded| loaded.store.default_workspace_root.clone())
-        })
-        // The source always resolves a scope root — the daemon's
-        // own working directory when nothing else names one
-        // (`resolveInteractiveScope({cwd: process.cwd()})`).
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.display().to_string())
-        });
+    let workspace_root = chat_workspace_root(host, &view);
     let runtime = host.runtime_view().unwrap_or_else(|| {
         super::bootstrap_runtime_view(&view.meta, workspace_root.as_deref(), approval_mode)
     });

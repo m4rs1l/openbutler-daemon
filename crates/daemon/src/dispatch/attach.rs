@@ -45,36 +45,36 @@ pub fn attach_chat(
             }
         }
     };
+    // validateAttachWorkspaceRoot (L4200): the string gate first, then
+    // the absolute-path sentence.
     if let Some(root) = request.payload.get("workspaceRoot") {
-        let Value::String(path) = root else {
-            return Err(
-                "workspaceRoot must be an absolute path on this host (got a non-string). Omit workspaceRoot to use this host's default workspace."
-                    .to_owned(),
-            );
-        };
-        if !std::path::Path::new(path).is_absolute() {
+        let path = super::require(Some(root), "workspaceRoot", super::MAX_WORKSPACE_PATH_BYTES)?;
+        if !std::path::Path::new(&path).is_absolute() {
             return Err(format!(
                 "workspaceRoot must be an absolute path on this host (got {path:?}). Omit workspaceRoot to use this host's default workspace."
             ));
         }
     }
-    if request
-        .payload
-        .get("isolatedSession")
-        .is_some_and(|value| *value != json!(true))
-        || request
-            .payload
-            .get("newChatSession")
-            .is_some_and(|value| *value != json!(true))
+    // isolatedSession: any boolean or absent (L3327).
+    if let Some(value) = request.payload.get("isolatedSession")
+        && !value.is_boolean()
     {
         return Err("isolatedSession must be a boolean.".to_owned());
+    }
+    // newChatSession: exactly `true` or absent (L3346).
+    if let Some(value) = request.payload.get("newChatSession")
+        && value != &json!(true)
+    {
+        return Err("newChatSession must be true.".to_owned());
     }
     let has_chat = request.payload.get("chatSessionId").is_some();
     let has_new = request.payload.get("newChatSession") == Some(&json!(true));
     if has_chat && has_new {
         return Err("Choose an existing chat or a new chat.".to_owned());
     }
-    if has_chat
+    // The chat branch carries its exclusions (L3335) and the projectId
+    // shape (L3342): a new chat is the chat branch too (L3330).
+    if (has_chat || has_new)
         && (request.payload.get("isolatedSession").is_some()
             || request.payload.get("scheduleId").is_some()
             || request.payload.get("workerSessionId").is_some()
@@ -84,6 +84,14 @@ pub fn attach_chat(
             "A chat attachment cannot also select a custodian, worker, or background session."
                 .to_owned(),
         );
+    }
+    if (has_chat || has_new)
+        && request
+            .payload
+            .get("projectId")
+            .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Err("Invalid project ID.".to_owned());
     }
     // Every attachment names what it attaches to (L3365): only
     // the chat path exists in this build.
@@ -113,6 +121,9 @@ pub fn attach_chat(
 
     let (snapshot, runtime, workspace_root) =
         super::session_write::chat_snapshot(host, view, entries_window);
+    // The connection's binding (L3461: bindingKey = workspace.root):
+    // the key the response hands out and every later action must echo.
+    state.binding_key = workspace_root.clone();
     let result = AttachResult {
         host_entry: std::env::current_exe()
             .ok()

@@ -331,3 +331,467 @@ fn attach_validation_keeps_the_source_wording() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn attach_boolean_fields_keep_their_own_wording() {
+    let dir = temp_data_dir("attach-booleans");
+    let session_id = seed_chat(&dir);
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+
+    // isolatedSession may be any boolean (L3327): `false` selects
+    // nothing, so the request falls to the nothing-selected sentence —
+    // not to the boolean refusal.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "b1",
+                &[
+                    ("clientKind", json!("terminal")),
+                    ("isolatedSession", json!(false)),
+                ],
+            ),
+        )),
+        "Choose a chat or a session to attach."
+    );
+
+    // newChatSession is exactly `true` or absent (L3346).
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "b2",
+                &[
+                    ("clientKind", json!("terminal")),
+                    ("newChatSession", json!(false)),
+                ],
+            ),
+        )),
+        "newChatSession must be true."
+    );
+
+    // The new-chat branch carries the chat path's exclusions (L3333):
+    // a new chat cannot double as a custodian, worker, or background
+    // session either.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "b3",
+                &[
+                    ("clientKind", json!("terminal")),
+                    ("newChatSession", json!(true)),
+                    ("isolatedSession", json!(true)),
+                ],
+            ),
+        )),
+        "A chat attachment cannot also select a custodian, worker, or background session."
+    );
+
+    // The workspaceRoot string gate runs before the path shape (L4202):
+    // non-string and empty are the requireString sentence.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "b4",
+                &[
+                    ("clientKind", json!("terminal")),
+                    ("chatSessionId", json!(session_id)),
+                    ("workspaceRoot", json!(42)),
+                ],
+            ),
+        )),
+        "workspaceRoot must be a non-empty string under 32768 bytes."
+    );
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "b5",
+                &[
+                    ("clientKind", json!("terminal")),
+                    ("chatSessionId", json!(session_id)),
+                    ("workspaceRoot", json!("")),
+                ],
+            ),
+        )),
+        "workspaceRoot must be a non-empty string under 32768 bytes."
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ------------------------------------------------------------------
+// The binding gate. Source: daemon-host.ts — the pre-attach partition
+// (L3179-3311), the attach handler (L3312), the workspaceKey gate and
+// attachment match (L3478-3486), the session.command resolution that
+// runs only after the gate (L3492), the view-only gate (L3497), and
+// session.load re-attaching through attachChat (L3621). Read
+// 2026-11-19. Deliberately not here: the isolated/schedule/worker
+// variant success paths — they need the M2 session runtime.
+
+fn action_request(id: &str, action: &str, pairs: &[(&str, Value)]) -> DaemonRequest {
+    let mut request = DaemonRequest::new(id, action);
+    for (key, value) in pairs {
+        request = request.with(*key, value.clone());
+    }
+    request
+}
+
+/// Attaches the seeded chat and returns the workspaceKey the attach
+/// answered with — what a real client stores and echoes back.
+fn attach_and_key(
+    host: &Host,
+    data_dir: &Path,
+    state: &mut DispatchState,
+    session_id: &str,
+) -> String {
+    let response = call(
+        host,
+        data_dir,
+        state,
+        request(
+            "attach-boot",
+            &[
+                ("clientKind", json!("terminal")),
+                ("chatSessionId", json!(session_id)),
+            ],
+        ),
+    );
+    success_result(response)["workspaceKey"]
+        .as_str()
+        .expect("the attach response carries a workspaceKey")
+        .to_owned()
+}
+
+#[test]
+fn the_binding_gate_runs_before_any_handler_reads_the_request() {
+    let dir = temp_data_dir("gate-order");
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+
+    // No connection: even with a well-formed key the match refuses
+    // before the handler would read anything — an empty command name
+    // would say something else if resolution ran first.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            action_request(
+                "g1",
+                "session.command",
+                &[("name", json!("")), ("workspaceKey", json!("/tmp"))],
+            ),
+        )),
+        "This IPC client is not attached to that workspace."
+    );
+    // A valid name does not matter either: an unattached connection is
+    // refused before the registry is consulted.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            action_request("g2", "session.command", &[("name", json!("/compact"))]),
+        )),
+        "workspaceKey must be a non-empty string under 32768 bytes."
+    );
+    // A key on an unattached connection answers the match refusal.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            action_request("g3", "session.stop", &[("workspaceKey", json!("/tmp"))]),
+        )),
+        "This IPC client is not attached to that workspace."
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_bound_connection_answers_only_with_its_own_workspace_key() {
+    let dir = temp_data_dir("gate-match");
+    let session_id = seed_chat(&dir);
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    let key = attach_and_key(&host, &dir, &mut state, &session_id);
+
+    // A different key is another workspace: refused without reading.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            action_request(
+                "m1",
+                "session.list",
+                &[("workspaceKey", json!("/somewhere/else"))]
+            ),
+        )),
+        "This IPC client is not attached to that workspace."
+    );
+    // The key the attach answered with is accepted — and the string gate
+    // still runs first, so an oversized key is a string error even here.
+    let attached = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request(
+            "m2",
+            "session.list",
+            &[("workspaceKey", json!(key.clone()))],
+        ),
+    );
+    assert!(matches!(attached, DaemonResponse::Success { .. }));
+    let oversized = "x".repeat(32769);
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            action_request("m3", "session.list", &[("workspaceKey", json!(oversized))]),
+        )),
+        "workspaceKey must be a non-empty string under 32768 bytes."
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The identity key case-folds on Windows only (scopeMapKey,
+/// workspace-origin.ts L35): POSIX keeps the exact string.
+#[cfg(windows)]
+#[test]
+fn the_workspace_key_matches_case_insensitively_on_windows() {
+    let dir = temp_data_dir("gate-case");
+    let session_id = seed_chat(&dir);
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    let key = attach_and_key(&host, &dir, &mut state, &session_id);
+
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request(
+            "c1",
+            "session.list",
+            &[("workspaceKey", json!(key.to_uppercase()))],
+        ),
+    );
+    assert!(
+        matches!(response, DaemonResponse::Success { .. }),
+        "a case-folded key must match on Windows, got {response:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn host_wide_actions_never_need_a_binding() {
+    let dir = temp_data_dir("gate-pre-attach");
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+
+    // The pre-attach partition answers with no workspaceKey at all.
+    let status = call(&host, &dir, &mut state, action_request("p1", "status", &[]));
+    assert!(matches!(status, DaemonResponse::Success { .. }));
+    // session.list is host-wide only while the connection is unattached
+    // (L3303): the whole picker, no binding.
+    let list = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request("p2", "session.list", &[]),
+    );
+    assert!(matches!(list, DaemonResponse::Success { .. }));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_read_only_connection_may_read_but_not_send() {
+    let dir = temp_data_dir("gate-readonly");
+    let session_id = seed_chat(&dir);
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    let key = attach_and_key(&host, &dir, &mut state, &session_id);
+    state.read_only = true;
+
+    // Not a view-only action: refused by the gate, before the handler
+    // would even parse the message.
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            action_request(
+                "ro1",
+                "session.send",
+                &[("workspaceKey", json!(key.clone()))]
+            ),
+        )),
+        "This subagent session is view-only."
+    );
+    // The view-only allow-list keeps reading and closing (L139).
+    let listed = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request("ro2", "session.list", &[("workspaceKey", json!(key))]),
+    );
+    assert!(matches!(listed, DaemonResponse::Success { .. }));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_attached_session_list_scopes_to_the_bound_workspace() {
+    let dir = temp_data_dir("gate-list-scope");
+    let chat_a = common::uuid(1);
+    let chat_b = common::uuid(2);
+    common::write_session(
+        &dir,
+        &chat_a,
+        &common::pretty_session(&chat_a, Some(r"C:\ws\alpha"), "Alpha", true),
+    );
+    common::write_session(
+        &dir,
+        &chat_b,
+        &common::pretty_session(&chat_b, Some(r"C:\ws\beta"), "Beta", true),
+    );
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+
+    // Unattached: the whole picker.
+    let mut browsing = DispatchState::new();
+    let all = success_result(call(
+        &host,
+        &dir,
+        &mut browsing,
+        action_request("s0", "session.list", &[]),
+    ));
+    let ids: Vec<&str> = all
+        .as_array()
+        .expect("session.list answers an array")
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .collect();
+    assert!(ids.contains(&chat_a.as_str()) && ids.contains(&chat_b.as_str()));
+
+    // Attached: only the bound workspace's sessions (L3584 lists the
+    // attachment's controller, one workspace).
+    let mut attached = DispatchState::new();
+    let key = attach_and_key(&host, &dir, &mut attached, &chat_a);
+    let scoped = success_result(call(
+        &host,
+        &dir,
+        &mut attached,
+        action_request("s1", "session.list", &[("workspaceKey", json!(key))]),
+    ));
+    let ids: Vec<&str> = scoped
+        .as_array()
+        .expect("session.list answers an array")
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&chat_a.as_str()),
+        "the bound workspace's own chat must be listed, got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&chat_b.as_str()),
+        "another workspace's chat must not leak into the scoped list, got {ids:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn session_load_rebinds_the_connection_to_the_loaded_chat() {
+    let dir = temp_data_dir("gate-rebind");
+    let chat_a = common::uuid(3);
+    let chat_b = common::uuid(4);
+    common::write_session(
+        &dir,
+        &chat_a,
+        &common::pretty_session(&chat_a, Some(r"C:\ws\first"), "First", true),
+    );
+    common::write_session(
+        &dir,
+        &chat_b,
+        &common::pretty_session(&chat_b, Some(r"C:\ws\second"), "Second", true),
+    );
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    let key_a = attach_and_key(&host, &dir, &mut state, &chat_a);
+
+    // The load itself rides the current binding (L3621 is post-attach).
+    let loaded = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request(
+            "l1",
+            "session.load",
+            &[("workspaceKey", json!(key_a)), ("sessionId", json!(chat_b))],
+        ),
+    );
+    assert!(matches!(loaded, DaemonResponse::Success { .. }));
+
+    // The connection now belongs to the loaded chat's workspace: the old
+    // key is another workspace's key, the loaded chat's root answers.
+    assert_eq!(
+        state.binding_key.as_deref(),
+        Some(r"C:\ws\second"),
+        "session.load rebinds through attachChat (L3633: bindingKey = chat.workspace.root)"
+    );
+    let stale = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request(
+            "l2",
+            "session.list",
+            &[("workspaceKey", json!(r"C:\ws\first"))],
+        ),
+    );
+    assert_eq!(
+        failure_text(stale),
+        "This IPC client is not attached to that workspace."
+    );
+    let fresh = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request(
+            "l3",
+            "session.list",
+            &[("workspaceKey", json!(r"C:\ws\second"))],
+        ),
+    );
+    assert!(matches!(fresh, DaemonResponse::Success { .. }));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

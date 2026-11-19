@@ -13,7 +13,7 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use common::{temp_data_dir, uuid, write_session};
+use common::{bound_state, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_daemon::agent::{TurnExecutor, TurnRequest};
 use openbutler_daemon::dispatch::{self, DispatchState, Host};
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -86,6 +86,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -155,7 +156,7 @@ fn attach(host: &Host, data_dir: &Path, state: &mut DispatchState, session_id: &
 fn select_model_refuses_a_missing_or_oversized_id() {
     let dir = temp_data_dir("select-model-validate");
     let host = Host::new();
-    let mut state = DispatchState::default();
+    let mut state = bound_state();
 
     let missing = failure_text(call(
         &host,
@@ -187,7 +188,7 @@ fn select_model_answers_accepted_and_queues_the_pick() {
     let session = seed_chat(&dir);
     let host = Host::new();
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     attach(&host, &dir, &mut state, &session);
 
     let result = success_result(call(
@@ -211,7 +212,7 @@ fn select_model_records_the_pick_in_settings() {
     let dir = temp_data_dir("select-model-settings");
     let _session = seed_chat(&dir);
     let host = Host::new();
-    let mut state = DispatchState::default();
+    let mut state = bound_state();
 
     success_result(call(
         &host,
@@ -237,7 +238,7 @@ fn the_next_send_runs_with_the_picked_model() {
     host.reload_settings(&dir).expect("settings load");
     let recorder = RecordingExecutor::default();
     host.set_executor(Arc::new(recorder.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     attach(&host, &dir, &mut state, &session);
 
     success_result(call(

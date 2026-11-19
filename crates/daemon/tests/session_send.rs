@@ -13,7 +13,7 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use common::{temp_data_dir, uuid, write_session};
+use common::{bound_state, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_daemon::agent::{TurnExecutor, TurnRequest};
 use openbutler_daemon::dispatch::{self, DispatchState, Host};
 use openbutler_protocol::entry::UserEntrySource;
@@ -103,6 +103,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -160,7 +161,7 @@ fn host_with_executor() -> (Host, RecordingExecutor) {
 fn a_non_record_message_is_refused_with_the_source_wording() {
     let dir = temp_data_dir("send-nonrecord");
     let (host, _) = host_with_executor();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let response = call(&host, &dir, &mut state, send_request(json!("hello")));
     assert_eq!(
         failure_text(response),
@@ -172,7 +173,7 @@ fn a_non_record_message_is_refused_with_the_source_wording() {
 fn text_over_8_mib_is_refused() {
     let dir = temp_data_dir("send-bigtext");
     let (host, _) = host_with_executor();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let big = "a".repeat(8 * 1024 * 1024 + 1);
     let response = call(
         &host,
@@ -190,7 +191,7 @@ fn text_over_8_mib_is_refused() {
 fn the_image_list_is_required_and_capped_at_eight() {
     let dir = temp_data_dir("send-images");
     let (host, _) = host_with_executor();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     // Missing key: not an array under the source's combined check.
     let missing = json!({ "text": "hi" });
@@ -217,7 +218,7 @@ fn the_image_list_is_required_and_capped_at_eight() {
 fn each_image_must_be_a_base64_png_record() {
     let dir = temp_data_dir("send-image-shape");
     let (host, _) = host_with_executor();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let wrong_type = json!({ "mediaType": "image/jpeg", "base64": "aGVsbG8=" });
     assert_eq!(
@@ -248,7 +249,7 @@ fn well_formed_images_ride_the_accepted_turn() {
     let session_id = seed_chat(&dir);
     let (host, recorder) = host_with_executor();
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     success_result(call(
         &host,
         &dir,
@@ -284,7 +285,7 @@ fn well_formed_images_ride_the_accepted_turn() {
 fn sending_requires_a_loaded_chat() {
     let dir = temp_data_dir("send-nochat");
     let (host, _) = host_with_executor();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let response = call(
         &host,
         &dir,
@@ -300,7 +301,7 @@ fn an_accepted_send_hands_a_prepared_turn_to_the_executor() {
     let session_id = seed_chat(&dir);
     let (host, recorder) = host_with_executor();
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let loaded = call(
         &host,
         &dir,
@@ -347,7 +348,7 @@ fn the_approval_action_validates_and_forwards_through_the_seam() {
     let session_id = seed_chat(&dir);
     let (host, recorder) = host_with_executor();
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     success_result(call(
         &host,
         &dir,
@@ -428,7 +429,7 @@ fn the_stop_action_forwards_to_the_executor() {
     let session_id = seed_chat(&dir);
     let (host, recorder) = host_with_executor();
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     success_result(call(
         &host,
         &dir,
@@ -446,13 +447,13 @@ fn the_stop_action_forwards_to_the_executor() {
 
     // Without a chat the source has nothing to stop; the action still
     // answers (the fire-and-forget shape).
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let response = call(&host, &dir, &mut state, request("s2", "session.stop", &[]));
     assert_eq!(success_result(response), json!({ "accepted": true }));
 
     // keepQueue/holdQueue are `=== true` checks in the source — no
     // validation, any other value simply reads as false (L3552).
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     success_result(call(
         &host,
         &dir,
@@ -479,7 +480,7 @@ fn the_answer_action_validates_and_forwards_through_the_seam() {
     let session_id = seed_chat(&dir);
     let (host, recorder) = host_with_executor();
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     success_result(call(
         &host,
         &dir,

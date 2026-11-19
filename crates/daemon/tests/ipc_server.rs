@@ -197,9 +197,44 @@ async fn session_list_returns_summaries_from_disk() {
 
 // --- Failure paths -----------------------------------------------------------
 
+/// This test's frame I/O with a buffer that survives across frames: the
+/// attach answer and its snapshot event can coalesce into one read, and
+/// a per-call buffer would drop the event line (the shared `request`
+/// helper discards everything after the first newline).
+async fn read_frame(client: &mut client::Stream, buffer: &mut Vec<u8>) -> Value {
+    use tokio::io::AsyncReadExt;
+    loop {
+        if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = buffer.drain(..=newline).collect();
+            return serde_json::from_slice(&line[..line.len() - 1]).expect("frame must be JSON");
+        }
+        let mut chunk = [0u8; 4096];
+        let read = client.read(&mut chunk).await.unwrap();
+        assert!(read > 0, "connection closed before a response arrived");
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+}
+
+async fn send_frame(client: &mut client::Stream, buffer: &mut Vec<u8>, frame: Value) -> Value {
+    use tokio::io::AsyncWriteExt;
+    let mut payload = frame.to_string().into_bytes();
+    payload.push(b'\n');
+    client.write_all(&payload).await.unwrap();
+    read_frame(client, buffer).await
+}
+
 #[tokio::test]
 async fn unknown_action_is_a_failure_response() {
     let data_dir = temp_data_dir("ipc-unknown");
+    // A bound connection is required for an unknown action to even reach
+    // the switch: an unattached frame is refused by the workspaceKey
+    // gate first (daemon-host.ts L3478 precedes the L359 default arm).
+    let chat = uuid(7);
+    write_session(
+        &data_dir,
+        &chat,
+        &pretty_session(&chat, Some(r"C:\ws\wire"), "Wire", true),
+    );
     let endpoint = server::socket::endpoint_for(&data_dir);
     let host = Arc::new(Host::new());
     let shutdown = host.subscribe_shutdown();
@@ -210,9 +245,66 @@ async fn unknown_action_is_a_failure_response() {
     ));
 
     let mut client = client::connect(&endpoint).await;
-    let response: Value = request(
+    let mut buffer: Vec<u8> = Vec::new();
+
+    // Unattached: the gate answers, the action name never reaches routing.
+    let gate = send_frame(
         &mut client,
-        r#"{"version":2,"id":"t-unknown","action":"does.not.exist"}"#,
+        &mut buffer,
+        serde_json::json!({"version": 2, "id": "t-gate", "action": "does.not.exist"}),
+    )
+    .await;
+    let gate: DaemonResponse = serde_json::from_value(gate).unwrap();
+    let DaemonResponse::Failure { error, ok, .. } = gate else {
+        panic!("an unattached unknown action must fail");
+    };
+    assert!(!ok);
+    assert_eq!(
+        error,
+        "workspaceKey must be a non-empty string under 32768 bytes."
+    );
+
+    // Bind the connection the way any client does.
+    let attach = send_frame(
+        &mut client,
+        &mut buffer,
+        serde_json::json!({
+            "version": 2,
+            "id": "t-attach",
+            "action": "attach",
+            "clientKind": "terminal",
+            "chatSessionId": chat,
+        }),
+    )
+    .await;
+    let attach: DaemonResponse = serde_json::from_value(attach).unwrap();
+    let DaemonResponse::Success { result, .. } = attach else {
+        panic!("attach must succeed");
+    };
+    let key = result["workspaceKey"]
+        .as_str()
+        .expect("the attach answers a workspaceKey")
+        .to_owned();
+    // The snapshot event rides behind the response (L1459): read it as
+    // its own frame so the next read is the next response.
+    let event = read_frame(&mut client, &mut buffer).await;
+    assert_eq!(
+        event.get("event").and_then(Value::as_str),
+        Some("snapshot"),
+        "the attach queues a snapshot event behind its answer"
+    );
+
+    // Attached: the unknown action reaches the switch and answers with
+    // its own name.
+    let response = send_frame(
+        &mut client,
+        &mut buffer,
+        serde_json::json!({
+            "version": 2,
+            "id": "t-unknown",
+            "action": "does.not.exist",
+            "workspaceKey": key,
+        }),
     )
     .await;
 
@@ -222,7 +314,7 @@ async fn unknown_action_is_a_failure_response() {
         panic!("unknown actions must fail");
     };
     assert!(!ok);
-    assert!(error.contains("does.not.exist"));
+    assert_eq!(error, "Unknown IPC action: does.not.exist");
 
     host.request_shutdown();
     served

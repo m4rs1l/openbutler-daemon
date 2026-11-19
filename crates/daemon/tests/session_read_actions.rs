@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{pretty_session, temp_data_dir, uuid, write_session};
+use common::{bound_state, pretty_session, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_protocol::payload::require_string;
 use openbutler_protocol::session::read::{InlineAttachment, load_session_id};
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -32,6 +32,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -100,7 +101,7 @@ fn load_returns_the_saved_record_with_meta_and_entries() {
     write_session(&dir, &id, &pretty_session(&id, None, "A chat", true));
 
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let result = success_result(call(
         &host,
         &dir,
@@ -120,7 +121,7 @@ fn load_returns_the_saved_record_with_meta_and_entries() {
 fn load_refuses_the_machine_custodian_with_the_fixed_sentence() {
     let dir = temp_data_dir("load-custodian");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let error = failure_text(call(
         &host,
@@ -145,7 +146,7 @@ fn load_refuses_the_machine_custodian_with_the_fixed_sentence() {
 fn load_reports_an_unknown_chat_as_not_found() {
     let dir = temp_data_dir("load-unknown");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let error = failure_text(call(
         &host,
@@ -160,7 +161,7 @@ fn load_reports_an_unknown_chat_as_not_found() {
 fn load_validates_the_payload_with_the_fixed_wording() {
     let dir = temp_data_dir("load-validate");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let error = failure_text(call(
         &host,
@@ -199,7 +200,7 @@ fn range_pages_the_chat_this_connection_loaded() {
     write_session(&dir, &id, &session_with_entries(&id, &texts));
 
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     // A client pages the chat it just opened: load first, then ask.
     call(
         &host,
@@ -251,7 +252,7 @@ fn range_pages_the_chat_this_connection_loaded() {
 fn range_without_a_loaded_chat_is_not_found() {
     let dir = temp_data_dir("range-nochat");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let error = failure_text(call(
         &host,
@@ -269,7 +270,7 @@ fn range_validates_limit_and_before_with_the_fixed_wording() {
     let texts: Vec<String> = (0..5).map(|index| format!("m{index}")).collect();
     write_session(&dir, &id, &session_with_entries(&id, &texts));
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     call(
         &host,
         &dir,
@@ -308,7 +309,7 @@ fn range_follows_the_last_loaded_chat_on_the_same_connection() {
     write_session(&dir, &second, &session_with_entries(&second, &second_texts));
 
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     call(
         &host,
         &dir,
@@ -341,7 +342,7 @@ fn find_attachment_resolves_inline_images_and_nulls_everything_else() {
     write_session(&dir, &id, &session_with_attachments(&id));
 
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     call(
         &host,
         &dir,
@@ -399,7 +400,7 @@ fn find_attachment_resolves_inline_images_and_nulls_everything_else() {
 fn find_attachment_validates_the_payload_and_needs_a_loaded_chat() {
     let dir = temp_data_dir("find-attachment-guard");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let error = failure_text(call(
         &host,

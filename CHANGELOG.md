@@ -5,7 +5,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The workspace binding contract landed (daemon-host.ts L3179-3311,
+  L3478-3499): the pre-attach partition (host-wide actions answer with
+  no key), the `workspaceKey` gate (string gate at 32 768 bytes, then
+  a normalized match against the connection's binding — case-folded on
+  Windows, the exact string on POSIX), the view-only gate over the
+  10-entry `VIEW_ONLY_ACTIONS` allow-list, and `session.command`
+  resolution that now runs after the gate. `attach` sets the binding
+  from the resolved chat workspace and `session.load` rebinds through
+  the same authority (`chat_workspace_root`); `session.list` answers
+  the whole picker unattached and only the bound workspace when
+  attached. Ten gate pins in `tests/attach.rs` plus a two-stage wire
+  test (gate sentence → attach → `Unknown IPC action: does.not.exist`)
+  pin the order. Test harnesses model a bound client: `bound_state()` /
+  `with_binding()` in `tests/common`. The isolated/schedule/worker
+  variant success paths stay with the M2 session runtime.
+
 ### Changed
+
+- `attach` admission wording matches the source exactly:
+  `isolatedSession` accepts any boolean (only `newChatSession` is
+  exactly `true`, `newChatSession must be true.`), the chat-branch
+  exclusions and the `projectId` shape (`Invalid project ID.`) now
+  cover the new-chat branch too, and `workspaceRoot` runs through
+  `requireString` first ("... under 32768 bytes.") before the
+  absolute-path sentence.
 
 - The settings schema was split from one 1 561-line
   `settings/schema.rs` into `settings/schema/` — one module per

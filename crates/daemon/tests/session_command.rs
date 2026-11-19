@@ -16,7 +16,7 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use common::{pretty_session, temp_data_dir, uuid, write_session};
+use common::{bound_state, pretty_session, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_daemon::agent::{TurnExecutor, TurnRequest};
 use openbutler_daemon::dispatch::{self, DispatchState, Host};
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -91,6 +91,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -122,7 +123,7 @@ fn load_chat(host: &Host, dir: &Path, state: &mut DispatchState, id: &str) {
 fn command_requires_a_name_within_the_limit() {
     let dir = temp_data_dir("cmd-name");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let response = call(
         &host,
@@ -151,7 +152,7 @@ fn command_requires_a_name_within_the_limit() {
 fn command_refuses_surface_and_unknown_names() {
     let dir = temp_data_dir("cmd-unknown");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     // `/help` exists in the vocabulary but its effect belongs to a
     // surface — the daemon has no part in it.
@@ -172,7 +173,7 @@ fn command_routes_stop_with_its_payload_intact() {
     let host = Host::new();
     let executor = RecordingExecutor::default();
     host.set_executor(Arc::new(executor.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(1);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -198,7 +199,7 @@ fn command_routes_stop_with_its_payload_intact() {
 fn command_routes_new_to_the_draft_arm() {
     let dir = temp_data_dir("cmd-new");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let response = call(
         &host,
@@ -217,7 +218,7 @@ fn command_routes_new_to_the_draft_arm() {
 fn command_resolves_compact_to_the_routed_action() {
     let dir = temp_data_dir("cmd-compact");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = uuid(2);
     write_session(&dir, &id, &pretty_session(&id, None, "Chat", true));
     load_chat(&host, &dir, &mut state, &id);
@@ -238,7 +239,7 @@ fn command_resolves_compact_to_the_routed_action() {
 fn telegram_status_reports_the_disabled_service() {
     let dir = temp_data_dir("tg-status");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let response = call(
         &host,
@@ -256,7 +257,7 @@ fn telegram_status_reports_the_disabled_service() {
 fn telegram_pair_and_test_refuse_without_configuration() {
     let dir = temp_data_dir("tg-pair");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let expected = "Telegram is not configured. Run `openbutler telegram setup` first.";
 
     let response = call(&host, &dir, &mut state, request("1", "telegram.pair", &[]));

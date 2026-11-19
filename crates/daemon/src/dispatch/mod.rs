@@ -25,6 +25,47 @@ const CHAT_NOT_FOUND: &str = "Chat not found.";
 const CUSTODIAN_LOAD_ERROR: &str =
     "The machine custodian is the host's own conversation; it is not a chat to open.";
 
+/// The pre-attach partition (daemon-host.ts L3179-3311): host-wide
+/// actions that answer with no attachment and need no workspaceKey.
+/// `attach` is its own branch (L3312); `session.list` is host-wide
+/// only while the connection is unattached (L3303).
+const PRE_ATTACH: &[&str] = &[
+    "status",
+    "pair.create",
+    "stop",
+    "settings.reload",
+    "permissions.set-mode",
+    "team.delivery",
+    "team.send",
+    "team.send-file",
+    "team.manage",
+    "schedule.manage",
+    "telegram.status",
+    "telegram.pair",
+    "telegram.test",
+    "ledger.events",
+    "ledger.actions",
+    "events.retry",
+];
+
+/// The view-only allow-list (daemon-host.ts L139-149): everything else
+/// is refused on a read-only attachment before its handler runs.
+const VIEW_ONLY_ACTIONS: &[&str] = &[
+    "session.list",
+    "session.entries-range",
+    "session.find-attachment",
+    "session.flush",
+    "session.stop",
+    "session.approve",
+    "session.answer",
+    "session.queue",
+    "session.select-model",
+    "session.add-entry",
+];
+
+/// The workspaceKey size gate (daemon-host.ts L151).
+const MAX_WORKSPACE_PATH_BYTES: usize = 32 * 1024;
+
 use std::path::Path;
 
 use openbutler_protocol::entry::UserEntrySource;
@@ -51,10 +92,25 @@ pub fn handle(
     if let Err(error) = validate_request(request) {
         return failure(request, error.to_string());
     }
+    // The partition (L3179-3311 vs L3478): everything outside the
+    // pre-attach set proves this connection is bound to the workspace
+    // it names — session.list included, host-wide only while
+    // unattached (L3303).
+    let needs_binding = match request.action.as_str() {
+        "attach" => false,
+        "session.list" => state.binding_key.is_some(),
+        action => !PRE_ATTACH.contains(&action),
+    };
+    if needs_binding
+        && let Err(error) = binding_gate(state, request)
+    {
+        return failure(request, error);
+    }
     // `session.command` carries a name, not an effect: the registry
     // resolves it to a request the cases below already implement, so a
-    // name never grows a case of its own (legacy L3492: resolution
-    // before the gate and the switch).
+    // name never grows a case of its own. Resolution runs after the
+    // binding gate (L3492 follows L3478): an unattached connection
+    // never reaches the registry.
     let action = if request.action == "session.command" {
         match commands::daemon_command_action(request) {
             Ok(target) => target,
@@ -63,18 +119,31 @@ pub fn handle(
     } else {
         request.action.as_str()
     };
+    // The view-only gate on the resolved action (L3497-3499).
+    if needs_binding && state.read_only && !VIEW_ONLY_ACTIONS.contains(&action) {
+        return failure(request, "This subagent session is view-only.".to_owned());
+    }
     match action {
         "status" => success(
             request,
             serde_json::to_value(host.status()).unwrap_or_else(|_| json!({})),
         ),
-        "session.list" => match state::list_sessions(data_dir, &WorkspaceFilter::Any) {
-            Ok(sessions) => success(
-                request,
-                serde_json::to_value(sessions).unwrap_or_else(|_| json!([])),
-            ),
-            Err(error) => failure(request, error.to_string()),
-        },
+        // Unattached: the whole picker (L3303). An attached
+        // connection lists only the workspace it is bound to (L3584
+        // lists the attachment's controller — one workspace).
+        "session.list" => {
+            let filter = match state.binding_key.as_deref() {
+                Some(key) => WorkspaceFilter::Exactly(key.to_owned()),
+                None => WorkspaceFilter::Any,
+            };
+            match state::list_sessions(data_dir, &filter) {
+                Ok(sessions) => success(
+                    request,
+                    serde_json::to_value(sessions).unwrap_or_else(|_| json!([])),
+                ),
+                Err(error) => failure(request, error.to_string()),
+            }
+        }
         // Disk-authoritative reads: the saved record is the whole truth in
         // this build — there is no live session to prefer.
         "session.load" => match read::load_session_id(&request.payload) {
@@ -86,6 +155,14 @@ pub fn handle(
                 match load_view(data_dir, &session_id) {
                     Some(view) => {
                         state.current_session = Some(session_id);
+                        // attachChat rebinding (L3633: bindingKey =
+                        // chat.workspace.root): the connection belongs
+                        // to the loaded chat's workspace. The root
+                        // resolves through the same authority the
+                        // attach snapshot uses.
+                        if let Some(root) = session_write::chat_workspace_root(host, &view) {
+                            state.binding_key = Some(root);
+                        }
                         success(
                             request,
                             serde_json::to_value(&view).unwrap_or_else(|_| json!({})),
@@ -361,6 +438,31 @@ pub(crate) fn require(
 ) -> Result<String, String> {
     openbutler_protocol::payload::require_string(value, name, max_bytes)
         .map_err(|error| error.to_string())
+}
+
+/// The workspaceKey gate (daemon-host.ts L3478-3486): the string gate
+/// runs first, then the key must equal this connection's binding — both
+/// identity keys case-folded on Windows only (scopeMapKey,
+/// workspace-origin.ts L35); POSIX compares the exact string.
+fn binding_gate(state: &DispatchState, request: &DaemonRequest) -> Result<(), String> {
+    let key = require(
+        request.payload.get("workspaceKey"),
+        "workspaceKey",
+        MAX_WORKSPACE_PATH_BYTES,
+    )?;
+    match state.binding_key.as_deref() {
+        Some(binding) if workspace_key_eq(binding, &key) => Ok(()),
+        _ => Err("This IPC client is not attached to that workspace.".to_owned()),
+    }
+}
+
+/// scopeMapKey parity: the identity key for workspace maps.
+fn workspace_key_eq(binding: &str, key: &str) -> bool {
+    if cfg!(windows) {
+        binding.to_lowercase() == key.to_lowercase()
+    } else {
+        binding == key
+    }
 }
 
 /// Failure envelope for a dispatched request.

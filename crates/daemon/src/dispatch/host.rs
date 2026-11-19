@@ -43,6 +43,10 @@ pub struct DispatchState {
     /// View-only binding: set when the attached chat belongs to a worker
     /// session (arrives with the workers slice); notices stay postable.
     pub read_only: bool,
+    /// The workspace this connection is bound to, set by `attach` (and
+    /// re-set when `session.load` switches chats, L3633). Every
+    /// post-attach action must echo this key (daemon-host.ts L3478).
+    pub binding_key: Option<String>,
 }
 
 impl DispatchState {

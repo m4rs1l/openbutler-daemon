@@ -12,7 +12,7 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use common::{temp_data_dir, uuid, write_session};
+use common::{bound_state, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_daemon::agent::{QueueAction, TurnExecutor, TurnRequest};
 use openbutler_daemon::dispatch::{self, DispatchState, Host};
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -98,6 +98,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -147,7 +148,7 @@ fn queue_request(pairs: &[(&str, Value)]) -> DaemonRequest {
 fn session_queue_validates_its_three_fields() {
     let dir = temp_data_dir("queue-validate");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
 
     let missing_session = failure_text(call(
         &host,
@@ -191,7 +192,7 @@ fn a_pick_of_another_session_reports_the_active_session_changed() {
     let host = Host::new();
     let recorder = RecordingExecutor::default();
     host.set_executor(Arc::new(recorder.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     seed_and_attach(&dir, &host, &mut state);
 
     let response = call(
@@ -218,7 +219,7 @@ fn a_valid_manage_forwards_to_the_seam_and_accepts() {
     let host = Host::new();
     let recorder = RecordingExecutor::default();
     host.set_executor(Arc::new(recorder.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let session = seed_and_attach(&dir, &host, &mut state);
 
     let result = success_result(call(
@@ -249,7 +250,7 @@ fn a_runner_refusal_reaches_the_client_as_a_failure() {
     let recorder = RecordingExecutor::default();
     *recorder.answer.lock().unwrap() = Some(Err("This message is no longer queued.".to_owned()));
     host.set_executor(Arc::new(recorder.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let session = seed_and_attach(&dir, &host, &mut state);
 
     let response = call(
@@ -276,7 +277,7 @@ fn session_stop_passes_keep_queue_through() {
     let host = Host::new();
     let recorder = RecordingExecutor::default();
     host.set_executor(Arc::new(recorder.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let session = seed_and_attach(&dir, &host, &mut state);
 
     success_result(call(

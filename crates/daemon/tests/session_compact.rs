@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{temp_data_dir, uuid, write_session};
+use common::{bound_state, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_daemon::agent::executor::DoorExecutor;
 use openbutler_daemon::agent::{TurnExecutor, TurnRequest};
 use openbutler_daemon::dispatch::{self, DispatchState, Host};
@@ -90,6 +90,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -162,7 +163,7 @@ fn recovery_must_be_a_boolean_when_present() {
     let host = Arc::new(Host::new());
     let recorder = RecordingExecutor::default();
     host.set_executor(Arc::new(recorder.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     seed_chat(&dir);
 
     let response = call(&host, &dir, &mut state, compact_request(Some(json!("yes"))));
@@ -179,7 +180,7 @@ fn accepted_compaction_reaches_the_seam_with_its_flag() {
     let host = Arc::new(Host::new());
     let recorder = RecordingExecutor::default();
     host.set_executor(Arc::new(recorder.clone()));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = seed_chat(&dir);
     call(
         &host,
@@ -254,7 +255,7 @@ async fn a_standalone_compaction_swaps_the_conversation_and_lands_the_row() {
     // Boot mirror: the daemon loads settings before serving, and the
     // compact path resolves the provider and window from them.
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     call(
         &host,
         &dir,
@@ -406,7 +407,7 @@ async fn an_empty_conversation_notices_and_calls_nothing() {
     // Boot mirror: the daemon loads settings before serving, and the
     // compact path resolves the provider and window from them.
     host.reload_settings(&dir).expect("settings load");
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     call(
         &host,
         &dir,

@@ -15,7 +15,7 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use common::{pretty_session, temp_data_dir, uuid, write_session};
+use common::{bound_state, pretty_session, temp_data_dir, uuid, with_binding, write_session};
 use openbutler_daemon::agent::{TurnExecutor, TurnRequest};
 use openbutler_daemon::dispatch::{self, DispatchState, Host};
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -80,6 +80,7 @@ fn call(
     state: &mut DispatchState,
     request: DaemonRequest,
 ) -> DaemonResponse {
+    let request = with_binding(state, request);
     dispatch::handle(host, data_dir, state, &request)
 }
 
@@ -123,7 +124,7 @@ fn realpath(path: &Path) -> String {
 fn select_project_requires_a_literal_null_or_string_project_id() {
     let dir = temp_data_dir("proj-absent");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = open_draft(&host, &dir, &mut state);
 
     // Absent throws (the source only lets literal null or a string
@@ -153,7 +154,7 @@ fn select_project_requires_a_literal_null_or_string_project_id() {
 fn select_project_guards_the_active_chat_and_a_started_chat() {
     let dir = temp_data_dir("proj-guards");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = open_draft(&host, &dir, &mut state);
 
     let response = call(
@@ -212,7 +213,7 @@ fn select_project_refuses_while_a_run_is_live() {
     let executor = RecordingExecutor::default();
     *executor.busy.lock().unwrap() = true;
     host.set_executor(Arc::new(executor));
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = open_draft(&host, &dir, &mut state);
 
     let response = call(
@@ -235,7 +236,7 @@ fn select_project_refuses_while_a_run_is_live() {
 fn select_project_binds_null_to_the_data_workspace() {
     let dir = temp_data_dir("proj-null");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = open_draft(&host, &dir, &mut state);
 
     let response = call(
@@ -267,7 +268,7 @@ fn select_project_binds_null_to_the_data_workspace() {
 fn select_project_resolves_a_stored_project_or_refuses() {
     let dir = temp_data_dir("proj-stored");
     let host = Host::new();
-    let mut state = DispatchState::new();
+    let mut state = bound_state();
     let id = open_draft(&host, &dir, &mut state);
 
     // Unknown id first: the store answers from projects.json.
