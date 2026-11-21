@@ -101,9 +101,7 @@ pub fn handle(
         "session.list" => state.binding_key.is_some(),
         action => !PRE_ATTACH.contains(&action),
     };
-    if needs_binding
-        && let Err(error) = binding_gate(state, request)
-    {
+    if needs_binding && let Err(error) = binding_gate(state, request) {
         return failure(request, error);
     }
     // `session.command` carries a name, not an effect: the registry
@@ -149,8 +147,26 @@ pub fn handle(
         "session.load" => match read::load_session_id(&request.payload) {
             Err(error) => failure(request, error.to_string()),
             Ok(session_id) => {
-                if session_id == state::CUSTODIAN_SESSION_ID {
-                    return failure(request, CUSTODIAN_LOAD_ERROR.to_owned());
+                // L3621: loading your own chat answers itself before any
+                // gate — the disk read below is this build's snapshot.
+                let is_current = state.current_session.as_deref() == Some(session_id.as_str());
+                if !is_current {
+                    if session_id == state::CUSTODIAN_SESSION_ID {
+                        return failure(request, CUSTODIAN_LOAD_ERROR.to_owned());
+                    }
+                    // L3626: switching away from a running chat waits for
+                    // the run to finish.
+                    if host.executor().is_some_and(|executor| {
+                        state
+                            .current_session
+                            .as_deref()
+                            .is_some_and(|current| executor.is_busy(current))
+                    }) {
+                        return failure(
+                            request,
+                            "Wait for the current run before switching chats.".to_owned(),
+                        );
+                    }
                 }
                 match load_view(data_dir, &session_id) {
                     Some(view) => {

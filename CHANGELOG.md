@@ -7,6 +7,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The `attach` variant ladder (daemon-host.ts L3365-3440, read
+  2026-11-21): the selection gate (`isolatedSession !== true` with no
+  schedule/worker name answers `Choose a chat or a session to attach.`),
+  the custodian workspace refusal (data dir as workspace), the three
+  worker-view gates, both 128-byte worker id limits with their source
+  sentences (`That session is not a subagent worker.` — this build has
+  no worker ledger, which is exactly `readWorkerRecord` returning null;
+  `That subagent is not running right now.` for a running view), and
+  the schedule lookup (64-byte limit, record + canonical workspace
+  compare, one sentence for missing and mismatched alike). Variants
+  that pass every gate answer `The session runtime is not available in
+  this build.` — deliberately not a source sentence: the M2 session
+  runtime is what the source falls back on. `session.load` gained its
+  two missing gates: the current-chat shortcut before them (L3621) and
+  `Wait for the current run before switching chats.` (L3626).
+  `canonical_scope_root` moved to `state/paths.rs` — one normalizer,
+  shared by the schedule write path and the attach ladder. Nineteen
+  pins: 17 ladder in `tests/attach.rs`, 2 load in
+  `tests/session_read_actions.rs`; `tests/common` gained the shared
+  `RecordingExecutor` double.
+
 - The workspace binding contract landed (daemon-host.ts L3179-3311,
   L3478-3499): the pre-attach partition (host-wide actions answer with
   no key), the `workspaceKey` gate (string gate at 32 768 bytes, then

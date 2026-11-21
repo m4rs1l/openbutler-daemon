@@ -257,7 +257,7 @@ fn add_or_update(
         parse_schedule_state(&Value::Object(record)).map_err(|error| error.to_string())?;
     schedule.trigger = normalize_schedule_trigger(schedule.trigger);
     validate_schedule_trigger(&schedule.trigger)?;
-    schedule.workspace_root = canonical_scope_root(&schedule.workspace_root)?;
+    schedule.workspace_root = crate::state::canonical_scope_root(&schedule.workspace_root)?;
 
     let index = schedules
         .iter()
@@ -512,50 +512,6 @@ fn is_hh_mm(value: &str) -> bool {
         && bytes[1].is_ascii_digit()
         && bytes[3] <= b'5'
         && bytes[4] <= b'9'
-}
-
-/// `canonicalScopeRoot`: expand `~`, resolve against the process
-/// directory, follow symlinks, require a directory. The single path
-/// normalizer for schedule roots.
-fn canonical_scope_root(path: &str) -> Result<String, String> {
-    let requested = path.trim();
-    if requested.is_empty() {
-        return Err("Workspace path cannot be empty.".to_owned());
-    }
-    let home = home_dir();
-    let expanded = if requested == "~" {
-        home.clone()
-    } else if let Some(rest) = requested
-        .strip_prefix("~/")
-        .or_else(|| requested.strip_prefix("~\\"))
-    {
-        format!("{home}{rest}")
-    } else {
-        requested.to_owned()
-    };
-    let absolute = if is_absolute_path(&expanded) {
-        std::path::PathBuf::from(expanded)
-    } else {
-        std::env::current_dir()
-            .map_err(|error| error.to_string())?
-            .join(expanded)
-    };
-    let real = std::fs::canonicalize(&absolute).map_err(|error| error.to_string())?;
-    let real = crate::state::strip_windows_prefix(&real);
-    if !real.is_dir() {
-        return Err(format!(
-            "Workspace path is not a directory: {}",
-            real.display()
-        ));
-    }
-    Ok(real.to_string_lossy().into_owned())
-}
-
-/// The home directory the source gets from `os.homedir()`.
-fn home_dir() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default()
 }
 
 fn success(request: &DaemonRequest, result: Value) -> DaemonResponse {

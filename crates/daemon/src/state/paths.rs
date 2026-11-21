@@ -1,8 +1,10 @@
-//! Session identity and location — the single place ids become paths.
+//! Session identity and location — the single place ids become paths,
+//! and the one workspace-path canonicalizer every scope decision shares.
 
 use std::path::{Component, Path, PathBuf};
 
 use super::StateError;
+use crate::shape::is_absolute_path;
 
 /// The machine custodian is an internal session, not a chat: reserved id on
 /// every install, never listed, never removable.
@@ -99,4 +101,49 @@ pub(crate) fn strip_windows_prefix(path: &std::path::Path) -> std::path::PathBuf
         return std::path::PathBuf::from(rest);
     }
     path.to_path_buf()
+}
+
+/// `canonicalScopeRoot`: expand `~`, resolve against the process
+/// directory, follow symlinks, require a directory. The single path
+/// normalizer — every layer used to carry its own variant of this
+/// (the source consolidated it for the same reason, workspace-origin.ts).
+pub(crate) fn canonical_scope_root(path: &str) -> Result<String, String> {
+    let requested = path.trim();
+    if requested.is_empty() {
+        return Err("Workspace path cannot be empty.".to_owned());
+    }
+    let home = home_dir();
+    let expanded = if requested == "~" {
+        home.clone()
+    } else if let Some(rest) = requested
+        .strip_prefix("~/")
+        .or_else(|| requested.strip_prefix("~\\"))
+    {
+        format!("{home}{rest}")
+    } else {
+        requested.to_owned()
+    };
+    let absolute = if is_absolute_path(&expanded) {
+        PathBuf::from(expanded)
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(expanded)
+    };
+    let real = std::fs::canonicalize(&absolute).map_err(|error| error.to_string())?;
+    let real = strip_windows_prefix(&real);
+    if !real.is_dir() {
+        return Err(format!(
+            "Workspace path is not a directory: {}",
+            real.display()
+        ));
+    }
+    Ok(real.to_string_lossy().into_owned())
+}
+
+/// The home directory the source gets from `os.homedir()`.
+fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
 }

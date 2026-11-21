@@ -71,3 +71,60 @@ pub fn temp_data_dir(tag: &str) -> PathBuf {
     fs::create_dir_all(base.join("sessions")).unwrap();
     base
 }
+
+/// The turn seam's test double: busy on demand, nothing else. One copy for
+/// new tests; the per-file doubles in the older suites predate this helper.
+#[derive(Clone, Default)]
+pub struct RecordingExecutor {
+    pub busy: std::sync::Arc<std::sync::Mutex<bool>>,
+}
+
+impl openbutler_daemon::agent::TurnExecutor for RecordingExecutor {
+    fn spawn_turn(
+        self: std::sync::Arc<Self>,
+        _session_id: String,
+        _request: openbutler_daemon::agent::TurnRequest,
+    ) {
+    }
+
+    fn approve(&self, _session_id: &str, _approval_id: &str, _approved: bool) -> bool {
+        false
+    }
+
+    fn stop(&self, _session_id: &str, _keep_queue: bool) -> bool {
+        false
+    }
+
+    fn manage_queue(
+        &self,
+        _session_id: &str,
+        _message_id: &str,
+        _action: openbutler_daemon::agent::QueueAction,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn answer(&self, _session_id: &str, _question_id: &str, _answer: Option<String>) -> bool {
+        false
+    }
+
+    fn is_busy(&self, _session_id: &str) -> bool {
+        *self.busy.lock().unwrap()
+    }
+
+    fn compact(self: std::sync::Arc<Self>, _session_id: String, _recovery: bool) {}
+
+    fn has_live_session(&self, _session_id: &str) -> bool {
+        false
+    }
+
+    fn spawn_turn_for_event(
+        self: std::sync::Arc<Self>,
+        _session_id: String,
+        _request: openbutler_daemon::agent::TurnRequest,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(Ok(()));
+        rx
+    }
+}

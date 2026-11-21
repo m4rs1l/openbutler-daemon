@@ -441,3 +441,69 @@ fn payload_entry_points_stay_re_exported() {
     let map = Map::new();
     let _ = load_session_id(&map);
 }
+
+// The current-chat shortcut (L3621) and the busy gate (L3626): loading your
+// own chat succeeds mid-run; switching away from a running chat does not.
+// The pair is the contract — the gate without the shortcut breaks the first.
+#[test]
+fn loading_the_current_chat_skips_the_busy_gate() {
+    let dir = temp_data_dir("load-shortcut");
+    let id = uuid(1);
+    write_session(&dir, &id, &pretty_session(&id, None, "Busy chat", true));
+    let host = Host::new();
+    let executor = common::RecordingExecutor::default();
+    host.set_executor(std::sync::Arc::new(executor.clone()));
+    let mut state = bound_state();
+    let first = call(
+        &host,
+        &dir,
+        &mut state,
+        request("r1", "session.load", &[("sessionId", json!(id))]),
+    );
+    success_result(first);
+    *executor.busy.lock().unwrap() = true;
+
+    // L3621: the current chat answers itself before any busy gate.
+    let again = call(
+        &host,
+        &dir,
+        &mut state,
+        request("r2", "session.load", &[("sessionId", json!(id))]),
+    );
+    let result = success_result(again);
+    assert_eq!(result["id"], json!(id));
+}
+
+#[test]
+fn switching_away_from_a_running_chat_is_refused() {
+    let dir = temp_data_dir("load-busy");
+    let current = uuid(1);
+    let other = uuid(2);
+    write_session(
+        &dir,
+        &current,
+        &pretty_session(&current, None, "Running", true),
+    );
+    write_session(&dir, &other, &pretty_session(&other, None, "Target", true));
+    let host = Host::new();
+    let executor = common::RecordingExecutor::default();
+    host.set_executor(std::sync::Arc::new(executor.clone()));
+    let mut state = bound_state();
+    let first = call(
+        &host,
+        &dir,
+        &mut state,
+        request("r1", "session.load", &[("sessionId", json!(current))]),
+    );
+    success_result(first);
+    *executor.busy.lock().unwrap() = true;
+
+    // L3626: the controller is busy, so the switch is refused by sentence.
+    let error = failure_text(call(
+        &host,
+        &dir,
+        &mut state,
+        request("r2", "session.load", &[("sessionId", json!(other))]),
+    ));
+    assert_eq!(error, "Wait for the current run before switching chats.");
+}

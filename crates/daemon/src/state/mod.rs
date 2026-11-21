@@ -21,10 +21,12 @@ pub use attachments::{
     MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES, decode_base64_image, image_type_from_bytes,
     store_attachment, verify_attachment_path,
 };
+/// The one workspace-path normalizer (`canonicalScopeRoot`).
+pub(crate) use paths::canonical_scope_root;
 
 pub use header::{SessionHeader, read_session_header};
 pub use list::{WorkspaceFilter, list_sessions};
-pub(crate) use paths::strip_windows_prefix;
+
 pub use paths::{
     CUSTODIAN_SESSION_ID, is_session_id, same_path, session_directory, sessions_directory,
 };

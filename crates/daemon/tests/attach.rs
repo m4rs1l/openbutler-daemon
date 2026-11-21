@@ -1,11 +1,14 @@
-//! `attach` at the dispatch surface: the chat path — validation with the
-//! source's wording, the windowed answer, the subscription, and the
-//! snapshot event that follows the response.
+//! `attach` at the dispatch surface: the chat path and the non-chat
+//! variant ladder — validation with the source's wording, the windowed
+//! answer, the subscription, and the snapshot event that follows the
+//! response.
 //!
-//! Source: legacy `daemon-host.ts` `attach` handler (L3312-3425),
+//! Source: legacy `daemon-host.ts` `attach` handler (L3312-3476),
 //! `attachChat` (L1432), `validateAttachWorkspaceRoot` (L4200), read
-//! 2026-11-17. Deliberately not here: isolated/schedule/worker/new-chat
-//! attachment paths — they need the runtime (M2).
+//! 2026-11-17 (chat path) and 2026-11-21 (variant ladder). Deliberately
+//! not here: the variant *success* paths — private and persistent
+//! sessions with their snapshots need the M2 session runtime; a request
+//! that passes every gate lands on the documented interim refusal.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
@@ -13,7 +16,7 @@ mod common;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use common::{temp_data_dir, write_session};
+use common::{temp_data_dir, uuid, write_session};
 use openbutler_daemon::dispatch::{DispatchState, Host, fanout::EventSink};
 use openbutler_protocol::envelope::DaemonEvent;
 use openbutler_protocol::{DaemonRequest, DaemonResponse};
@@ -793,5 +796,405 @@ fn session_load_rebinds_the_connection_to_the_loaded_chat() {
     );
     assert!(matches!(fresh, DaemonResponse::Success { .. }));
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ------------------------------------------------- the non-chat variant ladder
+// Source: daemon-host.ts L3365-3440 (read 2026-11-21): every attachment
+// names what it attaches to (L3365), then the custodian workspace (L3371),
+// the worker-view gates (L3376-3384), the worker id ladders (L3388-3404)
+// and the schedule lookup (L3420). The variant *success* paths need the
+// M2 session runtime; passing every gate lands on the interim refusal.
+
+/// The interim the documented M2 gap answers with — deliberately not a
+/// source sentence: the source always has the runtime to fall back on.
+const RUNTIME_INTERIM: &str = "The session runtime is not available in this build.";
+
+/// A stored schedule under `schedules.json` (the store the lookup reads).
+fn seed_schedule(dir: &Path, id: &str, workspace_root: &str) {
+    openbutler_daemon::state::schedules::save(
+        dir,
+        &[openbutler_daemon::state::schedules::ScheduleState {
+            id: id.to_owned(),
+            name: "Variant-ladder schedule".to_owned(),
+            enabled: true,
+            workspace_root: workspace_root.to_owned(),
+            origin_session_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            instruction: "Report the result.".to_owned(),
+            trigger: openbutler_daemon::state::schedules::ScheduleTrigger {
+                adapter: "interval".to_owned(),
+                options: json!({ "everySeconds": 3600 }),
+            },
+        }],
+    )
+    .expect("schedule store write");
+}
+
+#[test]
+fn an_attach_that_selects_nothing_is_refused() {
+    let dir = temp_data_dir("b2-empty");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(&host, &dir, &mut state, request("v1", &[]));
+    assert_eq!(
+        failure_text(response),
+        "Choose a chat or a session to attach."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn isolated_false_is_not_a_selection() {
+    // `isolatedSession !== true` — `false` passes the boolean gate and
+    // still selects nothing (L3365).
+    let dir = temp_data_dir("b2-false");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v2", &[("isolatedSession", json!(false))]),
+    );
+    assert_eq!(
+        failure_text(response),
+        "Choose a chat or a session to attach."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_custodian_data_directory_cannot_be_a_workspace() {
+    let dir = temp_data_dir("b2-custodian");
+    std::fs::create_dir_all(dir.join("custodian")).unwrap();
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v3",
+            &[
+                (
+                    "workspaceRoot",
+                    json!(dir.join("custodian").to_string_lossy()),
+                ),
+                ("isolatedSession", json!(true)),
+            ],
+        ),
+    );
+    assert_eq!(
+        failure_text(response),
+        "The OpenButler custodian data directory cannot be selected as a workspace."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_custodian_gate_runs_before_the_worker_gates() {
+    // L3371 sits above L3376: with both gates tripped, the custodian
+    // answer wins (order, not just wording).
+    let dir = temp_data_dir("b2-order");
+    std::fs::create_dir_all(dir.join("custodian")).unwrap();
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v4",
+            &[
+                (
+                    "workspaceRoot",
+                    json!(dir.join("custodian").to_string_lossy()),
+                ),
+                ("workerSessionId", json!(uuid(1))),
+                ("runningWorkerOf", json!(uuid(2))),
+            ],
+        ),
+    );
+    assert_eq!(
+        failure_text(response),
+        "The OpenButler custodian data directory cannot be selected as a workspace."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn two_worker_view_modes_are_refused() {
+    let dir = temp_data_dir("b2-two-views");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v5",
+            &[
+                ("workerSessionId", json!(uuid(1))),
+                ("runningWorkerOf", json!(uuid(2))),
+            ],
+        ),
+    );
+    assert_eq!(failure_text(response), "Choose one worker view mode.");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_worker_view_cannot_open_an_isolated_session() {
+    let dir = temp_data_dir("b2-worker-iso");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v6",
+            &[
+                ("workerSessionId", json!(uuid(1))),
+                ("isolatedSession", json!(true)),
+            ],
+        ),
+    );
+    assert_eq!(
+        failure_text(response),
+        "A worker view cannot also open an isolated or schedule session."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_worker_view_cannot_open_a_schedule() {
+    let dir = temp_data_dir("b2-worker-sched");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v7",
+            &[
+                ("workerSessionId", json!(uuid(1))),
+                ("scheduleId", json!("sched-1")),
+            ],
+        ),
+    );
+    assert_eq!(
+        failure_text(response),
+        "A worker view cannot also open an isolated or schedule session."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_schedule_cannot_open_with_an_isolated_session() {
+    let dir = temp_data_dir("b2-sched-iso");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v8",
+            &[
+                ("scheduleId", json!("sched-1")),
+                ("isolatedSession", json!(true)),
+            ],
+        ),
+    );
+    assert_eq!(
+        failure_text(response),
+        "A schedule session cannot also be an isolated one-shot session."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_worker_session_id_is_limited_to_128_characters() {
+    let dir = temp_data_dir("b2-worker-len");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v9", &[("workerSessionId", json!("w".repeat(129)))]),
+    );
+    assert_eq!(
+        failure_text(response),
+        "workerSessionId must be a non-empty string under 128 bytes."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_worker_id_without_a_worker_record_is_refused() {
+    // No worker ledger exists in this build, so `readWorkerRecord` is
+    // always null here (L3401) — the source's own sentence, not an interim.
+    let dir = temp_data_dir("b2-worker-record");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v10", &[("workerSessionId", json!(uuid(1)))]),
+    );
+    assert_eq!(
+        failure_text(response),
+        "That session is not a subagent worker."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_running_worker_of_is_limited_to_128_characters() {
+    let dir = temp_data_dir("b2-running-len");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v11", &[("runningWorkerOf", json!("p".repeat(129)))]),
+    );
+    assert_eq!(
+        failure_text(response),
+        "runningWorkerOf must be a non-empty string under 128 bytes."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_running_worker_view_needs_a_running_worker() {
+    // `runningWorkerId` scans the workers map (worker-service.ts L286);
+    // no worker of this parent is busy, so the source answer stands.
+    let dir = temp_data_dir("b2-running-none");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v12", &[("runningWorkerOf", json!(uuid(1)))]),
+    );
+    assert_eq!(
+        failure_text(response),
+        "That subagent is not running right now."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_isolated_attachment_needs_the_session_runtime() {
+    // Passes selection, custodian and every conflict; only the private
+    // session (L3414) is missing — the documented M2 gap.
+    let dir = temp_data_dir("b2-isolated");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v13", &[("isolatedSession", json!(true))]),
+    );
+    assert_eq!(failure_text(response), RUNTIME_INTERIM);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_schedule_id_is_limited_to_64_characters() {
+    let dir = temp_data_dir("b2-sched-len");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v14", &[("scheduleId", json!("s".repeat(65)))]),
+    );
+    assert_eq!(
+        failure_text(response),
+        "scheduleId must be a non-empty string under 64 bytes."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_unknown_schedule_does_not_belong() {
+    let dir = temp_data_dir("b2-sched-unknown");
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request("v15", &[("scheduleId", json!("sched-none"))]),
+    );
+    assert_eq!(
+        failure_text(response),
+        "The schedule does not belong to the requested workspace."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_schedule_from_another_workspace_does_not_belong() {
+    let dir = temp_data_dir("b2-sched-mismatch");
+    let other = dir.join("ws-other");
+    let requested = dir.join("ws-requested");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::create_dir_all(&requested).unwrap();
+    seed_schedule(&dir, "sched-1", &other.to_string_lossy());
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v16",
+            &[
+                ("scheduleId", json!("sched-1")),
+                ("workspaceRoot", json!(requested.to_string_lossy())),
+            ],
+        ),
+    );
+    assert_eq!(
+        failure_text(response),
+        "The schedule does not belong to the requested workspace."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_schedule_in_the_requested_workspace_needs_the_session_runtime() {
+    // The lookup and the workspace compare both pass (L3433-3435); only
+    // `getPersistentSession` (L3436) is missing — the documented M2 gap.
+    let dir = temp_data_dir("b2-sched-match");
+    let requested = dir.join("ws-here");
+    std::fs::create_dir_all(&requested).unwrap();
+    seed_schedule(&dir, "sched-1", &requested.to_string_lossy());
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "v17",
+            &[
+                ("scheduleId", json!("sched-1")),
+                ("workspaceRoot", json!(requested.to_string_lossy())),
+            ],
+        ),
+    );
+    assert_eq!(failure_text(response), RUNTIME_INTERIM);
     let _ = std::fs::remove_dir_all(&dir);
 }
