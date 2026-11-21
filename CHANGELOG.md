@@ -7,6 +7,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The team data layer (T1): `team/{contracts,coordination,store}` ported
+  from legacy `team/store.ts` (697 lines, read 2026-11-21). The hub
+  store's schema is verbatim — 13 tables, the three source indexes, the
+  `kind`/`file_id` in-place migration, `busy_timeout = 5000` + WAL +
+  0600 — so a legacy `team.db` stays compatible. Every source method is
+  ported (`transaction` closure, meta, invites with used stamps, join
+  tickets with the hash on the member, messages with AUTOINCREMENT
+  ordering, cursors/acks, profiles/capabilities/work as value-JSON
+  columns, audit, presence/summaries with the source's correlated
+  subqueries, files). The wire DTOs carry the source's field names and
+  camelCase (`TeamMember.role`/`removedAt`, `JoinRequest.id`/`code`,
+  `TeamAuditEntry.detail`, `MemberSummary` with profile, capabilities
+  and active-work count); the work machine is the nine source states
+  with `TERMINAL_WORK_STATES`/`ACTIVE_WORK_STATES`. Seventeen pins in
+  `tests/team_store.rs`.
 - The `attach` variant ladder (daemon-host.ts L3365-3440, read
   2026-11-21): the selection gate (`isolatedSession !== true` with no
   schedule/worker name answers `Choose a chat or a session to attach.`),
