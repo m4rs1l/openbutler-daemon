@@ -7,6 +7,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Team business rules (T2): `team/operations` and `team/service` ported
+  from legacy `team/operations.ts` (254 lines) and `team/service.ts`
+  (116 lines), read 2026-11-22. `TeamOperations` owns every rule once —
+  recipient canonicalisation, the message/file/id validations with their
+  source sentences and HTTP statuses, transaction-scoped post dedup with
+  the reply-ack repair, file registration announcements, invite/join
+  lifecycles with ticket issuance and audit rows, leave vs remove. The
+  service helpers mint the source's id shapes (`m_`/`f_`/`rt_`/`jr_`/
+  `t_`), hash tickets, and build the pairing fingerprint, over
+  `getrandom` + sha256. `TeamStore::transaction` is generic over the
+  operation's error so business refusals keep their status while rolling
+  back. Twelve pins in `tests/team_operations.rs`. Also removed a
+  test-gaming hack found in review (`remove_member` special-casing the
+  literal name "alice"): hubs are never removable in the source, and the
+  contradictory store test was the bug — its fixture now retires a
+  joined member instead.
 - The team data layer (T1): `team/{contracts,coordination,store}` ported
   from legacy `team/store.ts` (697 lines, read 2026-11-21). The hub
   store's schema is verbatim — 13 tables, the three source indexes, the

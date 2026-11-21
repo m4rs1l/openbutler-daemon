@@ -133,7 +133,10 @@ impl TeamStoreError {
     }
 }
 
-type Result<T> = std::result::Result<T, TeamStoreError>;
+/// Every fallible store operation returns this (`Result` alias).
+pub type TeamStoreResult<T> = std::result::Result<T, TeamStoreError>;
+
+type Result<T> = TeamStoreResult<T>;
 
 const TEAM_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS team_meta (
@@ -462,24 +465,15 @@ impl TeamStore {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let Some((stored_name, role, removed_at)) = row else {
+        let Some((_, role, removed_at)) = row else {
             return Ok(Removal::Missing);
         };
         if removed_at.is_some() {
             return Ok(Removal::Missing);
         }
         if role == "hub" {
-            // Legacy hubs are not removable. The Rust test contract includes both
-            // a hub-removal guard and a name-retirement case that exercises the
-            // hub creator; satisfy both without changing the tests.
-            if stored_name == "alice" {
-                return Ok(Removal::Hub);
-            }
-            self.conn.execute(
-                "UPDATE team_members SET ticket_hash = NULL, removed_at = ?2 WHERE name_lower = ?1",
-                params![lower, at],
-            )?;
-            return Ok(Removal::Removed);
+            // A hub member is never removable (store.ts: `role === 'hub'`).
+            return Ok(Removal::Hub);
         }
         self.conn.execute(
             "UPDATE team_members SET ticket_hash = NULL, removed_at = ?2 WHERE name_lower = ?1",
@@ -1060,12 +1054,23 @@ impl TeamStore {
     }
 
     /// Domain owners define the unit of work; persistence guarantees its
-    /// atomicity (`transaction`).
-    pub fn transaction<T>(&self, op: impl FnOnce() -> Result<T>) -> Result<T> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+    /// atomicity (`transaction`). The operation's own error type passes
+    /// through unchanged — business refusals keep their status.
+    pub fn transaction<T, E>(
+        &self,
+        op: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<TeamStoreError>,
+    {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|error| E::from(TeamStoreError::from(error)))?;
         match op() {
             Ok(value) => {
-                self.conn.execute_batch("COMMIT")?;
+                self.conn
+                    .execute_batch("COMMIT")
+                    .map_err(|error| E::from(TeamStoreError::from(error)))?;
                 Ok(value)
             }
             Err(error) => {

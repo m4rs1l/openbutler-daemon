@@ -2,4 +2,6 @@
 
 pub mod contracts;
 pub mod coordination;
+pub mod operations;
+pub mod service;
 pub mod store;

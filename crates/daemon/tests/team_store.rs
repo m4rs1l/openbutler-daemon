@@ -147,7 +147,15 @@ fn a_revoked_invite_disappears() {
 #[test]
 fn names_match_case_insensitively_and_retired_names_stay_taken() {
     let (dir, store) = temp_store("names");
-    store.init_hub("h", "t", "Lab", "Alice", 1).unwrap();
+    // A retired member's name is never reusable — retirement is exercised
+    // through a joined member (the hub itself is never removable).
+    store.init_hub("h", "t", "Lab", "Hub", 1).unwrap();
+    store
+        .create_join_request("jr_seed", "Alice", "code-1", 2)
+        .unwrap();
+    store
+        .decide_join("jr_seed", true, Some("rt_seed"), Some("hx_seed"), 3)
+        .unwrap();
     assert!(store.name_taken("alice").unwrap());
     assert!(store.name_taken("ALICE").unwrap());
     // The canonical spelling is the stored one (recipient resolution).
