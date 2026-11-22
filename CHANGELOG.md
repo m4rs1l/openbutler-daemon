@@ -96,6 +96,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The wire contract moved out of this workspace: `crates/protocol` is now
+  the standalone `openbutler-protocol` repository
+  (github.com/m4rs1l/openbutler-protocol), consumed here as a git
+  dependency pinned by rev instead of a cross-repo path. Frames,
+  envelopes, action payloads and the conformance suites live there - 43
+  tests green in their own repo and from a fresh clone; this workspace
+  runs 480 tests across 58 targets without them.
 - One home for the tailnet address rules: `listen_target.rs` now
   delegates `is_loopback`/`is_tailnet_address` to the crate-level
   `tailnet` module instead of carrying its own octet copies (the

@@ -1,7 +1,0 @@
-{
-  "type": "tool-call",
-  "id": "call-01",
-  "name": "shell",
-  "callId": "toolu_01",
-  "arguments": { "command": "ls -la" }
-}
