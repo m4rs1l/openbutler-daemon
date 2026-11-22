@@ -1198,3 +1198,69 @@ fn a_schedule_in_the_requested_workspace_needs_the_session_runtime() {
     assert_eq!(failure_text(response), RUNTIME_INTERIM);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_new_chat_attach_creates_a_fresh_draft_and_binds_the_connection() {
+    let dir = temp_data_dir("attach-new-chat");
+    let host = Arc::new(Host::new());
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = DispatchState::new();
+    let sink = Arc::new(RecordingSink::default());
+    state.set_sink(sink.clone());
+
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "n1",
+            &[
+                ("clientKind", json!("terminal")),
+                ("newChatSession", json!(true)),
+            ],
+        ),
+    );
+    let result = success_result(response);
+    let draft_id = result["snapshot"]["session"]["id"]
+        .as_str()
+        .expect("draft id")
+        .to_owned();
+    assert!(!draft_id.is_empty());
+    assert_eq!(
+        result["snapshot"]["session"]["entries"]
+            .as_array()
+            .map(Vec::len),
+        Some(0),
+        "a fresh chat starts empty"
+    );
+    assert_eq!(result["sessionAttachments"], json!(true));
+    let workspace_key = result["workspaceKey"]
+        .as_str()
+        .expect("binding key")
+        .to_owned();
+    // (The empty draft is deliberately absent from `savedSessions`: the
+    // picker excludes drafts without a user message — persistence is
+    // proven by the load below, which reads the record from disk.)
+    // The queued snapshot event flushed, same as the chat path.
+    for frame in state.take_pending_events() {
+        assert!(sink.try_send(frame));
+    }
+    // The binding is real: a gated action with the echoed key reaches its
+    // handler and loads the very chat the attach created.
+    let load = call(
+        &host,
+        &dir,
+        &mut state,
+        action_request(
+            "n2",
+            "session.load",
+            &[
+                ("sessionId", json!(draft_id)),
+                ("workspaceKey", json!(workspace_key)),
+            ],
+        ),
+    );
+    let load_value = serde_json::to_value(&load).expect("serializable");
+    assert_eq!(load_value["ok"], json!(true), "{load_value}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

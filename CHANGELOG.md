@@ -7,6 +7,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `attach` opens a new chat: `newChatSession: true` on a fresh
+  connection now creates the draft through the same disk path
+  `session.new` uses (busy gate included), binds the workspace, and
+  answers with the regular attach result and queued snapshot event —
+  the missing bootstrap for a CLI one-shot run. Isolated / schedule /
+  worker success paths stay M2; one new pin (draft id, empty
+  transcript, binding proven by a gated `session.load`) in
+  `tests/attach.rs`.
 - Team files, tailnet and coordination rules (T3a): `team/files`, the
   crate-level `tailnet` module and the `TeamCoordination` class ported
   from legacy `team/files.ts` (116 lines), `tailnet.ts` (62) and

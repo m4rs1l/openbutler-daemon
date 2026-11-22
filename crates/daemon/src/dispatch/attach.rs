@@ -103,12 +103,37 @@ pub fn attach_chat(
     if !has_chat && !has_new {
         return attach_non_chat(host, data_dir, request);
     }
-    // Chat path: an existing chat by id. `newChatSession` opens through
-    // `createSession` (L1377), which needs the M2 runtime.
-    let Some(chat_value) = request.payload.get("chatSessionId") else {
-        return Err(RUNTIME_INTERIM.to_owned());
+    // Chat path: an existing chat by id, or a fresh chat draft. The
+    // source opens a new chat through `createSession` (L1377) on the
+    // session runtime; this build opens it through the same disk draft
+    // `session.new` uses — same record shape, same snapshot event, and M2
+    // swaps only the creator.
+    let chat_session_id = if has_new {
+        // The busy gate `session.new` carries: creating a new chat never
+        // abandons a running one.
+        if let Some(executor) = host.executor()
+            && state
+                .current_session
+                .as_deref()
+                .is_some_and(|id| executor.is_busy(id))
+        {
+            return Err("Wait for the current run before creating a new chat.".to_owned());
+        }
+        let mut draft = super::session_write::create_draft(host);
+        // An explicit workspaceRoot becomes the draft's workspace (the
+        // source passes it into createSession).
+        if let Some(root) = request.payload.get("workspaceRoot").and_then(Value::as_str) {
+            draft.meta.workspace_root = Some(state::canonical_scope_root(root)?);
+        }
+        let id = draft.meta.id.clone();
+        state::save_session(data_dir, &draft, true).map_err(|error| error.to_string())?;
+        id
+    } else {
+        let Some(chat_value) = request.payload.get("chatSessionId") else {
+            return Err(RUNTIME_INTERIM.to_owned());
+        };
+        super::require(Some(chat_value), "chatSessionId", 64)?
     };
-    let chat_session_id = super::require(Some(chat_value), "chatSessionId", 64)?;
     let Some(view) = load_view(data_dir, &chat_session_id) else {
         return Err(CHAT_NOT_FOUND.to_owned());
     };
