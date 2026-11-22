@@ -7,6 +7,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Team files, tailnet and coordination rules (T3a): `team/files`, the
+  crate-level `tailnet` module and the `TeamCoordination` class ported
+  from legacy `team/files.ts` (116 lines), `tailnet.ts` (62) and
+  `team/coordination.ts` (254), read 2026-11-22. Verified writes meter and
+  hash while reading, refuse overshoots and mismatches with the source's
+  `TeamTransportError` sentences (400) and clash only on different bytes
+  (409); content-addressed stores stay idempotent; the inbox landing spot
+  follows node's platform basename plus lexical `resolve()` (`..` climbs,
+  `.` disappears). `TeamCoordination` owns every peer rule once: profile
+  revisions with the idempotent-retry half, capability reports in source
+  order (platform before the group check; `toolCount` with **no** string
+  coercion), and the full work machine - all ten actions with their guard
+  sentences and statuses, accessibility before the action name, and the
+  wake message committed in the same transaction as the row. JS edges are
+  pinned deliberately: `String.length` measures UTF-16 (`js_len`),
+  `Number()` coerces paging numbers but not revisions, and `Number("")`
+  makes a trailing empty octet `100.64.0.0`. 33 pins across
+  `tests/tailnet.rs`, `tests/team_files.rs` and
+  `tests/team_coordination.rs`.
 - Team business rules (T2): `team/operations` and `team/service` ported
   from legacy `team/operations.ts` (254 lines) and `team/service.ts`
   (116 lines), read 2026-11-22. `TeamOperations` owns every rule once —
@@ -77,6 +96,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- One home for the tailnet address rules: `listen_target.rs` now
+  delegates `is_loopback`/`is_tailnet_address` to the crate-level
+  `tailnet` module instead of carrying its own octet copies (the
+  duplicate was found while porting `tailnet.ts` a second time for the
+  team hub; its `is_ipv4_literal` shape gate stays). The production
+  interface lister uses `if-addrs 0.15.0` so the team server can pick a
+  bind address without shell-outs.
 - `attach` admission wording matches the source exactly:
   `isolatedSession` accepts any boolean (only `newChatSession` is
   exactly `true`, `newChatSession must be true.`), the chat-branch

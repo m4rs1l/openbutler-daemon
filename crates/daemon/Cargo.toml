@@ -26,3 +26,4 @@ url = { workspace = true }
 uuid = { workspace = true }
 notify = { workspace = true }
 sysinfo = { workspace = true }
+if-addrs = "0.15.0"

@@ -103,7 +103,7 @@ pub struct ScheduleRunner {
     runtime: tokio::runtime::Handle,
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 

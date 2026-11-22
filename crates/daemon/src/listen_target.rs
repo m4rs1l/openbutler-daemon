@@ -2,7 +2,11 @@
 //! `daemon.listen` preference, so the preference and the flag it came from
 //! cannot drift apart.
 //!
-//! Source: `listen-target.ts` + `tailnet.ts` (read 2026-11-16).
+//! Source: `listen-target.ts` (read 2026-11-16); the address rules it
+//! reuses are `tailnet.ts`'s port in `crate::tailnet` — one authority for
+//! both callers.
+
+use crate::tailnet::{is_loopback, is_tailnet_address};
 
 /// A parsed listen target: an IPv4 literal the daemon may bind and a port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +59,7 @@ pub fn parse_listen_target(spec: &str) -> Result<ListenTarget, ListenTargetError
     if !(1..=65535).contains(&port) {
         return Err(ListenTargetError::PortOutOfRange { port });
     }
-    if !is_loopback_v4(host) && !is_tailnet_v4(host) {
+    if !is_loopback(host) && !is_tailnet_address(host) {
         return Err(ListenTargetError::NotTailnet {
             host: host.to_owned(),
         });
@@ -74,30 +78,4 @@ fn is_ipv4_literal(value: &str) -> bool {
         && groups.iter().all(|group| {
             (1..=3).contains(&group.len()) && group.bytes().all(|byte| byte.is_ascii_digit())
         })
-}
-
-fn octets(value: &str) -> Option<[u8; 4]> {
-    let mut out = [0u8; 4];
-    for (index, group) in value.split('.').enumerate() {
-        out[index] = group.parse().ok()?;
-    }
-    Some(out)
-}
-
-/// The whole 127.0.0.0/8 range is loopback: the one bind target outside the
-/// tailnet that never leaves the machine.
-fn is_loopback_v4(value: &str) -> bool {
-    octets(value).is_some_and(|parts| parts[0] == 127)
-}
-
-/// True for an IPv4 address inside 100.64.0.0/10 (the shared CGNAT range
-/// Tailscale assigns from). Anything else is not the tailnet.
-fn is_tailnet_v4(value: &str) -> bool {
-    const TAILNET_V4_BASE: u32 = 0x6440_0000; // 100.64.0.0
-    const TAILNET_V4_MASK: u32 = 0xffc0_0000; // /10
-    let Some(parts) = octets(value) else {
-        return false;
-    };
-    let packed = u32::from_be_bytes(parts);
-    (packed & TAILNET_V4_MASK) == TAILNET_V4_BASE
 }

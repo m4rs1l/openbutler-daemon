@@ -16,6 +16,7 @@ pub mod settings;
 pub mod shape;
 pub mod sidecar;
 pub mod state;
+pub mod tailnet;
 pub mod team;
 pub mod tool_runtime;
 pub mod tools;

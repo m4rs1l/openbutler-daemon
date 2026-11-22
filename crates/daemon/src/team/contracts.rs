@@ -27,3 +27,26 @@ pub struct TeamMessage {
     pub created_at: i64,
     pub reply_to: Option<String>,
 }
+
+/// A transport-level refusal with the status the HTTP layer returns
+/// (`TeamTransportError`): bytes refused mid-transfer — size overshoot,
+/// a hash mismatch, or bytes that clash with an already committed id.
+/// Neither retryable in the source: the refusal is deterministic.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct TeamTransportError {
+    pub message: String,
+    pub retryable: bool,
+    pub status: u16,
+}
+
+impl TeamTransportError {
+    /// One transport refusal: message plus retryability and status.
+    pub fn new(message: impl Into<String>, retryable: bool, status: u16) -> Self {
+        Self {
+            message: message.into(),
+            retryable,
+            status,
+        }
+    }
+}
