@@ -27,7 +27,7 @@ use crate::compaction::{
     CompactOutcome, CompactionRequest, CompactionResult, EngineHooks, ImpossibleReason,
     compact_conversation,
 };
-use crate::ledger::{LedgerWriter, StepUsageReport, UsageInput};
+use crate::ledger::{LedgerWriter, StepUsageReport, TokenPrices, UsageInput};
 use crate::state;
 use crate::tool_runtime::catalog::{native_definition, sidecar_tool};
 
@@ -235,6 +235,7 @@ impl TurnRunner {
         let usage_workspace = meta.workspace_root.clone();
         let usage_provider = meta.provider_id.clone();
         let usage_model = meta.model_id.clone();
+        let usage_prices = self.usage_prices(&usage_provider, &usage_model);
         let on_usage = {
             let usage_ledger = &usage_ledger;
             move |report: &StepUsageReport| {
@@ -245,6 +246,7 @@ impl TurnRunner {
                     workspace_root: usage_workspace.clone(),
                     provider_id: usage_provider.clone(),
                     model_id: usage_model.clone(),
+                    prices: usage_prices.clone(),
                     report: report.clone(),
                 };
                 let mut guard = usage_ledger
@@ -301,6 +303,22 @@ impl TurnRunner {
     /// the step context straight in). Every failure is a notice here:
     /// a summarisation must never cost the turn (source catch
     /// L2394-2401 — the warn text with the continue suffix).
+    /// The catalog's real per-million prices for this model (owner rule
+    /// 2026-11-24: an estimate comes from real prices or not at all).
+    /// `None` without a boot-installed catalog or for an unpriceable
+    /// model — the row then keeps `cost_source: none`.
+    pub(super) fn usage_prices(&self, provider_id: &str, model_id: &str) -> Option<TokenPrices> {
+        let catalog = self.host.upgrade()?.catalog()?;
+        let cost = catalog.get_token_price(provider_id, model_id)?;
+        Some(TokenPrices {
+            input: cost.input,
+            output: cost.output,
+            reasoning: cost.reasoning,
+            cache_read: cost.cache_read,
+            cache_write: cost.cache_write,
+        })
+    }
+
     pub(super) async fn compact_at_boundary(&self, run: &TurnRequest, pending: Option<bool>) {
         let (conversation, compaction_turn, active_turn, meta) = {
             let state = self.state.lock().await;
@@ -376,6 +394,7 @@ impl TurnRunner {
         let usage_workspace = meta.workspace_root.clone();
         let usage_provider = meta.provider_id.clone();
         let usage_model = meta.model_id.clone();
+        let usage_prices = self.usage_prices(&usage_provider, &usage_model);
         let on_usage = {
             let usage_ledger = &usage_ledger;
             move |report: &StepUsageReport| {
@@ -386,6 +405,7 @@ impl TurnRunner {
                     workspace_root: usage_workspace.clone(),
                     provider_id: usage_provider.clone(),
                     model_id: usage_model.clone(),
+                    prices: usage_prices.clone(),
                     report: report.clone(),
                 };
                 let mut guard = usage_ledger

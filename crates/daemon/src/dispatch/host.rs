@@ -109,6 +109,11 @@ pub struct Host {
     /// `session.stop` bumps, the pump captures before each firing and
     /// refuses a turn whose generation moved. Map touch, never an await.
     stop_generations: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+    /// The models.dev catalog, set once at boot: usage pricing reads it
+    /// (`catalog-estimate`) and later slices serve the pickers from it.
+    /// Optional so tests that do not exercise catalog behavior stay
+    /// unchanged — without it, usage rows keep `cost_source: none`.
+    catalog: std::sync::OnceLock<std::sync::Arc<crate::catalog::CatalogStore>>,
 }
 
 impl Host {
@@ -131,7 +136,18 @@ impl Host {
             scheduler: RwLock::new(None),
             self_ref: std::sync::OnceLock::new(),
             stop_generations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            catalog: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Installs the catalog (boot only; first call wins).
+    pub fn set_catalog(&self, catalog: std::sync::Arc<crate::catalog::CatalogStore>) {
+        let _ = self.catalog.set(catalog);
+    }
+
+    /// The catalog, once boot has installed it.
+    pub fn catalog(&self) -> Option<std::sync::Arc<crate::catalog::CatalogStore>> {
+        self.catalog.get().cloned()
     }
 
     /// The live settings copy, if it has been loaded yet. `None` means

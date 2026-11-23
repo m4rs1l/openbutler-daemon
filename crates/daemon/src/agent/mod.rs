@@ -401,6 +401,7 @@ impl TurnRunner {
                     workspace_root: request.workspace_root.clone(),
                     provider_id: request.provider_key.clone(),
                     model_id: request.model.clone(),
+                    prices: self.usage_prices(&request.provider_key, &request.model),
                     report,
                 };
                 if let Err(error) = writer.record_usage(&input.row()) {

@@ -48,6 +48,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   derived answer cannot exist; ambient env stays out (it moves no
   revision). Six pins in `tests/catalog_view.rs`.
 
+- Catalog-backed usage pricing (owner rule: real prices or no estimate —
+  never a character-based guess). `UsageInput` carries the caller's
+  `TokenPrices`; an inline provider bill always wins, otherwise the
+  catalog's per-million prices price the row as `catalog-estimate`
+  (`estimateCost`: cache tokens at their own rate, removed from the
+  plain-input share, zero total = no estimate) and the five price
+  columns are stored. The host installs the store at boot; the turn and
+  compaction hooks resolve prices through it. Four sink pins in
+  `tests/ledger_usage.rs` plus an end-to-end turn pin in
+  `tests/agent_loop.rs`.
+
 - `settings.setup`: the first-run wizard's atomic write, a new contract
   rather than a port (the source wrote the files from the CLI — a client
   write the backend-owned rule forbids). The payload validates first

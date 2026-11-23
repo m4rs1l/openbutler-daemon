@@ -139,6 +139,8 @@ pub struct CatalogLimit {
 pub struct CatalogCost {
     pub input: Option<f64>,
     pub output: Option<f64>,
+    #[serde(default)]
+    pub reasoning: Option<f64>,
     pub cache_read: Option<f64>,
     pub cache_write: Option<f64>,
 }

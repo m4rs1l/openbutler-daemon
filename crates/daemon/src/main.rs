@@ -108,6 +108,15 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             eprintln!("openbutler-daemon: {error}");
             return ExitCode::FAILURE;
         }
+        // The models.dev catalog: one store per data dir over the real
+        // HTTP transport; the fetch runs lazily on the first price read
+        // (usage accounting), so boot never waits on the network.
+        host.set_catalog(Arc::new(
+            openbutler_daemon::catalog::CatalogStore::with_transport(
+                &config::data_dir(),
+                Arc::new(openbutler_daemon::catalog::HttpTransport),
+            ),
+        ));
         // The turn executor is host-wide: one door (spawned on the first
         // send — an idle daemon never pays for the sidecar), one runner
         // per session.

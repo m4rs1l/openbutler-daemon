@@ -2050,6 +2050,7 @@ struct UsageRowView {
     total_tokens: Option<i64>,
     usage_source: String,
     cost_source: Option<String>,
+    cost_usd: Option<f64>,
     duration_ms: i64,
     generation_id: Option<String>,
     provider_id: String,
@@ -2062,7 +2063,7 @@ fn usage_rows(root: &Path) -> Vec<UsageRowView> {
     let mut statement = connection
         .prepare(
             "SELECT id, at_ms, run_kind, status, attempt, input_tokens, output_tokens,
-                    total_tokens, usage_source, cost_source, duration_ms, generation_id,
+                    total_tokens, usage_source, cost_source, cost_usd, duration_ms, generation_id,
                     provider_id, model_id, workspace_root
              FROM openbutler_usage ORDER BY at_ms, attempt",
         )
@@ -2080,14 +2081,80 @@ fn usage_rows(root: &Path) -> Vec<UsageRowView> {
                 total_tokens: row.get(7)?,
                 usage_source: row.get(8)?,
                 cost_source: row.get(9)?,
-                duration_ms: row.get(10)?,
-                generation_id: row.get(11)?,
-                provider_id: row.get(12)?,
-                model_id: row.get(13)?,
-                workspace_root: row.get(14)?,
+                cost_usd: row.get(10)?,
+                duration_ms: row.get(11)?,
+                generation_id: row.get(12)?,
+                provider_id: row.get(13)?,
+                model_id: row.get(14)?,
+                workspace_root: row.get(15)?,
             })
         })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
+}
+
+// --- catalog pricing on a real turn -----------------------------------------
+
+/// A transport the pricing pin never needs (the catalog is pre-written).
+struct NoFetchTransport;
+
+impl openbutler_daemon::catalog::Transport for NoFetchTransport {
+    fn fetch(&self, _url: &'static str) -> openbutler_daemon::catalog::FetchFuture {
+        Box::pin(async { Err("no network in tests".to_owned()) })
+    }
+}
+
+/// A finished step is priced from the catalog's real prices (owner rule:
+/// an estimate comes from real prices, or there is none) — the host's
+/// catalog answers and the row says `catalog-estimate`.
+#[tokio::test]
+async fn a_turn_prices_its_step_from_the_catalog() {
+    let root = temp_root("usage-catalog");
+    seed_session(&root);
+    let (addr, _mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    // The catalog carries the model the turn runs (provider/model ids come
+    // from the door request: openai-compatible / test-model).
+    openbutler_daemon::catalog::write_catalog_snapshot(
+        &root,
+        &json!({
+            "providers": {
+                "openai-compatible": {
+                    "models": {
+                        "test-model": { "cost": { "input": 2.0, "output": 8.0 } }
+                    }
+                }
+            }
+        }),
+        1_700_000_000_000,
+        1_700_000_000_000,
+    )
+    .unwrap();
+    let host = std::sync::Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_catalog(Arc::new(
+        openbutler_daemon::catalog::CatalogStore::with_transport(&root, Arc::new(NoFetchTransport)),
+    ));
+
+    let runner = TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+        .await
+        .expect("open");
+    runner
+        .send(request("basic", addr, UserEntrySource::Terminal))
+        .await
+        .expect("turn");
+
+    let rows = usage_rows(&root);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(
+        row.cost_source.as_deref(),
+        Some("catalog-estimate"),
+        "a real catalog price labels the estimate"
+    );
+    // The fake states input 10 / output 5 and no cache tokens:
+    // (10 * 2.0 + 5 * 8.0) / 1_000_000.
+    let cost = row.cost_usd.expect("the step is priced");
+    assert!((cost - 0.000_06).abs() < 1e-12, "got {cost}");
 }

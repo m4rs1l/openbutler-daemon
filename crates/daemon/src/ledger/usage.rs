@@ -12,12 +12,12 @@
 //! Accounting is best effort: every caller treats a failure here as a log
 //! line, never as a failed run (the source's `console.error` contract).
 //!
-//! Cost without a catalog: the source falls back to per-token catalog
-//! prices when the provider states no bill. This build has no price data in
-//! the repository by design (provider/model data never lands in tracked
-//! files), so `catalog-estimate` cannot be produced yet — a request the
-//! provider prices is `provider-inline`, one it does not is `none`. The
-//! estimate path arrives with the runtime model-catalog slice.
+//! Cost is a bill or an estimate, never a blend (owner rule, 2026-11-24):
+//! when the provider states no bill, the row is priced from the catalog's
+//! real per-million prices (`estimateCost`, recorder.ts L59) and labelled
+//! `catalog-estimate`; a model the catalog cannot price is `none` — no
+//! character-based guessing, ever. The caller resolves the prices from
+//! the catalog and hands them in, so this module stays catalog-agnostic.
 
 use chrono::TimeZone;
 use rusqlite::params;
@@ -67,6 +67,18 @@ pub struct UsageTokens {
     pub total_tokens: Option<i64>,
 }
 
+/// Per-million-token prices as the catalog states them (`TokenPrices`,
+/// recorder.ts L45-52).
+#[derive(Debug, Clone, Default, PartialEq)]
+/// USD per one million tokens, straight from the catalog.
+pub struct TokenPrices {
+    pub input: Option<f64>,
+    pub output: Option<f64>,
+    pub reasoning: Option<f64>,
+    pub cache_read: Option<f64>,
+    pub cache_write: Option<f64>,
+}
+
 /// `UsageRecordInput` (recorder.ts L26-45): the identities plus the report.
 /// `turnId` and `headers` are absent because this path never sets them in
 /// the source either; the table keeps the columns as NULL.
@@ -80,6 +92,9 @@ pub struct UsageInput {
     pub workspace_root: Option<String>,
     pub provider_id: String,
     pub model_id: String,
+    /// The catalog's real prices for this model, resolved by the caller;
+    /// `None` means the catalog cannot price it (→ `none`, never a guess).
+    pub prices: Option<TokenPrices>,
     pub report: StepUsageReport,
 }
 
@@ -102,6 +117,7 @@ pub struct UsageRow {
     status: &'static str,
     tokens: UsageTokens,
     usage_source: &'static str,
+    prices: Option<TokenPrices>,
     cost_usd: Option<f64>,
     cost_source: &'static str,
     response_id: Option<String>,
@@ -138,11 +154,18 @@ impl UsageInput {
             } else {
                 "absent"
             };
-        // costSource: the provider's statement, else `none` (no catalog here).
-        let cost_source = if cost_usd.is_some() {
-            resolved_source
+        // Cost is a bill or an estimate, never a blend: an inline bill
+        // wins; otherwise the catalog prices the tokens (`estimateCost`);
+        // otherwise the row is priced `none` — no guessing.
+        let estimate = if cost_usd.is_none() {
+            estimate_cost(&report.tokens, self.prices.as_ref())
         } else {
-            "none"
+            None
+        };
+        let (final_cost, cost_source) = match (cost_usd, estimate) {
+            (Some(bill), _) => (Some(bill), resolved_source),
+            (None, Some(estimate)) => (Some(estimate), "catalog-estimate"),
+            (None, None) => (None, "none"),
         };
         UsageRow {
             id: self.row_id(),
@@ -160,7 +183,8 @@ impl UsageInput {
             status: report.status,
             tokens: report.tokens.clone(),
             usage_source,
-            cost_usd: cost_usd.map(round_six),
+            prices: self.prices.clone(),
+            cost_usd: final_cost.map(round_six),
             cost_source,
             response_id: report.response_id.clone(),
         }
@@ -241,6 +265,33 @@ fn round_six(value: f64) -> f64 {
     ((value * 1_000_000.0) + 0.5).floor() / 1_000_000.0
 }
 
+/// Catalog estimate for one request (`estimateCost`, recorder.ts L59-77).
+/// Cache tokens are billed at their own rate and are already part of the
+/// input count, so they are priced separately and removed from the
+/// plain-input share; only fields where BOTH a count and a price exist
+/// contribute, and a zero total is no estimate at all (the source's
+/// `total > 0 ? total : null`).
+pub fn estimate_cost(tokens: &UsageTokens, prices: Option<&TokenPrices>) -> Option<f64> {
+    let prices = prices?;
+    let per_million = |count: Option<i64>, price: Option<f64>| match (count, price) {
+        (Some(count), Some(price)) => (count as f64 * price) / 1_000_000.0,
+        _ => 0.0,
+    };
+    let cache_read = tokens.cache_read_tokens.unwrap_or(0);
+    let cache_write = tokens.cache_write_tokens.unwrap_or(0);
+    let plain_input = tokens.no_cache_tokens.or_else(|| {
+        tokens
+            .input_tokens
+            .map(|input| (input.saturating_sub(cache_read).saturating_sub(cache_write)).max(0))
+    });
+    let total = per_million(plain_input, prices.input)
+        + per_million(tokens.output_tokens, prices.output)
+        + per_million(tokens.reasoning_tokens, prices.reasoning)
+        + per_million(tokens.cache_read_tokens, prices.cache_read)
+        + per_million(tokens.cache_write_tokens, prices.cache_write);
+    (total > 0.0).then_some(total)
+}
+
 /// The `openbutler_usage` table and its three indexes — the source's DDL
 /// (activity-ledger.ts L218-257) verbatim.
 pub(crate) fn usage_schema() -> String {
@@ -302,7 +353,7 @@ impl super::LedgerWriter {
                 generation_id
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                        ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-                       NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?23, ?24, NULL, ?25)",
+                       NULL, ?26, ?27, ?28, ?29, ?30, NULL, ?23, ?24, NULL, ?25)",
             params![
                 row.id,
                 row.at_ms,
@@ -329,6 +380,11 @@ impl super::LedgerWriter {
                 row.cost_usd,
                 row.cost_source,
                 row.response_id,
+                row.prices.as_ref().map(|prices| prices.input),
+                row.prices.as_ref().map(|prices| prices.output),
+                row.prices.as_ref().map(|prices| prices.reasoning),
+                row.prices.as_ref().map(|prices| prices.cache_read),
+                row.prices.as_ref().map(|prices| prices.cache_write),
             ],
         )?;
         Ok(())

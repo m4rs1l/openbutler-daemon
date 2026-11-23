@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::TimeZone;
-use openbutler_daemon::ledger::{LedgerWriter, StepUsageReport, UsageInput, UsageTokens};
+use openbutler_daemon::ledger::{
+    LedgerWriter, StepUsageReport, TokenPrices, UsageInput, UsageTokens,
+};
 use serde_json::json;
 
 fn temp_root(tag: &str) -> PathBuf {
@@ -63,6 +65,7 @@ fn input(run_kind: &'static str, report: StepUsageReport) -> UsageInput {
         workspace_root: Some("C:\\work\\proj".to_owned()),
         provider_id: "gateway".to_owned(),
         model_id: "m".to_owned(),
+        prices: None,
         report,
     }
 }
@@ -260,4 +263,113 @@ fn query(data_dir: &Path, sql: &str) -> Vec<Vec<String>> {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
+}
+
+// --- catalog estimates (owner rule: real prices or no estimate) -------------
+
+fn priced_report(at_ms: i64) -> StepUsageReport {
+    StepUsageReport {
+        started_at_ms: at_ms,
+        ended_at_ms: at_ms + 800,
+        attempt: 1,
+        status: "ok",
+        tokens: UsageTokens {
+            input_tokens: Some(1_000),
+            no_cache_tokens: None,
+            cache_read_tokens: Some(200),
+            cache_write_tokens: Some(100),
+            output_tokens: Some(500),
+            text_tokens: None,
+            reasoning_tokens: Some(50),
+            total_tokens: Some(1_550),
+        },
+        usage_raw: None,
+        provider_metadata: None,
+        response_id: None,
+    }
+}
+
+fn prices() -> TokenPrices {
+    TokenPrices {
+        input: Some(2.5),
+        output: Some(10.0),
+        reasoning: Some(3.0),
+        cache_read: Some(0.25),
+        cache_write: Some(0.5),
+    }
+}
+
+#[test]
+fn catalog_prices_provide_a_labelled_estimate() {
+    let root = temp_root("estimate");
+    let mut ledger = LedgerWriter::open(&root).expect("writer opens");
+    let at_ms = 1_700_000_000_000_i64;
+    let mut usage = input("chat", priced_report(at_ms));
+    usage.prices = Some(prices());
+
+    ledger.record_usage(&usage.row()).expect("row writes");
+    // plain = 1000 - 200 - 100 = 700; 700*2.5 + 500*10 + 50*3 + 200*0.25
+    // + 100*0.5 = 7000 per million-token units -> 0.007 USD.
+    let rows = query(
+        &root,
+        "SELECT cost_source, cost_usd, price_input, price_output, price_reasoning, price_cache_read, price_cache_write FROM openbutler_usage",
+    );
+    assert_eq!(rows[0][0], "catalog-estimate");
+    assert_eq!(rows[0][1], "0.007", "the real per-million math, round_six");
+    assert_eq!(rows[0][2], "2.5", "the prices ride the row");
+    assert_eq!(rows[0][3], "10");
+    assert_eq!(rows[0][4], "3");
+    assert_eq!(rows[0][5], "0.25");
+    assert_eq!(rows[0][6], "0.5");
+}
+
+#[test]
+fn an_inline_bill_beats_the_estimate() {
+    let root = temp_root("bill-wins");
+    let mut ledger = LedgerWriter::open(&root).expect("writer opens");
+    let mut usage = input("chat", report(1_700_000_000_000));
+    usage.prices = Some(prices());
+
+    ledger.record_usage(&usage.row()).expect("row writes");
+    let rows = query(
+        &root,
+        "SELECT cost_source, cost_usd, price_input FROM openbutler_usage",
+    );
+    assert_eq!(rows[0][0], "provider-inline", "a bill is never blended");
+    assert_eq!(rows[0][1], "0.0042");
+    assert_eq!(rows[0][2], "2.5", "prices still ride the row");
+}
+
+#[test]
+fn no_prices_means_no_estimate() {
+    let root = temp_root("no-prices");
+    let mut ledger = LedgerWriter::open(&root).expect("writer opens");
+    let mut usage = input("chat", priced_report(1_700_000_000_000));
+    usage.prices = None;
+
+    ledger.record_usage(&usage.row()).expect("row writes");
+    let rows = query(
+        &root,
+        "SELECT cost_source, cost_usd, price_input FROM openbutler_usage",
+    );
+    assert_eq!(rows[0][0], "none", "an unpriceable model stays unpriced");
+    assert_eq!(rows[0][1], "", "the cost column stays NULL");
+    assert_eq!(rows[0][2], "", "no price columns without prices");
+}
+
+#[test]
+fn zero_tokens_are_no_estimate() {
+    let root = temp_root("zero");
+    let mut ledger = LedgerWriter::open(&root).expect("writer opens");
+    let mut empty = priced_report(1_700_000_000_000);
+    empty.tokens = UsageTokens::default();
+    let mut usage = input("chat", empty);
+    usage.prices = Some(prices());
+
+    ledger.record_usage(&usage.row()).expect("row writes");
+    let rows = query(&root, "SELECT cost_source FROM openbutler_usage");
+    assert_eq!(
+        rows[0][0], "none",
+        "zero total is no estimate (total > 0 rule)"
+    );
 }
