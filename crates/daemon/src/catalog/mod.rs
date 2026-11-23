@@ -44,11 +44,13 @@ use serde_json::{Map, Value};
 mod fetch;
 mod http;
 mod store;
+mod view;
 mod write;
 
 pub use fetch::IndexOptions;
 pub use http::HttpTransport;
 pub use store::{CatalogStore, ProviderSummary};
+pub use view::{CatalogView, ModelSource, ProviderSource, ResolvedModel, ResolvedProvider};
 pub use write::write_catalog_snapshot;
 
 /// Where the catalog comes from (source: `CATALOG_URL`).

@@ -34,6 +34,9 @@ pub(crate) struct Inner {
     /// misses are memoised too (a torn pair stays unknown, not retried).
     pub(crate) loaded: HashMap<String, Option<CatalogProvider>>,
     pub(crate) retry_after_ms: i64,
+    /// The derived view under the revisions it was built for (owner
+    /// design: the hot-path copy follows catalog × settings revisions).
+    pub(crate) view_cache: Option<super::view::CachedView>,
 }
 
 /// The catalog for one data directory: disk-only reads, one injected
@@ -55,6 +58,7 @@ impl CatalogStore {
                 disk_revision: String::new(),
                 loaded: HashMap::new(),
                 retry_after_ms: 0,
+                view_cache: None,
             }),
             transport,
             fetch_gate: tokio::sync::Mutex::new(()),
@@ -164,7 +168,7 @@ impl CatalogStore {
 }
 
 /// The memo path: refresh, hit, read, remember (misses included).
-fn ensured_provider(inner: &mut Inner, provider_id: &str) -> Option<CatalogProvider> {
+pub(crate) fn ensured_provider(inner: &mut Inner, provider_id: &str) -> Option<CatalogProvider> {
     refresh_if_changed(inner);
     if let Some(hit) = inner.loaded.get(provider_id) {
         return hit.clone();
@@ -213,7 +217,7 @@ fn read_provider_line(
 /// Re-reads the index when another process replaced it: the disk
 /// signature moved, so the index and the memo go with it (source:
 /// cached misses and changed byte offsets included).
-fn refresh_if_changed(inner: &mut Inner) {
+pub(crate) fn refresh_if_changed(inner: &mut Inner) {
     let revision = file_signature(&index_path(&inner.data_dir));
     if revision == inner.disk_revision {
         return;

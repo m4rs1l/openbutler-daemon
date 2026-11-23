@@ -40,6 +40,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   twice (declared length first, then streaming), 4 pins in
   `tests/catalog_http.rs` over a loopback server.
 
+- The catalog's derived view (owner design): configured providers and
+  models joined with their catalog lines — settings override catalog per
+  field, custom ids fall back to their own settings, sources labelled
+  (`catalog`/`settings`/`unknown`), `providerOrder` respected. Cached as
+  an `Arc` keyed by both revisions (catalog disk × settings), so a stale
+  derived answer cannot exist; ambient env stays out (it moves no
+  revision). Six pins in `tests/catalog_view.rs`.
+
 - `settings.setup`: the first-run wizard's atomic write, a new contract
   rather than a port (the source wrote the files from the CLI — a client
   write the backend-owned rule forbids). The payload validates first
