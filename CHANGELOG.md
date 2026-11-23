@@ -22,6 +22,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The provider catalog store (`catalog/`, source `provider/catalog.ts`):
+  models.dev data as an immutable NDJSON generation plus a byte-range
+  index — the full payload (measured 6.59 MB / 326 providers / 10 185
+  models) downloads under a 64 MiB runaway guard and is never parsed
+  whole. Reads are revision-watched with a memo that follows
+  cross-process replacements; one provider line verifies its sha256 and
+  its id slot (a torn pair answers unknown, never absent). The fetch
+  flow keeps the source's rules: fresh cache without a transport call,
+  stale cache beating no catalog, a 60 s backoff, and the wrapped
+  URL-bearing failure sentence — transport injected (no HTTP dependency
+  yet). Owner design recorded in `docs/provider-catalog.md`: override
+  resolution and the derived-view plan for hot paths. 12 pins in
+  `tests/catalog_store.rs`.
+
 - `settings.setup`: the first-run wizard's atomic write, a new contract
   rather than a port (the source wrote the files from the CLI — a client
   write the backend-owned rule forbids). The payload validates first
