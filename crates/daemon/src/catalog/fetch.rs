@@ -117,10 +117,7 @@ impl CatalogStore {
     /// payload gate, then the writer.
     fn ingest(&self, body: &[u8], options: &IndexOptions) -> Result<super::CatalogIndex, String> {
         if body.len() as u64 > MAX_CATALOG_BYTES {
-            let limit = MAX_CATALOG_BYTES / (1024 * 1024);
-            return Err(format!(
-                "the provider catalog exceeded the {limit} MiB limit"
-            ));
+            return Err(super::exceeded_limit_sentence());
         }
         let payload: serde_json::Value = serde_json::from_slice(body)
             .map_err(|_| "models.dev returned an invalid JSON payload".to_owned())?;

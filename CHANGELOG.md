@@ -34,7 +34,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   URL-bearing failure sentence — transport injected (no HTTP dependency
   yet). Owner design recorded in `docs/provider-catalog.md`: override
   resolution and the derived-view plan for hot paths. 12 pins in
-  `tests/catalog_store.rs`.
+  `tests/catalog_store.rs`. The real transport (`HttpTransport`,
+  reqwest 0.13 with platform TLS — rustls's aws-lc-rs needs a native
+  toolchain this machine lacks) enforces the 8 s timeout and the ceiling
+  twice (declared length first, then streaming), 4 pins in
+  `tests/catalog_http.rs` over a loopback server.
 
 - `settings.setup`: the first-run wizard's atomic write, a new contract
   rather than a port (the source wrote the files from the CLI — a client

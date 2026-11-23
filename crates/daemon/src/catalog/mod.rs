@@ -42,10 +42,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 mod fetch;
+mod http;
 mod store;
 mod write;
 
 pub use fetch::IndexOptions;
+pub use http::HttpTransport;
 pub use store::{CatalogStore, ProviderSummary};
 pub use write::write_catalog_snapshot;
 
@@ -215,6 +217,15 @@ pub(crate) fn is_generation_name(name: &str) -> bool {
         && middle
             .chars()
             .all(|char| char.is_ascii_hexdigit() || char == '-')
+}
+
+/// The one ceiling sentence: the flow and the transport both refuse with
+/// this exact wording (source: `the provider catalog exceeded the {n} MiB limit`).
+pub(crate) fn exceeded_limit_sentence() -> String {
+    format!(
+        "the provider catalog exceeded the {} MiB limit",
+        MAX_CATALOG_BYTES / (1024 * 1024)
+    )
 }
 
 /// The spellings one gateway-style model id may be cataloged under, in
