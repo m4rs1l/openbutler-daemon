@@ -33,6 +33,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `settings.set-listen` — the saved remote-listener preference
+  (`{listen: "host:port"}` saves, `null` clears), validated by the very
+  rule the host binds by and written through the settings pair save; the
+  live copy is reloaded so nothing reads a stale target. The boot now
+  honors `daemon.listen` when no `--listen` flag is given, and
+  `run --no-listen` refuses the saved value for that run (the
+  `daemonRunOptions` rule) — before this the preference could be saved and
+  never bound. Verified live: `daemon start --listen 127.0.0.1:45290`
+  bound it and persisted it; a plain `daemon start` afterward bound the
+  saved value with no flag; `--no-listen` cleared the section.
 - `config.report` — the manager screen's whole state, computed by the
   daemon (`dispatch/config_report.rs`; sources `runConfig`,
   `summarizeProviders`, `readiness`, `formatApprovalMode`,

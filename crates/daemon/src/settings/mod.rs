@@ -5,6 +5,7 @@
 //! owns what a document may say, `load` is the only reader of the two
 //! files, `save` is the only writer.
 
+pub mod listen;
 mod load;
 mod remember;
 mod save;

@@ -70,6 +70,18 @@ pub fn parse_listen_target(spec: &str) -> Result<ListenTarget, ListenTargetError
     })
 }
 
+/// The listener the host binds: an explicit flag wins, `suppress` refuses
+/// the saved preference for this run, otherwise the saved `daemon.listen`
+/// applies (source: `daemonRunOptions` — the spawn carries the settings
+/// value, so a saved target binds without repeating the flag).
+pub fn effective_listen(flag: Option<&str>, suppress: bool, saved: Option<&str>) -> Option<String> {
+    match (flag, suppress) {
+        (Some(spec), _) => Some(spec.to_owned()),
+        (None, true) => None,
+        (None, false) => saved.map(str::to_owned),
+    }
+}
+
 /// Four groups of one-to-three digits — the shape, not the range: an octet
 /// above 255 parses as a literal here and is refused by the address rules.
 fn is_ipv4_literal(value: &str) -> bool {

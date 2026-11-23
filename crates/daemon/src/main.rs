@@ -30,6 +30,7 @@ fn main() -> ExitCode {
 /// and/or the browser surface when asked for.
 fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
     let mut listen: Option<String> = None;
+    let mut no_listen = false;
     let mut web_enabled = false;
     let mut web_bind: Option<String> = None;
     while let Some(arg) = args.next() {
@@ -41,6 +42,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             },
+            "--no-listen" => no_listen = true,
             "--web" => web_enabled = true,
             "--web-bind" => match args.next() {
                 Some(addr) => {
@@ -61,19 +63,9 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         }
     }
 
-    // One rule for the flag and for a saved `daemon.listen`: an IPv4 literal
-    // in the tailnet or loopback range, port 1-65535 — refused here with the
-    // documented message instead of surfacing as a bind failure.
-    let listen = match listen {
-        Some(spec) => match openbutler_daemon::listen_target::parse_listen_target(&spec) {
-            Ok(target) => Some(format!("{}:{}", target.host, target.port)),
-            Err(error) => {
-                eprintln!("openbutler-daemon: {error}");
-                return ExitCode::FAILURE;
-            }
-        },
-        None => None,
-    };
+    // One rule for the flag and for a saved `daemon.listen`: the parse
+    // runs after the settings load below, because a saved target is the
+    // value `daemonRunOptions` would have spawned with.
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -108,6 +100,31 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             eprintln!("openbutler-daemon: {error}");
             return ExitCode::FAILURE;
         }
+        // The listener: the flag wins, `--no-listen` suppresses the saved
+        // preference, and otherwise `settings.daemon.listen` applies — the
+        // value the CLI's `--listen` persisted for every later boot
+        // (source: `daemonRunOptions`). Parsed here so a saved target is
+        // held to the same rule as a typed one.
+        let saved_listen = {
+            let live = host.settings();
+            live.as_ref()
+                .and_then(|loaded| loaded.store.daemon.as_ref())
+                .map(|daemon| daemon.listen.clone())
+        };
+        let listen = match openbutler_daemon::listen_target::effective_listen(
+            listen.as_deref(),
+            no_listen,
+            saved_listen.as_deref(),
+        ) {
+            Some(spec) => match openbutler_daemon::listen_target::parse_listen_target(&spec) {
+                Ok(target) => Some(format!("{}:{}", target.host, target.port)),
+                Err(error) => {
+                    eprintln!("openbutler-daemon: {error}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => None,
+        };
         // The models.dev catalog: one store per data dir over the real
         // HTTP transport; the fetch runs lazily on the first price read
         // (usage accounting), so boot never waits on the network.
