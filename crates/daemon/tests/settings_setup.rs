@@ -216,6 +216,11 @@ fn the_pair_is_written_split_and_merges_in_memory() {
     assert_eq!(settings.provider_order, vec!["mock".to_owned()]);
     assert_eq!(settings.default_provider, "mock");
     assert_eq!(settings.default_model, "mock/model-a");
+    assert_eq!(
+        settings.providers["mock"].models.as_deref(),
+        Some(&["mock/model-a".to_owned()][..]),
+        "setDefaultModel remembers the pair on the provider (config-edit.ts L74)"
+    );
     let secrets = load_secrets(&dir).unwrap();
     assert_eq!(secrets.providers["mock"].keys, vec![KEY.to_owned()]);
 }
@@ -274,6 +279,39 @@ fn second_run_merges_appends_order_and_replaces_keys() {
         "the untouched provider keeps its keys"
     );
     assert_eq!(settings.default_provider, "beta");
+}
+
+#[test]
+fn the_outgoing_default_pair_is_remembered() {
+    let dir = temp_data_dir("setup-outgoing");
+    let first = setup(
+        &dir,
+        "outgoing-1",
+        json!({
+            "providers": [provider("mock", vec![json!(KEY)])],
+            "defaultProvider": "mock",
+            "defaultModel": "model-a",
+        }),
+    );
+    assert!(matches!(first, DaemonResponse::Success { .. }));
+    let second = setup(
+        &dir,
+        "outgoing-2",
+        json!({
+            "providers": [provider("mock", vec![json!(KEY)])],
+            "defaultProvider": "mock",
+            "defaultModel": "model-b",
+        }),
+    );
+    assert!(matches!(second, DaemonResponse::Success { .. }));
+
+    let settings = load_settings(&dir).unwrap();
+    assert_eq!(settings.default_model, "model-b");
+    assert_eq!(
+        settings.providers["mock"].models.as_deref(),
+        Some(&["model-a".to_owned(), "model-b".to_owned()][..]),
+        "the outgoing pair is remembered before the new one (config-edit.ts L74)"
+    );
 }
 
 #[test]

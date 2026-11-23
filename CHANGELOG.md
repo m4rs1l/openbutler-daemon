@@ -30,8 +30,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   save: keys replace in `config.yaml`, `settings.yaml` never sees them,
   an absent `url`/`npm` keeps the previous value (`withProviderFields`
   merge, `settings.ts` L298), the order appends without duplicates, and
-  `host.reload_settings` refreshes the cache. 7 pins in
-  `tests/settings_setup.rs` (refusals, split contract, merge, boundary).
+  `host.reload_settings` refreshes the cache. Defaults move as a pair
+  and both pairs are remembered on the provider (`setDefaultModel`,
+  `config-edit.ts` L74), so history and defaults can never disagree.
+  8 pins in `tests/settings_setup.rs` (refusals, split contract, merge,
+  boundary, remember).
 
 - The daemon entry takes the source's start lock (`daemon.ts`
   `acquireDaemonStartLock`): `daemon.start.lock` in the data dir is

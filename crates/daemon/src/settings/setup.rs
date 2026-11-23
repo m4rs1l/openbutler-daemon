@@ -15,7 +15,10 @@ use openbutler_protocol::DaemonRequest;
 use serde_json::{Value, json};
 
 use super::schema::ProviderState;
-use super::{ProviderSecrets, load_secrets, load_settings, save_settings_with_secrets};
+use super::{
+    ProviderSecrets, load_secrets, load_settings, remember_provider_model,
+    save_settings_with_secrets,
+};
 use crate::dispatch::Host;
 
 /// Applies a setup payload and saves both documents atomically.
@@ -147,11 +150,24 @@ pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<V
             loaded.store.provider_order.push(entry.id.clone());
         }
     }
-    if let Some(provider) = default_provider {
-        loaded.store.default_provider = provider;
-    }
-    if let Some(model) = default_model {
-        loaded.store.default_model = model;
+    // `setDefaultModel` (config-edit.ts L74): the pair moves together and
+    // both pairs are remembered, so provider history and the defaults can
+    // never disagree. One half without the other keeps the other half —
+    // the action's permissive contract; the wizard always sends both.
+    match (default_provider, default_model) {
+        (Some(provider), Some(model)) => {
+            let outgoing = (
+                loaded.store.default_provider.clone(),
+                loaded.store.default_model.clone(),
+            );
+            remember_provider_model(&mut loaded.store, &outgoing.0, &outgoing.1)?;
+            remember_provider_model(&mut loaded.store, &provider, &model)?;
+            loaded.store.default_provider = provider;
+            loaded.store.default_model = model;
+        }
+        (Some(provider), None) => loaded.store.default_provider = provider,
+        (None, Some(model)) => loaded.store.default_model = model,
+        (None, None) => {}
     }
 
     save_settings_with_secrets(data_dir, &mut loaded, &secrets)
