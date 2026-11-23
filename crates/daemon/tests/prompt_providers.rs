@@ -512,9 +512,11 @@ fn skill_roots_order_and_simple_paths_follow_the_source() {
 }
 
 #[test]
-fn scratch_root_is_temp_openbutler_and_the_local_day() {
+fn scratch_root_is_temp_openbutler_daemon_and_the_local_day() {
     let scratch = scratch_root();
-    assert!(scratch.starts_with(std::env::temp_dir().join("openbutler")));
+    // The stack's own scratch name: never the legacy Node install's
+    // `temp/openbutler` (full separation from the old data).
+    assert!(scratch.starts_with(std::env::temp_dir().join("openbutler-daemon")));
     let name = scratch.file_name().unwrap().to_string_lossy();
     assert_eq!(name.len(), 10, "YYYY-MM-DD, got {name}");
     let bytes = name.as_bytes();

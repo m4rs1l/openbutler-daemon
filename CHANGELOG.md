@@ -5,6 +5,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The data directory defaults to `openbutler-daemon` on every platform
+  (Windows `%LOCALAPPDATA%\openbutler-daemon`, macOS Application
+  Support, XDG), and the scratch root to `<tmpdir>/openbutler-daemon`
+  — the Rust stack never reads or writes the legacy Node install's
+  `openbutler` directory: separate config, state, sessions, endpoint
+  (the pipe name derives from the dir) and scratch. `OPENBUTLER_DATA_DIR`
+  still overrides both rules. The rename exposed a second copy of
+  `scratch_root` in `agent/providers.rs` (the prompt context read one
+  path while turn inputs used the other): it is now a re-export of
+  `config::scratch_root`, one authority, divergence documented at the
+  re-export. Verified live: start/status/stop cycle against the new
+  default dir, endpoint independent of a legacy host.
+
 ### Added
 
 - The daemon entry takes the source's start lock (`daemon.ts`

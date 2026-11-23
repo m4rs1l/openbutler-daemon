@@ -580,9 +580,9 @@ pub fn openbutler_skill_dir(data_root: &Path) -> PathBuf {
 
 /// `getScratchRoot`: the host temp directory + `openbutler/<local-day>`,
 /// local calendar date as the source builds it.
-pub fn scratch_root() -> PathBuf {
-    let day = chrono::Local::now().format("%Y-%m-%d");
-    std::env::temp_dir()
-        .join("openbutler")
-        .join(day.to_string())
-}
+/// The dated scratch root — the one authority is [`crate::config`];
+/// this re-export keeps the prompt-context imports stable. The body was
+/// never allowed to live twice: the two copies diverged the moment the
+/// data directory was separated from the legacy install, and whichever
+/// copy a reader picked decided which path the agent was told about.
+pub use crate::config::scratch_root;
