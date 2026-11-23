@@ -25,6 +25,27 @@ const NEVER_LOADED_SUFFIX: &str = ". Load the settings first, change the loaded 
 /// and re-reads the secrets file first: an unreadable store is an error,
 /// never an empty one.
 pub fn save_settings(data_dir: &Path, loaded: &mut LoadedSettings) -> Result<(), SettingsError> {
+    save_pair(data_dir, loaded, None)
+}
+
+/// Saves the settings pair with an explicit secrets document — the
+/// setup path changes provider keys in the same decision as the store,
+/// so `config.yaml` is built from THIS document instead of re-reading
+/// the previous file (the plain save keeps re-reading: it must never
+/// resurrect stale keys over a concurrent key change).
+pub fn save_settings_with_secrets(
+    data_dir: &Path,
+    loaded: &mut LoadedSettings,
+    secrets: &SecretsStore,
+) -> Result<(), SettingsError> {
+    save_pair(data_dir, loaded, Some(secrets))
+}
+
+fn save_pair(
+    data_dir: &Path,
+    loaded: &mut LoadedSettings,
+    explicit_secrets: Option<&SecretsStore>,
+) -> Result<(), SettingsError> {
     let lock = transaction::acquire(data_dir, transaction::default_wait())?;
     let disk = disk_settings_revision(data_dir)?;
     match loaded.revision.as_deref() {
@@ -49,7 +70,10 @@ pub fn save_settings(data_dir: &Path, loaded: &mut LoadedSettings) -> Result<(),
         }
     }
 
-    let secrets = load_secrets_unlocked(data_dir)?;
+    let secrets = match explicit_secrets {
+        Some(secrets) => secrets.clone(),
+        None => load_secrets_unlocked(data_dir)?,
+    };
     let settings_yaml = serialize(&build_settings_document(&loaded.store)?)?;
     let config_yaml = serialize(&build_secrets_document(&secrets)?)?;
     lock.commit_pair(data_dir, &settings_yaml, &config_yaml)?;

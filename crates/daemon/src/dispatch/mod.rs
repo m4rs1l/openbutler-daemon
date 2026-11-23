@@ -34,6 +34,7 @@ const PRE_ATTACH: &[&str] = &[
     "pair.create",
     "stop",
     "settings.reload",
+    "settings.setup",
     "permissions.set-mode",
     "team.delivery",
     "team.send",
@@ -328,6 +329,13 @@ pub fn handle(
                 serde_json::to_value(host.status()).unwrap_or_else(|_| json!({})),
             ),
             Err(error) => failure(request, error.to_string()),
+        },
+        // The wizard's atomic write: a new contract (the source wrote the
+        // files from the CLI), so the payload is validated here and the
+        // settings module owns the merge and the pair save.
+        "settings.setup" => match crate::settings::setup::handle(host, data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
         },
         "permissions.set-mode" => match permissions::set_mode(host, data_dir, request) {
             Ok(payload) => success(request, payload),

@@ -9,11 +9,12 @@ mod load;
 mod remember;
 mod save;
 pub mod schema;
+pub mod setup;
 pub mod transaction;
 
 pub use load::{config_path, load_secrets, load_settings};
 pub use remember::remember_provider_model;
-pub use save::save_settings;
+pub use save::{save_settings, save_settings_with_secrets};
 pub use schema::{
     ApprovalMode, CustodianSettings, DaemonSettings, McpServerState, ModalCredentials,
     ProviderModelSpec, ProviderSecrets, ProviderState, RoleBinding, SecretsStore, SettingsStore,

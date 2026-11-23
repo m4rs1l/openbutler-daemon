@@ -22,6 +22,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `settings.setup`: the first-run wizard's atomic write, a new contract
+  rather than a port (the source wrote the files from the CLI — a client
+  write the backend-owned rule forbids). The payload validates first
+  (providers array ≤32, per-entry `id`/`keys` shapes, bounded `url`/`npm`
+  and defaults with byte-exact refusal wording), then one journaled pair
+  save: keys replace in `config.yaml`, `settings.yaml` never sees them,
+  an absent `url`/`npm` keeps the previous value (`withProviderFields`
+  merge, `settings.ts` L298), the order appends without duplicates, and
+  `host.reload_settings` refreshes the cache. 7 pins in
+  `tests/settings_setup.rs` (refusals, split contract, merge, boundary).
+
 - The daemon entry takes the source's start lock (`daemon.ts`
   `acquireDaemonStartLock`): `daemon.start.lock` in the data dir is
   created exclusively before anything is built, a contender gets the
