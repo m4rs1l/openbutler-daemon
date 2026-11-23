@@ -20,6 +20,7 @@
 //! the catalog and hands them in, so this module stays catalog-agnostic.
 
 use chrono::TimeZone;
+use rusqlite::OptionalExtension;
 use rusqlite::params;
 use serde_json::Value;
 
@@ -335,6 +336,51 @@ pub(crate) fn usage_schema() -> String {
     CREATE INDEX IF NOT EXISTS openbutler_usage_session_at_idx ON openbutler_usage(session_id, at_ms);
     CREATE INDEX IF NOT EXISTS openbutler_usage_model_at_idx ON openbutler_usage(provider_id, model_id, at_ms);"
         .to_owned()
+}
+
+/// The last usage window's identities, oldest first — everything the
+/// default-model picker needs and nothing else (`pickMostUsedModel`,
+/// default-model.ts L27-41). Read-only: a missing database is an empty
+/// list, never a new file.
+pub fn usage_pick_rows(
+    data_dir: &std::path::Path,
+    since_ms: i64,
+) -> Result<Vec<UsagePick>, LedgerError> {
+    let Some(connection) = super::feed::open_readonly(data_dir)? else {
+        return Ok(Vec::new());
+    };
+    let present: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'openbutler_usage'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if present.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection.prepare(
+        "SELECT provider_id, model_id, at_ms FROM openbutler_usage WHERE at_ms >= ?1 ORDER BY at_ms",
+    )?;
+    let rows = statement
+        .query_map([since_ms], |row| {
+            Ok(UsagePick {
+                provider_id: row.get(0)?,
+                model_id: row.get(1)?,
+                at_ms: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// One usage row's identity and time, as the default-model picker reads
+/// it (`pickMostUsedModel`, default-model.ts L27).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsagePick {
+    pub provider_id: String,
+    pub model_id: String,
+    pub at_ms: i64,
 }
 
 impl super::LedgerWriter {

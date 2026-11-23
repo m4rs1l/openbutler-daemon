@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The daemon clock has one reading: `ledger::now_ms` (epoch
+  milliseconds) — `auth`, `sidecar` and `schedule` had three copies of the
+  same `SystemTime`/`chrono` body and now delegate. Trigger math, pairing
+  codes and idle timers can no longer disagree about "now".
+- A fresh draft's model is resolved through the shared default chain
+  (`default_model::resolve_role_model`, the `resolveRoleModel('agent')`
+  port) instead of copying the explicit pair out of settings: the explicit
+  default, else the most-used usable model from the 90-day usage window.
+  A `config` screen and a `run` can no longer disagree about which model
+  the machine will use.
+
 - The data directory defaults to `openbutler-daemon` on every platform
   (Windows `%LOCALAPPDATA%\openbutler-daemon`, macOS Application
   Support, XDG), and the scratch root to `<tmpdir>/openbutler-daemon`
@@ -21,6 +32,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   default dir, endpoint independent of a legacy host.
 
 ### Added
+
+- `config.report` — the manager screen's whole state, computed by the
+  daemon (`dispatch/config_report.rs`; sources `runConfig`,
+  `summarizeProviders`, `readiness`, `formatApprovalMode`,
+  `describeReasoningPreference`, read 2026-11-24): MCP rows, default
+  workspace, the approval-mode label, the provider table (stored order,
+  kind, key count, tool-capable count under the source's null-vs-zero
+  rule, the default row's model), the default chain with its source, the
+  reasoning line, and readiness with the source's sentences. Counts only —
+  never key material — and it passes the view-only gate. Payload-free, so
+  no protocol change; 13 pins in `tests/config_report.rs`. Verified live in an isolated data dir: an empty machine prints the source's empty screen; with two providers the first run shows `unknown` plus the download note, and after the background fetch (a 6.9 MB generation) the second run shows the real count (`openai` 36 tool-capable models) while the custom provider stays `unknown`.
+- `default_model` (`resolveDefaultModel`/`pickMostUsedModel`/
+  `resolveRoleModel` ports): the explicit pair, else the most-used usable
+  model inside the 90-day window — usability is the source's rule
+  (`hasCredential` OR a catalog-declared env var that is set, plus an
+  enabled provider and a source of truth). `ledger::usage_pick_rows` reads
+  the window read-only; a missing database is an empty list.
+- The catalog now actually downloads: `Host::warm_catalog` starts one
+  background fetch (own thread, own current-thread runtime, compare-exchange
+  so one per process) when the index is not in hand, and `config.report`
+  calls it — before this, nothing in production ever called `get_index`, so
+  prices and tool counts could never appear. The report answers
+  immediately (`catalogLoaded`/`catalogLoading`) instead of blocking on the
+  network the way the source command did.
 
 - The provider catalog store (`catalog/`, source `provider/catalog.ts`):
   models.dev data as an immutable NDJSON generation plus a byte-range

@@ -4,11 +4,12 @@
 //! and answers as one protocol response — no other module constructs
 //! responses. The shared record (`Host`, `DispatchState`) lives in
 //! `host.rs`; per-domain actions that outgrew the router live in
-//! `attach.rs`, `session_control.rs`, `permissions.rs`, `schedule.rs`
-//! and `session_send.rs`.
+//! `attach.rs`, `config_report.rs`, `session_control.rs`,
+//! `permissions.rs`, `schedule.rs` and `session_send.rs`.
 
 mod attach;
 mod commands;
+mod config_report;
 pub mod fanout;
 mod host;
 mod permissions;
@@ -31,6 +32,7 @@ const CUSTODIAN_LOAD_ERROR: &str =
 /// only while the connection is unattached (L3303).
 const PRE_ATTACH: &[&str] = &[
     "status",
+    "config.report",
     "pair.create",
     "stop",
     "settings.reload",
@@ -52,6 +54,7 @@ const PRE_ATTACH: &[&str] = &[
 /// The view-only allow-list (daemon-host.ts L139-149): everything else
 /// is refused on a read-only attachment before its handler runs.
 const VIEW_ONLY_ACTIONS: &[&str] = &[
+    "config.report",
     "session.list",
     "session.entries-range",
     "session.find-attachment",
@@ -334,6 +337,12 @@ pub fn handle(
         // files from the CLI), so the payload is validated here and the
         // settings module owns the merge and the pair save.
         "settings.setup" => match crate::settings::setup::handle(host, data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        // The manager screen's whole state: host-wide, needs no binding, and
+        // safe on a view-only attachment (counts, never key material).
+        "config.report" => match config_report::report(host, data_dir) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },

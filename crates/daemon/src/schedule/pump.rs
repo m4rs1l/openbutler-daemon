@@ -275,7 +275,7 @@ fn prepare_firing(
     // bound to the schedule's own workspace (the source's
     // `getWorkspace(configuredRoot)` feeds exactly this session).
     if state::record_path(data_dir, &target).is_none() {
-        let mut record = crate::dispatch::session_write::create_draft(host);
+        let mut record = crate::dispatch::session_write::create_draft(host, data_dir);
         record.meta.id = target.clone();
         record.meta.workspace_root = Some(workspace_root.clone());
         state::save_session(data_dir, &record, true).map_err(|error| error.to_string())?;

@@ -441,9 +441,8 @@ pub fn sidecar_call(id: &str, provider_key: &str) -> SidecarCall {
     }
 }
 
+/// Epoch milliseconds — the daemon-wide reading (`ledger::now_ms`), kept
+/// unsigned for the idle-timer atomics.
 pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_millis() as u64)
-        .unwrap_or(0)
+    crate::ledger::now_ms().max(0) as u64
 }

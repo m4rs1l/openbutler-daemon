@@ -119,7 +119,7 @@ pub fn attach_chat(
         {
             return Err("Wait for the current run before creating a new chat.".to_owned());
         }
-        let mut draft = super::session_write::create_draft(host);
+        let mut draft = super::session_write::create_draft(host, data_dir);
         // An explicit workspaceRoot becomes the draft's workspace (the
         // source passes it into createSession).
         if let Some(root) = request.payload.get("workspaceRoot").and_then(Value::as_str) {

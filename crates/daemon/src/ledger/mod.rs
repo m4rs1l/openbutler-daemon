@@ -13,7 +13,9 @@ mod writer;
 pub use events::{EventInput, OBSERVED_EVENT_STATES};
 pub use feed::{list_actions, list_events, retry_event, schedule_events};
 pub use state::StateReader;
-pub use usage::{StepUsageReport, TokenPrices, UsageInput, UsageRow, UsageTokens};
+pub use usage::{
+    StepUsageReport, TokenPrices, UsageInput, UsagePick, UsageRow, UsageTokens, usage_pick_rows,
+};
 pub use writer::{LedgerWriter, TOOL_ACTION_STATES, ToolActionState, ToolActionUpdate};
 
 /// One refusal from the ledger surface. The message *is* the contract.
@@ -35,4 +37,10 @@ pub enum LedgerError {
 /// The retry marker's timestamp, shaped like JS `toISOString()`.
 pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// The daemon clock in epoch milliseconds — one reading, shared by pairing
+/// codes, scheduler triggers, sidecar idle timers, and usage windows.
+pub(crate) fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }

@@ -200,18 +200,41 @@ fn current_record(data_dir: &Path, state: &DispatchState) -> Result<SessionRecor
 /// `createSession` (session-store.ts L254): the fresh draft — hidden from
 /// the list until it carries a user message, exactly like the source's
 /// unsaved controller from the reader's side.
-pub(crate) fn create_draft(host: &Host) -> SessionRecord {
-    let (provider_id, model_id, workspace_root) = host
-        .settings()
-        .as_ref()
-        .map(|loaded| {
-            (
-                loaded.store.default_provider.clone(),
-                loaded.store.default_model.clone(),
-                loaded.store.default_workspace_root.clone(),
+///
+/// The model comes from the shared resolver (`resolveRoleModel`,
+/// agent-runtime.ts L144): the role's usable assignment, else the explicit
+/// default, else the most-used usable model from recorded usage. Copying
+/// one half of the pair here would let the screen and a run disagree.
+pub(crate) fn create_draft(host: &Host, data_dir: &Path) -> SessionRecord {
+    let settings = host.settings();
+    let (provider_id, model_id, workspace_root) = match settings.as_ref() {
+        Some(loaded) => {
+            let catalog = host.catalog();
+            let rows = crate::ledger::usage_pick_rows(
+                data_dir,
+                crate::ledger::now_ms() - crate::default_model::USAGE_WINDOW_MS,
             )
-        })
-        .unwrap_or_else(|| (String::new(), String::new(), None));
+            .unwrap_or_default();
+            match crate::default_model::resolve_role_model(
+                &loaded.store,
+                catalog.as_deref(),
+                &rows,
+                "agent",
+            ) {
+                Some(choice) => (
+                    choice.provider_id,
+                    choice.model_id,
+                    loaded.store.default_workspace_root.clone(),
+                ),
+                None => (
+                    loaded.store.default_provider.clone(),
+                    loaded.store.default_model.clone(),
+                    loaded.store.default_workspace_root.clone(),
+                ),
+            }
+        }
+        None => (String::new(), String::new(), None),
+    };
     let now = now_iso();
     SessionRecord {
         meta: SessionMeta {
@@ -271,7 +294,7 @@ pub fn new_chat(
     {
         return Err("Invalid project ID.".to_owned());
     }
-    let draft = create_draft(host);
+    let draft = create_draft(host, data_dir);
     let id = draft.meta.id.clone();
     state::save_session(data_dir, &draft, true).map_err(|error| error.to_string())?;
     state.current_session = Some(id.clone());

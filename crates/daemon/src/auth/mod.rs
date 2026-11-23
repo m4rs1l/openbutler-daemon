@@ -10,7 +10,6 @@ pub mod store;
 
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use pair::PairingCodes;
 pub use store::{Minted, TokenStore};
@@ -56,12 +55,10 @@ pub const REMOTE_AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// Pairing codes live five minutes. (`PAIRING_CODE_TTL_MS = 5 * 60_000`.)
 pub(crate) const PAIRING_CODE_TTL_MS: u64 = 5 * 60_000;
 
-/// Epoch milliseconds — the clock `pair.create` and the gate share.
+/// Epoch milliseconds — the clock `pair.create` and the gate share
+/// (the daemon-wide reading lives in `ledger::now_ms`).
 pub(crate) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_millis() as u64)
-        .unwrap_or(0)
+    crate::ledger::now_ms().max(0) as u64
 }
 
 /// Lowercase hex, the encoding every secret id, salt, and code uses.

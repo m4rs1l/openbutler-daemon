@@ -8,6 +8,7 @@ pub mod auth;
 pub mod catalog;
 pub mod compaction;
 pub mod config;
+pub mod default_model;
 pub mod dispatch;
 pub mod ledger;
 pub mod listen_target;

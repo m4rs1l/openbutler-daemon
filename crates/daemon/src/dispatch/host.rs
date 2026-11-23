@@ -114,6 +114,10 @@ pub struct Host {
     /// Optional so tests that do not exercise catalog behavior stay
     /// unchanged — without it, usage rows keep `cost_source: none`.
     catalog: std::sync::OnceLock<std::sync::Arc<crate::catalog::CatalogStore>>,
+    /// A catalog download is in flight (the click-free "load it" path of
+    /// `config.report`). Compare-exchange, so one download per process at a
+    /// time and never two threads racing the same generation.
+    catalog_warm: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Host {
@@ -137,6 +141,7 @@ impl Host {
             self_ref: std::sync::OnceLock::new(),
             stop_generations: std::sync::Mutex::new(std::collections::HashMap::new()),
             catalog: std::sync::OnceLock::new(),
+            catalog_warm: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -148,6 +153,51 @@ impl Host {
     /// The catalog, once boot has installed it.
     pub fn catalog(&self) -> Option<std::sync::Arc<crate::catalog::CatalogStore>> {
         self.catalog.get().cloned()
+    }
+
+    /// Starts one background catalog download when nothing is cached and
+    /// none is running — the config screen's "load it" path. Returns `true`
+    /// while a download is in flight (started now, or already running).
+    ///
+    /// Dispatch is synchronous, so the download runs on its own thread with
+    /// its own current-thread runtime: no connection waits on the network,
+    /// and no caller needs a runtime context.
+    pub fn warm_catalog(&self) -> bool {
+        let Some(catalog) = self.catalog() else {
+            return false;
+        };
+        if catalog.is_loaded() {
+            return false;
+        }
+        if self.catalog_warm.swap(true, Ordering::AcqRel) {
+            return true;
+        }
+        struct SharedReset(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for SharedReset {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let flag = Arc::clone(&self.catalog_warm);
+        std::thread::spawn(move || {
+            let _reset = SharedReset(flag);
+            let built = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            let outcome = match built {
+                Ok(runtime) => runtime
+                    .block_on(
+                        catalog
+                            .get_index(&crate::catalog::IndexOptions::at(crate::ledger::now_ms())),
+                    )
+                    .map(|_| ()),
+                Err(error) => Err(error.to_string()),
+            };
+            if let Err(error) = outcome {
+                eprintln!("openbutler-daemon: the provider catalog could not be loaded: {error}");
+            }
+        });
+        true
     }
 
     /// The live settings copy, if it has been loaded yet. `None` means

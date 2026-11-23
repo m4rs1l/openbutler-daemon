@@ -103,9 +103,9 @@ pub struct ScheduleRunner {
     runtime: tokio::runtime::Handle,
 }
 
-pub(crate) fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
+/// Epoch milliseconds — the daemon-wide clock, re-exported so the trigger
+/// code below reads one name.
+pub(crate) use crate::ledger::now_ms;
 
 /// `new Date(ms).toISOString()` — UTC with milliseconds.
 fn to_iso(ms: i64) -> String {
