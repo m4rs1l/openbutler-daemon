@@ -86,6 +86,21 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         }
     };
     runtime.block_on(async {
+        // Source order (`runDaemonProcess`): the entry lock first, then
+        // the host's own answer, before anything is built. The binding
+        // lives to the end of this block, so every path out — failure,
+        // refusal, or a clean stop — releases it through `Drop`.
+        let _start_lock = match openbutler_daemon::start_lock::acquire(&config::data_dir()).await {
+            Ok(lock) => lock,
+            Err(message) => {
+                eprintln!("openbutler-daemon: {message}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if let Some(pid) = openbutler_daemon::start_lock::host_pid(&config::data_dir()).await {
+            eprintln!("openbutler-daemon: An OpenButler host is already running (pid {pid}).");
+            return ExitCode::FAILURE;
+        }
         let host = Arc::new(Host::new());
         // Boot validates and loads the live settings copy; a broken store
         // refuses to start rather than running on defaults.

@@ -15,6 +15,7 @@ pub mod server;
 pub mod settings;
 pub mod shape;
 pub mod sidecar;
+pub mod start_lock;
 pub mod state;
 pub mod tailnet;
 pub mod team;

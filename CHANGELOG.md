@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The daemon entry takes the source's start lock (`daemon.ts`
+  `acquireDaemonStartLock`): `daemon.start.lock` in the data dir is
+  created exclusively before anything is built, a contender gets the
+  status-first answer (`An OpenButler host is already running (pid …)`,
+  probed over the endpoint), then the age-based stale rule, then the
+  deadline sentence — released token-checked on every path out via
+  `Drop`. Deliberate divergences are documented in the module: no
+  heartbeat and no owner-pid liveness check (this build keeps no pid
+  record; a hard kill within 45 s of boot costs one wait, never a
+  wrong answer). Four pins in `tests/start_lock.rs` including a real
+  second entry against a live host.
 - `attach` opens a new chat: `newChatSession: true` on a fresh
   connection now creates the draft through the same disk path
   `session.new` uses (busy gate included), binds the workspace, and
