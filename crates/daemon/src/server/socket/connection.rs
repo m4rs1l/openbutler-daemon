@@ -53,22 +53,54 @@ impl Drop for ClientGuard {
     }
 }
 
+/// Tracks this connection's roster entry so a host notification never
+/// reaches a closed socket (the source removed a socket on close).
+struct RosterGuard {
+    host: Arc<Host>,
+    id: u64,
+}
+
+impl Drop for RosterGuard {
+    fn drop(&mut self) {
+        self.host.clients().unregister(self.id);
+    }
+}
+
 /// Sends frames to the writer task, enforcing the byte budget first.
 #[derive(Clone)]
 struct Outbound {
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<(Vec<u8>, Option<tokio::sync::oneshot::Sender<()>>)>,
     queued: Arc<AtomicUsize>,
 }
 
 impl Outbound {
     async fn send(&self, frame: Vec<u8>) -> Result<(), ()> {
         let length = frame.len();
-        let previous = self.queued.fetch_add(length, Ordering::SeqCst);
-        if previous + length > MAX_QUEUED_OUTPUT_BYTES {
+        self.open_budget(length)?;
+        if self.tx.send((frame, None)).await.is_err() {
             self.queued.fetch_sub(length, Ordering::SeqCst);
             return Err(());
         }
-        if self.tx.send(frame).await.is_err() {
+        Ok(())
+    }
+
+    /// Queues the frame and waits until the writer task has written it:
+    /// the response that triggers a shutdown must be on the wire first
+    /// (the source's `writeResponse` before `setImmediate(requestStop)`).
+    async fn send_confirmed(&self, frame: Vec<u8>) -> Result<(), ()> {
+        let length = frame.len();
+        self.open_budget(length)?;
+        let (ack, wait) = tokio::sync::oneshot::channel();
+        if self.tx.send((frame, Some(ack))).await.is_err() {
+            self.queued.fetch_sub(length, Ordering::SeqCst);
+            return Err(());
+        }
+        wait.await.map_err(|_| ())
+    }
+
+    fn open_budget(&self, length: usize) -> Result<(), ()> {
+        let previous = self.queued.fetch_add(length, Ordering::SeqCst);
+        if previous + length > MAX_QUEUED_OUTPUT_BYTES {
             self.queued.fetch_sub(length, Ordering::SeqCst);
             return Err(());
         }
@@ -86,7 +118,7 @@ impl crate::dispatch::fanout::EventSink for Outbound {
             self.queued.fetch_sub(length, Ordering::SeqCst);
             return false;
         }
-        if self.tx.try_send(frame).is_err() {
+        if self.tx.try_send((frame, None)).is_err() {
             self.queued.fetch_sub(length, Ordering::SeqCst);
             return false;
         }
@@ -107,21 +139,32 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+    let (tx, mut rx) = mpsc::channel::<(Vec<u8>, Option<tokio::sync::oneshot::Sender<()>>)>(64);
     let queued = Arc::new(AtomicUsize::new(0));
 
     let write_budget = queued.clone();
     let writer_task = tokio::spawn(async move {
-        while let Some(frame) = rx.recv().await {
+        while let Some((frame, ack)) = rx.recv().await {
             if writer.write_all(&frame).await.is_err() {
                 break;
             }
             write_budget.fetch_sub(frame.len(), Ordering::SeqCst);
+            if let Some(ack) = ack {
+                let _ = ack.send(());
+            }
         }
         let _ = writer.shutdown().await;
     });
 
     let outbound = Outbound { tx, queued };
+    // One sink shared by dispatch and the host roster: the stop broadcast
+    // skips the requester by pointer identity, so both must be the same Arc.
+    let sink: crate::dispatch::fanout::SharedSink = Arc::new(outbound.clone());
+    let roster_id = host.clients().register(sink.clone());
+    let roster = RosterGuard {
+        host: host.clone(),
+        id: roster_id,
+    };
 
     let mut decoder = FrameDecoder::new(MAX_DAEMON_FRAME_BYTES);
     let mut buffer = vec![0u8; 16 * 1024];
@@ -129,7 +172,7 @@ where
     // The chat this connection carries between requests (`session.load`).
     let mut dispatch_state = dispatch::DispatchState::new();
     // Every frame this connection may publish (`attach` subscribes it).
-    dispatch_state.set_sink(Arc::new(outbound.clone()));
+    dispatch_state.set_sink(sink);
 
     if let Admission::Remote { auth_timeout } = admission {
         let first = tokio::time::timeout(
@@ -145,6 +188,9 @@ where
         if !admitted {
             return {
                 drop(dispatch_state);
+                // The roster's sink clone keeps the writer's channel open:
+                // it must leave before the join or the join never returns.
+                drop(roster);
                 drop_connection(outbound, writer_task).await
             };
         }
@@ -155,6 +201,7 @@ where
         else {
             return {
                 drop(dispatch_state);
+                drop(roster);
                 drop_connection(outbound, writer_task).await
             };
         };
@@ -162,13 +209,18 @@ where
         let Ok(mut bytes) = serde_json::to_vec(&response) else {
             return {
                 drop(dispatch_state);
+                drop(roster);
                 drop_connection(outbound, writer_task).await
             };
         };
         bytes.push(b'\n');
-        if outbound.send(bytes).await.is_err() {
+        // The response is confirmed written before anything it triggers
+        // happens: a stop's shutdown must never beat its own ack (the
+        // source wrote the response, then asked for the stop next tick).
+        if outbound.send_confirmed(bytes).await.is_err() {
             return {
                 drop(dispatch_state);
+                drop(roster);
                 drop_connection(outbound, writer_task).await
             };
         }
@@ -178,6 +230,7 @@ where
             if outbound.send(frame).await.is_err() {
                 return {
                     drop(dispatch_state);
+                    drop(roster);
                     drop_connection(outbound, writer_task).await
                 };
             }
@@ -185,8 +238,14 @@ where
         if outbound.tx.is_closed() {
             break; // writer task ended: the peer is gone
         }
+        // A stop/restart asked for the end only after its ack went out.
+        if dispatch_state.take_shutdown_request() {
+            host.request_shutdown();
+            break;
+        }
     }
     drop(dispatch_state);
+    drop(roster);
     drop_connection(outbound, writer_task).await;
 }
 

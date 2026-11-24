@@ -33,6 +33,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The host-wide connection roster (`dispatch::clients`) and `stop`'s
+  `restart` flag (daemon-host.ts L3191-3214): the arm validates the flag
+  (`restart must be a boolean.`, null included), answers a `notification`
+  frame to every other admitted connection (`OpenButler host restarting` /
+  `Sessions will be saved. Reconnecting after the host restarts.`, or the
+  stopping wording), writes the source's IPC log line and asks for the
+  shutdown. The request is deferred to the connection: the arm sets the
+  flag, and the connection performs it only after its response is confirmed
+  written (`send_confirmed`) — the source's `writeResponse` before
+  `setImmediate(requestStop)`. A serve loop that ended first lost the ack:
+  a stop issued right after boot answered the client with a closed
+  connection, reproduced and then verified by five rapid start/stop cycles.
+  The requester is skipped by sink identity — it reads the stop in
+  its own response. Registration is a `server` concern (one sink shared with
+  dispatch) and the guard leaves the roster before the writer join: a
+  roster-held sink clone would otherwise keep the connection's channel open
+  and the join would never return (the malformed-frame close hung until the
+  order was made explicit). The source's restart reattach state keys
+  (`host.restart.workspace:<key>`) arrive with the attach runtime. Pins: the
+  refusal wording (string and null), both wordings, requester exclusion, the
+  deferred shutdown request, the roster contract (broadcast, unregister,
+  refusing-sink drop) and one two-connection wire test.
+
 - `settings.set-listen` — the saved remote-listener preference
   (`{listen: "host:port"}` saves, `null` clears), validated by the very
   rule the host binds by and written through the settings pair save; the

@@ -47,6 +47,11 @@ pub struct DispatchState {
     /// re-set when `session.load` switches chats, L3633). Every
     /// post-attach action must echo this key (daemon-host.ts L3478).
     pub binding_key: Option<String>,
+    /// The action asked the host to stop (the `stop` arm). The connection
+    /// performs the request after the response is written: the source
+    /// wrote the ack before `setImmediate(requestStop)` (L3211-3212), and
+    /// a process that exits first would lose the answer.
+    pub(super) shutdown_after_response: bool,
 }
 
 impl DispatchState {
@@ -70,6 +75,14 @@ impl DispatchState {
     /// connection after it writes it.
     pub fn take_pending_events(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    /// Whether the action that just ran asked for a shutdown; the
+    /// connection calls `Host::request_shutdown` once the response is out.
+    pub fn take_shutdown_request(&mut self) -> bool {
+        let requested = self.shutdown_after_response;
+        self.shutdown_after_response = false;
+        requested
     }
 }
 
@@ -118,6 +131,10 @@ pub struct Host {
     /// `config.report`). Compare-exchange, so one download per process at a
     /// time and never two threads racing the same generation.
     catalog_warm: Arc<std::sync::atomic::AtomicBool>,
+    /// The live connections a host notification reaches (`stop`'s
+    /// restart/stop broadcast). Registered by the server per connection;
+    /// the requester is always skipped by pointer identity.
+    clients: crate::dispatch::clients::Clients,
 }
 
 impl Host {
@@ -142,7 +159,13 @@ impl Host {
             stop_generations: std::sync::Mutex::new(std::collections::HashMap::new()),
             catalog: std::sync::OnceLock::new(),
             catalog_warm: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            clients: crate::dispatch::clients::Clients::new(),
         }
+    }
+
+    /// The live-connection roster host notifications walk.
+    pub fn clients(&self) -> &crate::dispatch::clients::Clients {
+        &self.clients
     }
 
     /// Installs the catalog (boot only; first call wins).

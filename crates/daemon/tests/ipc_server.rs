@@ -416,3 +416,78 @@ async fn stop_action_shuts_the_server_down() {
         .expect("serve must exit cleanly");
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+#[tokio::test]
+async fn stop_with_restart_notifies_the_other_connections_over_the_wire() {
+    let data_dir = temp_data_dir("ipc-restart-notify");
+    let endpoint = server::socket::endpoint_for(&data_dir);
+    let host = Arc::new(Host::new());
+    let shutdown = host.subscribe_shutdown();
+    let served = tokio::spawn(server::socket::serve(
+        endpoint.clone(),
+        host.clone(),
+        shutdown,
+    ));
+
+    // A round-trip proves the connection is fully served (and therefore on
+    // the roster) before the stop fires.
+    let mut other = client::connect(&endpoint).await;
+    let mut other_buffer = Vec::new();
+    let hello = send_frame(
+        &mut other,
+        &mut other_buffer,
+        serde_json::json!({ "version": 2, "id": "t-hello", "action": "status" }),
+    )
+    .await;
+    assert_eq!(hello["ok"], true);
+
+    let mut requester = client::connect(&endpoint).await;
+    let mut requester_buffer = Vec::new();
+    let response = send_frame(
+        &mut requester,
+        &mut requester_buffer,
+        serde_json::json!({
+            "version": 2,
+            "id": "t-restart",
+            "action": "stop",
+            "restart": true,
+        }),
+    )
+    .await;
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["result"]["stopping"], true);
+
+    let event = read_frame(&mut other, &mut other_buffer).await;
+    assert_eq!(event["event"], "notification");
+    assert_eq!(event["title"], "OpenButler host restarting");
+    assert_eq!(
+        event["message"],
+        "Sessions will be saved. Reconnecting after the host restarts."
+    );
+
+    // The requester hears the stop through its response, never as a
+    // notification: its next frame is a close, an error, or silence.
+    assert!(
+        !requester_buffer.contains(&b'\n'),
+        "the response carried no notification behind it: {:?}",
+        String::from_utf8_lossy(&requester_buffer)
+    );
+    {
+        use tokio::io::AsyncReadExt;
+        let mut chunk = [0u8; 1024];
+        match tokio::time::timeout(Duration::from_millis(300), requester.read(&mut chunk)).await {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => {}
+            Ok(Ok(read)) => panic!(
+                "the requester must not receive a notification frame: {}",
+                String::from_utf8_lossy(&chunk[..read])
+            ),
+        }
+    }
+
+    host.request_shutdown();
+    served
+        .await
+        .expect("server must stop")
+        .expect("server must stop cleanly");
+    let _ = std::fs::remove_dir_all(&data_dir);
+}

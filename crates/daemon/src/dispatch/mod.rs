@@ -8,6 +8,7 @@
 //! `permissions.rs`, `schedule.rs` and `session_send.rs`.
 
 mod attach;
+pub mod clients;
 mod commands;
 mod config_report;
 pub mod fanout;
@@ -323,7 +324,40 @@ pub fn handle(
             }
         }
         "stop" => {
-            host.request_shutdown();
+            // The source's `typeof` gate (daemon-host.ts L3192): any value
+            // that is not a boolean is refused, null included; an absent
+            // flag is an ordinary stop.
+            let restarting = match request.payload.get("restart") {
+                None => false,
+                Some(serde_json::Value::Bool(flag)) => *flag,
+                Some(_) => return failure(request, "restart must be a boolean.".to_owned()),
+            };
+            // Every other admitted connection hears the stop; the requester
+            // reads it in its own response. The source's restart-only
+            // reattach state keys (`host.restart.workspace:<key>`) belong to
+            // the attach runtime this build does not have yet.
+            let requester = state.sink.clone();
+            host.clients().broadcast_notification(
+                if restarting {
+                    "OpenButler host restarting"
+                } else {
+                    "OpenButler host stopping"
+                },
+                if restarting {
+                    "Sessions will be saved. Reconnecting after the host restarts."
+                } else {
+                    "The owner requested a shutdown."
+                },
+                requester.as_ref(),
+            );
+            eprintln!(
+                "OpenButler host {} requested over IPC.",
+                if restarting { "restart" } else { "stop" }
+            );
+            // The connection performs the request after the ack is written
+            // (the source wrote the response, then asked for the stop on
+            // the next tick; exiting first would lose the answer).
+            state.shutdown_after_response = true;
             success(request, json!({ "stopping": true }))
         }
         "settings.reload" => match host.reload_settings(data_dir) {
