@@ -167,6 +167,23 @@ fn a_lock_guard_is_reentrant_within_the_process() {
 
 // --- Atomic write ------------------------------------------------------------
 
+/// A crash between the temporary create and the rename leaves
+/// `<name>.<pid>.tmp` behind, and the operating system hands that pid to a
+/// later process: the exclusive create then refuses forever and no settings
+/// write can land. The name belongs to this writer (the lock admits one at a
+/// time), so a stale one is cleared and the write proceeds.
+#[test]
+fn a_stale_temporary_file_never_blocks_a_write() {
+    let dir = scratch("atomic-stale");
+    let target = dir.join("settings.yaml");
+    let stale = dir.join(format!("settings.yaml.{}.tmp", std::process::id()));
+    std::fs::write(&stale, b"junk from a crashed run").unwrap();
+
+    atomic_write(&target, b"fresh").expect("the stale temporary must not wedge the write");
+    assert_eq!(read(&target), "fresh");
+    assert!(!stale.exists(), "the stale temporary is cleared");
+}
+
 #[test]
 fn atomic_write_creates_the_parent_and_replaces_in_one_step() {
     let dir = scratch("atomic");

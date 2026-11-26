@@ -821,6 +821,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Settings writes survive a crash. `atomic_write` staged
+  `<name>.<pid>.tmp` with an exclusive create, so a run that died before the
+  rename left a name the OS later reassigned to a new process: every write
+  then failed with `AlreadyExists` until the file was found by hand. A stale
+  temporary is now reclaimed before the create is retried.
+
 - `settings.setup` refuses a payload that names the same provider twice. The
   merge kept the last entry, so the earlier entry's keys vanished while the
   answer still reported a save; the wizard's "Back to LLM providers" branch

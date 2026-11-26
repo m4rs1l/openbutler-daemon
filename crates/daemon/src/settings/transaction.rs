@@ -180,7 +180,18 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
 
     let result = (|| {
-        let mut file = options.open(&temp)?;
+        let mut file = match options.open(&temp) {
+            Ok(file) => file,
+            // A crash between this create and the rename leaves the name
+            // behind, and the OS reuses pids: clearing it is safe because the
+            // settings lock admits one writer at a time and the name carries
+            // this process's own pid.
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                std::fs::remove_file(&temp)?;
+                options.open(&temp)?
+            }
+            Err(error) => return Err(error),
+        };
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
