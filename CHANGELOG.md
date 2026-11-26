@@ -1,51 +1,11 @@
 # Changelog
 
-Notable changes to this workspace are recorded here.
-Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-
-### Fixed
-
-- The tool-output spill cap now counts bytes, as its name and documentation
-  always claimed. It counted characters against a byte budget, so a command
-  emitting multibyte text could write four times the stated 64 MiB ceiling.
-  The writer keeps a byte total separate from the character totals the
-  notice reports, and cuts on a character boundary.
-
-- `settings.setup` now refuses a remote caller with the credential sentence
-  `keys.add` already uses. The wizard writes the same secret store, so
-  without the gate a paired remote token could replace any provider's API
-  keys through the other door.
-
-- `mcp.manage` refuses `add` and `remove` to a remote caller. A server
-  definition is a command the host spawns on its own machine, so a remote
-  token could install an arbitrary process that runs at session start.
-  `list` stays open to a remote caller.
-
-- The remote TCP listener no longer stops for good on the first failed
-  accept. A failed accept (a peer that reset before it was taken, a
-  momentary descriptor shortage) ended the accept loop without a message,
-  leaving the host running with its remote door closed. The loop now reports
-  the failure on stderr, waits 50 ms and keeps listening until shutdown.
-
-- A pairing code is consumed only when the token was minted. Before, the
-  code was spent first, so a token-store failure (full disk, unreadable data
-  directory) cost the owner the one-time code and the client got an error
-  with no way to retry. PairingCodes::redeem_with runs the mint while the
-  lock is held and clears the code only on success.
-
-- execute_command spilled overflowing output into the data directory
-  root instead of 	ool-output/. The retention sweep that runs when a spill
-  closes deletes files older than three days in the directory it was given,
-  so a long-running host could age out settings.yaml, the token store and
-  the schedules. Spill files now live under 	ool-output/.
-
-- The static file server refuses request paths that name an absolute
-  location (`/C:/...`, `//...`). `Path::join` with a drive-prefixed or
-  rooted argument discards the base directory on Windows, so such a path
-  could read a file outside the bundle. Every segment must now be a plain
-  name.
 
 ### Added
 
@@ -54,25 +14,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with them. Before, the publish call existed but nothing in the boot path
   made it, so the surface was never reported. `start_lock::host_status`
   exposes the raw status answer.
-
 - `settings.setup.review` composes the wizard's Review block (`{lines}`)
   from the exact payload `settings.setup` takes, through one shared parse:
   the empty-set sentence, one bullet per provider with the default marker
   and its key count, and the default-model row. A review writes nothing.
-
-### Added
-
-
 - `mcp.manage` lists, adds and removes global MCP servers: the list
   screen is the host's (section, table or the source's empty sentence, and
   the management hint), `add` validates through the settings loader's own
   `parse_mcp_server_state` and refuses unseen-id collisions with the
   source's sentence, `remove` refuses an unknown id. Writes go through the
   settings pair save and reload the live copy.
-
-### Added
-
-
 - Structured logging: `logging` writes one JSON record per line to
   `<data>/logs/openbutler.log`, redacting credential-shaped keys and values
   and rotating at 5 MiB with three kept files (the source's `logging.ts`
@@ -80,67 +31,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `host.log` line, and every exit `host.stopped`.
 - `logs.tail` defaults to that file, filters parsed records by `level` and
   exact `event`, and `format: "json"` returns the raw records.
-
-### Changed
-
-- `skills.list` answers the screen as well: the table when skills were
-  found, otherwise the empty note, every root and the hint, composed in the
-  host and printed by the client.
-- `status` and `session.list` carry their screens: `DaemonStatus` gains
-  `lines` (skipped while empty) and `session.list` answers
-  `SessionListAnswer {sessions, lines}`. The protocol owns `ScreenLine` and
-  `Tone`, so every consumer decodes one shape and the client only maps a
-  tone to its glyph.
-- `about.report` and `config.report` answer the **finished screen lines**
-  alongside their display values: section bars, kv rows, table padding and
-  the empty-machine early stop are the host's layout now, and `shape` gains
-  `section_line` / `table_lines` as the one place that layout is written.
-  A client prints the lines and owns only its glyph palette.
-- `settings.setup` stores a repeated key once: one key is one credential,
-  and the store's shape no longer depends on which client sent the list.
-- `logs.tail` — the machine log's tail moved into the host, where the file
-  lives. The tail is the CLI's algorithm moved verbatim (64 KiB blocks read
-  backwards, CRLF stripped); `file` must arrive absolute because the caller's
-  shell is the only correct base for a relative path. Local-only: reading
-  host files over a remote token is authority the source never granted.
-- `permissions.manage` now composes the whole screen and returns it as
-  `lines` (`{tone, text}`, the source's order) alongside the display values
-  and `saved`; the client prints it and applies its glyph palette instead of
-  deciding which success sentences apply.
-- `session.load` answers a **tail window** instead of the whole record:
-  optional `entriesWindow` (integer 1..=2000 — `entriesWindow must be an
-  integer between 1 and 2000.`; default 200) plus the
-  `entriesFrom`/`totalEntries` markers (`SessionRecordWindow`), and older
-  pages come from `session.entries-range`. A transcript over the 32 MiB
-  frame cap can now be opened at all — the source returned the full
-  record and the legacy CLI crashed on such files. Protocol rev bumped
-  to `2a4a4af`.
-- The daemon clock has one reading: `ledger::now_ms` (epoch
-  milliseconds) — `auth`, `sidecar` and `schedule` had three copies of the
-  same `SystemTime`/`chrono` body and now delegate. Trigger math, pairing
-  codes and idle timers can no longer disagree about "now".
-- A fresh draft's model is resolved through the shared default chain
-  (`default_model::resolve_role_model`, the `resolveRoleModel('agent')`
-  port) instead of copying the explicit pair out of settings: the explicit
-  default, else the most-used usable model from the 90-day usage window.
-  A `config` screen and a `run` can no longer disagree about which model
-  the machine will use.
-
-- The data directory defaults to `openbutler-daemon` on every platform
-  (Windows `%LOCALAPPDATA%\openbutler-daemon`, macOS Application
-  Support, XDG), and the scratch root to `<tmpdir>/openbutler-daemon`
-  — the Rust stack never reads or writes the legacy Node install's
-  `openbutler` directory: separate config, state, sessions, endpoint
-  (the pipe name derives from the dir) and scratch. `OPENBUTLER_DATA_DIR`
-  still overrides both rules. The rename exposed a second copy of
-  `scratch_root` in `agent/providers.rs` (the prompt context read one
-  path while turn inputs used the other): it is now a re-export of
-  `config::scratch_root`, one authority, divergence documented at the
-  re-export. Verified live: start/status/stop cycle against the new
-  default dir, endpoint independent of a legacy host.
-
-### Added
-
 - `sessions.prune` — the source's retention pass over saved sessions
   (`cli-main.ts` L1465-1526, `retention.ts`, `session-store.ts`), run
   inside the host because the host owns the files: a strict
@@ -203,9 +93,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   streak stopping at a gap, the fresh-input fallback with its zero floor,
   the cost-source split and both closing lines, the window cut, the
   session/model filters (bare provider included), and both refusals.
-
 - `ledger.prune` — the settled-history selection from `activity-ledger.ts` with a preview that runs the identical SQL: worker identities and one-shot schedule identities never go, an inbox event waits for its read marker, and an event an action or usage row references is not history yet; only terminal actions with their transitions go. The duration parser (`30d`, `12h`, `90m`, `2w`) and the cutoff clock are the daemon's; `Invalid duration "…"`, `kind must be events or actions.` and `apply must be a boolean.` are the refusals. The source pruned from the CLI with the host stopped; the host is the one writer here, so the action runs inside it. `state.db`'s path now has one name (`ledger::db_path`). Pins: preview vs apply on the same selection with every guard row surviving, terminal-only actions with their transitions, the refusal sentences, and that a missing database counts zero without being created.
-
 - `permissions.manage` — the `openbutler permissions` surface in one atomic
   write: optional `mode`, both timeouts (5-600, the source's flag sentences)
   and `reviewModel` (`<provider>/<model>`, or `none` which clears the
@@ -215,7 +103,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   write. The source wrote settings CLI-side and pushed only the mode to a
   live host. Pins: the default report, mode persistence + live copy, both
   timeout sentences, the role write and the `none` clearing.
-
 - The auth token actions (`token.create` / `token.list` / `token.revoke`) and
   the local-only gate: the store lived CLI-side in the source and the host
   owns it now (salted hashes only; the plaintext is answered once). The
@@ -230,7 +117,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   frame fails to deserialize (the CLI's fake daemon showed it first). Pins:
   mint → verify → list → revoke → empty, the unknown-id sentence, the id
   validation, and the remote gate over all four actions.
-
 - The host-wide connection roster (`dispatch::clients`) and `stop`'s
   `restart` flag (daemon-host.ts L3191-3214): the arm validates the flag
   (`restart must be a boolean.`, null included), answers a `notification`
@@ -253,7 +139,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refusal wording (string and null), both wordings, requester exclusion, the
   deferred shutdown request, the roster contract (broadcast, unregister,
   refusing-sink drop) and one two-connection wire test.
-
 - `settings.set-listen` — the saved remote-listener preference
   (`{listen: "host:port"}` saves, `null` clears), validated by the very
   rule the host binds by and written through the settings pair save; the
@@ -287,7 +172,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   prices and tool counts could never appear. The report answers
   immediately (`catalogLoaded`/`catalogLoading`) instead of blocking on the
   network the way the source command did.
-
 - The provider catalog store (`catalog/`, source `provider/catalog.ts`):
   models.dev data as an immutable NDJSON generation plus a byte-range
   index — the full payload (measured 6.59 MB / 326 providers / 10 185
@@ -305,7 +189,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   toolchain this machine lacks) enforces the 8 s timeout and the ceiling
   twice (declared length first, then streaming), 4 pins in
   `tests/catalog_http.rs` over a loopback server.
-
 - The catalog's derived view (owner design): configured providers and
   models joined with their catalog lines — settings override catalog per
   field, custom ids fall back to their own settings, sources labelled
@@ -313,7 +196,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an `Arc` keyed by both revisions (catalog disk × settings), so a stale
   derived answer cannot exist; ambient env stays out (it moves no
   revision). Six pins in `tests/catalog_view.rs`.
-
 - Catalog-backed usage pricing (owner rule: real prices or no estimate —
   never a character-based guess). `UsageInput` carries the caller's
   `TokenPrices`; an inline provider bill always wins, otherwise the
@@ -324,7 +206,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   compaction hooks resolve prices through it. Four sink pins in
   `tests/ledger_usage.rs` plus an end-to-end turn pin in
   `tests/agent_loop.rs`.
-
 - `settings.setup`: the first-run wizard's atomic write, a new contract
   rather than a port (the source wrote the files from the CLI — a client
   write the backend-owned rule forbids). The payload validates first
@@ -338,7 +219,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `config-edit.ts` L74), so history and defaults can never disagree.
   8 pins in `tests/settings_setup.rs` (refusals, split contract, merge,
   boundary, remember).
-
 - The daemon entry takes the source's start lock (`daemon.ts`
   `acquireDaemonStartLock`): `daemon.start.lock` in the data dir is
   created exclusively before anything is built, a contender gets the
@@ -428,7 +308,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pins: 17 ladder in `tests/attach.rs`, 2 load in
   `tests/session_read_actions.rs`; `tests/common` gained the shared
   `RecordingExecutor` double.
-
 - The workspace binding contract landed (daemon-host.ts L3179-3311,
   L3478-3499): the pre-attach partition (host-wide actions answer with
   no key), the `workspaceKey` gate (string gate at 32 768 bytes, then
@@ -444,43 +323,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pin the order. Test harnesses model a bound client: `bound_state()` /
   `with_binding()` in `tests/common`. The isolated/schedule/worker
   variant success paths stay with the M2 session runtime.
-
-### Changed
-
-- The wire contract moved out of this workspace: `crates/protocol` is now
-  the standalone `openbutler-protocol` repository
-  (github.com/m4rs1l/openbutler-protocol), consumed here as a git
-  dependency pinned by rev instead of a cross-repo path. Frames,
-  envelopes, action payloads and the conformance suites live there - 43
-  tests green in their own repo and from a fresh clone; this workspace
-  runs 480 tests across 58 targets without them.
-- One home for the tailnet address rules: `listen_target.rs` now
-  delegates `is_loopback`/`is_tailnet_address` to the crate-level
-  `tailnet` module instead of carrying its own octet copies (the
-  duplicate was found while porting `tailnet.ts` a second time for the
-  team hub; its `is_ipv4_literal` shape gate stays). The production
-  interface lister uses `if-addrs 0.15.0` so the team server can pick a
-  bind address without shell-outs.
-- `attach` admission wording matches the source exactly:
-  `isolatedSession` accepts any boolean (only `newChatSession` is
-  exactly `true`, `newChatSession must be true.`), the chat-branch
-  exclusions and the `projectId` shape (`Invalid project ID.`) now
-  cover the new-chat branch too, and `workspaceRoot` runs through
-  `requireString` first ("... under 32768 bytes.") before the
-  absolute-path sentence.
-
-- The settings schema was split from one 1 561-line
-  `settings/schema.rs` into `settings/schema/` — one module per
-  authority: `mod.rs` (store types + the `parse_store` dispatcher),
-  `provider`, `mcp`, `telegram`, `team` (+ custodian types),
-  `custodian`, `secrets`, `store`, `enums`, `keys`, `helpers`. Largest
-  file 1 478 → 287 lines. Source parity kept by count (16 `derive` /
-  32 `serde` attributes byte-identical to the removed file);
-  sibling-only helpers moved to `pub(super)`, parse entry points stay
-  `pub`; all gates green with the 18 `settings_schema` pins unchanged.
-
-### Added
-
 - The event pump (`schedule/pump.rs`): pending schedule events are
   claimed and run to their durable outcome — workspace gate, wake
   assembly, origin-vs-background session (the persistent background id
@@ -694,7 +536,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shapes each native definition with the denotation suffix and the
   timeout field): a real provider sees the tools the batch loop can
   execute, instead of an empty list the mock used to hide.
-
 - `session.answer` and the question queue: `TurnExecutor::answer`
   seam (id-guarded like the source's `answerQuestion`), the dispatch
   action with its three validation sentences, `TurnRunner::ask` — the
@@ -880,6 +721,90 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `skills.list` answers the screen as well: the table when skills were
+  found, otherwise the empty note, every root and the hint, composed in the
+  host and printed by the client.
+- `status` and `session.list` carry their screens: `DaemonStatus` gains
+  `lines` (skipped while empty) and `session.list` answers
+  `SessionListAnswer {sessions, lines}`. The protocol owns `ScreenLine` and
+  `Tone`, so every consumer decodes one shape and the client only maps a
+  tone to its glyph.
+- `about.report` and `config.report` answer the **finished screen lines**
+  alongside their display values: section bars, kv rows, table padding and
+  the empty-machine early stop are the host's layout now, and `shape` gains
+  `section_line` / `table_lines` as the one place that layout is written.
+  A client prints the lines and owns only its glyph palette.
+- `settings.setup` stores a repeated key once: one key is one credential,
+  and the store's shape no longer depends on which client sent the list.
+- `logs.tail` — the machine log's tail moved into the host, where the file
+  lives. The tail is the CLI's algorithm moved verbatim (64 KiB blocks read
+  backwards, CRLF stripped); `file` must arrive absolute because the caller's
+  shell is the only correct base for a relative path. Local-only: reading
+  host files over a remote token is authority the source never granted.
+- `permissions.manage` now composes the whole screen and returns it as
+  `lines` (`{tone, text}`, the source's order) alongside the display values
+  and `saved`; the client prints it and applies its glyph palette instead of
+  deciding which success sentences apply.
+- `session.load` answers a **tail window** instead of the whole record:
+  optional `entriesWindow` (integer 1..=2000 — `entriesWindow must be an
+  integer between 1 and 2000.`; default 200) plus the
+  `entriesFrom`/`totalEntries` markers (`SessionRecordWindow`), and older
+  pages come from `session.entries-range`. A transcript over the 32 MiB
+  frame cap can now be opened at all — the source returned the full
+  record and the legacy CLI crashed on such files. Protocol rev bumped
+  to `2a4a4af`.
+- The daemon clock has one reading: `ledger::now_ms` (epoch
+  milliseconds) — `auth`, `sidecar` and `schedule` had three copies of the
+  same `SystemTime`/`chrono` body and now delegate. Trigger math, pairing
+  codes and idle timers can no longer disagree about "now".
+- A fresh draft's model is resolved through the shared default chain
+  (`default_model::resolve_role_model`, the `resolveRoleModel('agent')`
+  port) instead of copying the explicit pair out of settings: the explicit
+  default, else the most-used usable model from the 90-day usage window.
+  A `config` screen and a `run` can no longer disagree about which model
+  the machine will use.
+- The data directory defaults to `openbutler-daemon` on every platform
+  (Windows `%LOCALAPPDATA%\openbutler-daemon`, macOS Application
+  Support, XDG), and the scratch root to `<tmpdir>/openbutler-daemon`
+  — the Rust stack never reads or writes the legacy Node install's
+  `openbutler` directory: separate config, state, sessions, endpoint
+  (the pipe name derives from the dir) and scratch. `OPENBUTLER_DATA_DIR`
+  still overrides both rules. The rename exposed a second copy of
+  `scratch_root` in `agent/providers.rs` (the prompt context read one
+  path while turn inputs used the other): it is now a re-export of
+  `config::scratch_root`, one authority, divergence documented at the
+  re-export. Verified live: start/status/stop cycle against the new
+  default dir, endpoint independent of a legacy host.
+- The wire contract moved out of this workspace: `crates/protocol` is now
+  the standalone `openbutler-protocol` repository
+  (github.com/m4rs1l/openbutler-protocol), consumed here as a git
+  dependency pinned by rev instead of a cross-repo path. Frames,
+  envelopes, action payloads and the conformance suites live there - 43
+  tests green in their own repo and from a fresh clone; this workspace
+  runs 480 tests across 58 targets without them.
+- One home for the tailnet address rules: `listen_target.rs` now
+  delegates `is_loopback`/`is_tailnet_address` to the crate-level
+  `tailnet` module instead of carrying its own octet copies (the
+  duplicate was found while porting `tailnet.ts` a second time for the
+  team hub; its `is_ipv4_literal` shape gate stays). The production
+  interface lister uses `if-addrs 0.15.0` so the team server can pick a
+  bind address without shell-outs.
+- `attach` admission wording matches the source exactly:
+  `isolatedSession` accepts any boolean (only `newChatSession` is
+  exactly `true`, `newChatSession must be true.`), the chat-branch
+  exclusions and the `projectId` shape (`Invalid project ID.`) now
+  cover the new-chat branch too, and `workspaceRoot` runs through
+  `requireString` first ("... under 32768 bytes.") before the
+  absolute-path sentence.
+- The settings schema was split from one 1 561-line
+  `settings/schema.rs` into `settings/schema/` — one module per
+  authority: `mod.rs` (store types + the `parse_store` dispatcher),
+  `provider`, `mcp`, `telegram`, `team` (+ custodian types),
+  `custodian`, `secrets`, `store`, `enums`, `keys`, `helpers`. Largest
+  file 1 478 → 287 lines. Source parity kept by count (16 `derive` /
+  32 `serde` attributes byte-identical to the removed file);
+  sibling-only helpers moved to `pub(super)`, parse entry points stay
+  `pub`; all gates green with the 18 `settings_schema` pins unchanged.
 - Module boundaries now follow authority, with no behavior change:
   - `agent/mod.rs` keeps the runner types, lifecycle and the turn itself;
     the visible queue and steering moved to `agent/queue.rs`, the approval
@@ -893,3 +818,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `workspace_scope.rs`, `tool_output.rs`).
   - Both transport doors sit under `src/server/` (`socket/` for IPC,
     `http/` for the browser surface), each keeping its own authority.
+
+### Fixed
+
+- The tool-output spill cap now counts bytes, as its name and documentation
+  always claimed. It counted characters against a byte budget, so a command
+  emitting multibyte text could write four times the stated 64 MiB ceiling.
+  The writer keeps a byte total separate from the character totals the
+  notice reports, and cuts on a character boundary.
+- `settings.setup` now refuses a remote caller with the credential sentence
+  `keys.add` already uses. The wizard writes the same secret store, so
+  without the gate a paired remote token could replace any provider's API
+  keys through the other door.
+- `mcp.manage` refuses `add` and `remove` to a remote caller. A server
+  definition is a command the host spawns on its own machine, so a remote
+  token could install an arbitrary process that runs at session start.
+  `list` stays open to a remote caller.
+- The remote TCP listener no longer stops for good on the first failed
+  accept. A failed accept (a peer that reset before it was taken, a
+  momentary descriptor shortage) ended the accept loop without a message,
+  leaving the host running with its remote door closed. The loop now reports
+  the failure on stderr, waits 50 ms and keeps listening until shutdown.
+- A pairing code is consumed only when the token was minted. Before, the
+  code was spent first, so a token-store failure (full disk, unreadable data
+  directory) cost the owner the one-time code and the client got an error
+  with no way to retry. PairingCodes::redeem_with runs the mint while the
+  lock is held and clears the code only on success.
+- execute_command spilled overflowing output into the data directory
+  root instead of 	ool-output/. The retention sweep that runs when a spill
+  closes deletes files older than three days in the directory it was given,
+  so a long-running host could age out settings.yaml, the token store and
+  the schedules. Spill files now live under 	ool-output/.
+- The static file server refuses request paths that name an absolute
+  location (`/C:/...`, `//...`). `Path::join` with a drive-prefixed or
+  rooted argument discards the base directory on Windows, so such a path
+  could read a file outside the bundle. Every segment must now be a plain
+  name.
+
+[Unreleased]: https://github.com/m4rs1l/openbutler-daemon/commits/main
