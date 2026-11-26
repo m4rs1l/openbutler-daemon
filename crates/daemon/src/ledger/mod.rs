@@ -6,12 +6,14 @@
 
 mod events;
 mod feed;
+mod prune;
 mod state;
 mod usage;
 mod writer;
 
 pub use events::{EventInput, OBSERVED_EVENT_STATES};
 pub use feed::{list_actions, list_events, retry_event, schedule_events};
+pub use prune::prune;
 pub use state::StateReader;
 pub use usage::{
     StepUsageReport, TokenPrices, UsageInput, UsagePick, UsageRow, UsageTokens, usage_pick_rows,
@@ -32,6 +34,11 @@ pub enum LedgerError {
     /// payload ceilings).
     #[error("{0}")]
     Refusal(String),
+}
+
+/// The one place the ledger database's path is named.
+pub(super) fn db_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    data_dir.join("state.db")
 }
 
 /// The retry marker's timestamp, shaped like JS `toISOString()`.

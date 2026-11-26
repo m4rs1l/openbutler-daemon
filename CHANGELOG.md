@@ -33,6 +33,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `ledger.prune` — the settled-history selection from `activity-ledger.ts` with a preview that runs the identical SQL: worker identities and one-shot schedule identities never go, an inbox event waits for its read marker, and an event an action or usage row references is not history yet; only terminal actions with their transitions go. The duration parser (`30d`, `12h`, `90m`, `2w`) and the cutoff clock are the daemon's; `Invalid duration "…"`, `kind must be events or actions.` and `apply must be a boolean.` are the refusals. The source pruned from the CLI with the host stopped; the host is the one writer here, so the action runs inside it. `state.db`'s path now has one name (`ledger::db_path`). Pins: preview vs apply on the same selection with every guard row surviving, terminal-only actions with their transitions, the refusal sentences, and that a missing database counts zero without being created.
+
 - `permissions.manage` — the `openbutler permissions` surface in one atomic
   write: optional `mode`, both timeouts (5-600, the source's flag sentences)
   and `reviewModel` (`<provider>/<model>`, or `none` which clears the

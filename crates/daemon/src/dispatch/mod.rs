@@ -54,6 +54,7 @@ const PRE_ATTACH: &[&str] = &[
     "telegram.test",
     "ledger.events",
     "ledger.actions",
+    "ledger.prune",
     "events.retry",
 ];
 
@@ -485,6 +486,10 @@ pub fn handle(
                 serde_json::to_value(rows).unwrap_or_else(|_| json!([])),
             ),
             Err(error) => failure(request, error.to_string()),
+        },
+        "ledger.prune" => match ledger::prune(data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
         },
         "events.retry" => {
             let event_id = match openbutler_protocol::payload::require_string(

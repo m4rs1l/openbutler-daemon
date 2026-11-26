@@ -174,7 +174,7 @@ impl LedgerWriter {
     /// Opens (creating the database and its schema when absent) the one
     /// writer the host shares.
     pub fn open(data_dir: &Path) -> Result<LedgerWriter, LedgerError> {
-        let connection = Connection::open(data_dir.join("state.db"))?;
+        let connection = Connection::open(super::db_path(data_dir))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         // better-sqlite3's default `timeout: 5000` — the host writer and

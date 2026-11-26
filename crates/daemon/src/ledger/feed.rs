@@ -61,7 +61,7 @@ pub fn list_actions(
 /// without touching the row at all. `true` means queued — the scheduler
 /// pump that consumes the queue is the runtime slice.
 pub fn retry_event(data_dir: &Path, event_id: &str) -> Result<bool, LedgerError> {
-    let path = data_dir.join("state.db");
+    let path = super::db_path(data_dir);
     if !path.exists() {
         return Ok(false);
     }
@@ -121,7 +121,7 @@ fn bounded_limit(limit: Option<&Value>) -> i64 {
 /// A read-only connection, or `None` when the database does not exist:
 /// reading must never bring a database into being.
 pub(super) fn open_readonly(data_dir: &Path) -> Result<Option<Connection>, LedgerError> {
-    let path = data_dir.join("state.db");
+    let path = super::db_path(data_dir);
     if !path.exists() {
         return Ok(None);
     }
