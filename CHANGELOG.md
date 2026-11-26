@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The remote TCP listener no longer stops for good on the first failed
+  ccept. A failed accept (a peer that reset before it was taken, a
+  momentary descriptor shortage) ended the accept loop without a message,
+  leaving the host running with its remote door closed. The loop now reports
+  the failure on stderr, waits 50 ms and keeps listening until shutdown.
+
 - A pairing code is consumed only when the token was minted. Before, the
   code was spent first, so a token-store failure (full disk, unreadable data
   directory) cost the owner the one-time code and the client got an error

@@ -96,32 +96,28 @@ pub async fn serve_tcp(
 ) -> std::io::Result<std::net::SocketAddr> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let local = listener.local_addr()?;
-    let mut shutdown = host.subscribe_shutdown();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                changed = shutdown.changed() => {
-                    // Either the host asked to stop, or the sender is gone.
-                    let _ = changed;
-                    break;
-                }
-                accepted = listener.accept() => {
-                    let Ok((stream, _peer)) = accepted else { break; };
-                    let host = host.clone();
-                    let data_dir = data_dir.clone();
-                    tokio::spawn(async move {
-                        connection::run(
-                            stream,
-                            host,
-                            data_dir,
-                            connection::Admission::Remote { auth_timeout },
-                        )
-                        .await;
-                    });
-                }
-            }
-        }
-    });
+    let shutdown = host.subscribe_shutdown();
+    let listener = Arc::new(listener);
+    tokio::spawn(accept_until_shutdown(
+        move || {
+            let listener = Arc::clone(&listener);
+            async move { listener.accept().await.map(|(stream, _peer)| stream) }
+        },
+        move |stream| {
+            let host = host.clone();
+            let data_dir = data_dir.clone();
+            tokio::spawn(async move {
+                connection::run(
+                    stream,
+                    host,
+                    data_dir,
+                    connection::Admission::Remote { auth_timeout },
+                )
+                .await;
+            });
+        },
+        shutdown,
+    ));
     Ok(local)
 }
 
@@ -141,4 +137,91 @@ fn bind(endpoint: &ResolvedEndpoint) -> std::io::Result<tokio::net::UnixListener
     // A stale socket file from a crashed run must not block the next start.
     let _ = std::fs::remove_file(endpoint.socket_name());
     tokio::net::UnixListener::bind(endpoint.socket_name())
+}
+
+/// How long the accept loop waits after a failed `accept` before trying
+/// again, so a persistent failure (descriptor exhaustion) cannot spin.
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Accepts connections until shutdown. A failed `accept` concerns one
+/// attempted connection (a peer that reset before it was taken, a
+/// momentary descriptor shortage), never the listener, so the loop reports
+/// it, waits briefly and keeps listening: ending here would silently take
+/// the remote door down for the rest of the host's life.
+async fn accept_until_shutdown<S, Accept, Pending>(
+    mut accept: Accept,
+    mut serve: impl FnMut(S),
+    mut shutdown: watch::Receiver<bool>,
+) where
+    Accept: FnMut() -> Pending,
+    Pending: std::future::Future<Output = std::io::Result<S>>,
+{
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                // Either the host asked to stop, or the sender is gone.
+                let _ = changed;
+                break;
+            }
+            accepted = accept() => match accepted {
+                Ok(stream) => serve(stream),
+                Err(error) => {
+                    eprintln!("openbutler-daemon: accept failed, still listening: {error}");
+                    tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
+                }
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_failed_accept_does_not_end_the_listener() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let served = Arc::new(AtomicUsize::new(0));
+        let (stop, shutdown) = watch::channel(false);
+
+        let counter = Arc::clone(&attempts);
+        let served_counter = Arc::clone(&served);
+        let task = tokio::spawn(accept_until_shutdown(
+            move || {
+                let attempt = counter.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    match attempt {
+                        0 | 1 => Err(std::io::Error::other("descriptor shortage")),
+                        2 => Ok("a client"),
+                        _ => std::future::pending().await,
+                    }
+                }
+            },
+            move |_stream| {
+                served_counter.fetch_add(1, Ordering::SeqCst);
+            },
+            shutdown,
+        ));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while served.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            served.load(Ordering::SeqCst),
+            1,
+            "a client arriving after two failed accepts is still served"
+        );
+        assert!(!task.is_finished(), "the loop outlives the failures");
+
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("shutdown ends the loop")
+            .unwrap();
+    }
 }
