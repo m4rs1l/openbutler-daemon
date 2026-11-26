@@ -15,6 +15,7 @@ use openbutler_protocol::DaemonRequest;
 use serde_json::{Value, json};
 
 use super::Host;
+use crate::shape::{kv_line, screen_line, table_lines};
 use crate::skills::{discover_skills, skill_roots};
 
 /// Answers the skill table's rows and the scanned roots.
@@ -32,8 +33,41 @@ pub fn list(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<Val
     };
     let skills = discover_skills(&workspace, data_dir);
     let roots = skill_roots(&workspace, data_dir);
+    // The screen, composed here: the table when skills were found, otherwise
+    // the empty note, every root, and the hint. A client prints it.
+    let mut lines: Vec<Value> = if skills.is_empty() {
+        let mut lines = vec![screen_line("info", "No Agent Skills found.")];
+        for root in &roots {
+            lines.push(kv_line(
+                root.scope.as_str(),
+                &root.path.display().to_string(),
+            ));
+        }
+        lines.push(screen_line(
+            "info",
+            "Add a skill-name/SKILL.md with Agent Skills frontmatter.",
+        ));
+        lines
+    } else {
+        let rows: Vec<Vec<String>> = skills
+            .iter()
+            .map(|skill| {
+                vec![
+                    skill.name.clone(),
+                    skill.scope.as_str().to_owned(),
+                    skill.description.clone(),
+                    skill.file_path.clone(),
+                ]
+            })
+            .collect();
+        table_lines(&["NAME", "SCOPE", "DESCRIPTION", "SKILL FILE"], &rows)
+    };
+    if lines.is_empty() {
+        lines.push(screen_line("info", "No Agent Skills found."));
+    }
     Ok(json!({
         "workspace": workspace,
+        "lines": lines,
         "skills": skills
             .iter()
             .map(|skill| json!({

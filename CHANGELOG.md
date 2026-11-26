@@ -7,6 +7,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `skills.list` answers the screen as well: the table when skills were
+  found, otherwise the empty note, every root and the hint, composed in the
+  host and printed by the client.
 - `status` and `session.list` carry their screens: `DaemonStatus` gains
   `lines` (skipped while empty) and `session.list` answers
   `SessionListAnswer {sessions, lines}`. The protocol owns `ScreenLine` and
