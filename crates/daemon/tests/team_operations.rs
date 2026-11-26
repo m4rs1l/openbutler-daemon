@@ -389,6 +389,42 @@ fn file_registration_validates_announces_once_and_scopes_access() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The invite's lifetime is a duration, and the row stores the instant it
+/// ends. The store takes `expires_at`, so a caller that hands over a ttl
+/// must add the hub clock; storing the ttl itself makes every invite expire
+/// in 1970, which no real join can survive.
+#[test]
+fn an_invite_expires_a_ttl_after_the_hub_clock() {
+    let dir = temp_data_dir("ops-invite-ttl");
+    let store = ops(&dir);
+    let operations = TeamOperations { store: &store };
+    let now = 1_700_000_000_000_i64;
+    operations.init_hub("h", "t", "Lab", "Alice", now).unwrap();
+
+    let created = operations.create_invite("alice", 60_000, now).unwrap();
+    let row = store
+        .get_invite(&created.code, now)
+        .unwrap()
+        .expect("live invite");
+    assert_eq!(row.expires_at, now + 60_000);
+    assert_eq!(row.created_at, now);
+
+    // Inside the window the join works; one millisecond past it does not.
+    let request = operations
+        .request_join(&created.code, "bob", now + 59_999)
+        .expect("a live invite admits a join");
+    assert_eq!(request.status, "pending");
+
+    let late = operations.create_invite("alice", 60_000, now).unwrap();
+    let error = operations
+        .request_join(&late.code, "carol", now + 60_001)
+        .expect_err("an expired invite admits nothing");
+    assert_eq!(error_text(&error), "Invite code is invalid.");
+
+    drop(store);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn invites_need_an_initialized_hub_and_write_audit() {
     let dir = temp_data_dir("ops-invite");

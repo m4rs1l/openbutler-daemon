@@ -414,8 +414,12 @@ impl TeamOperations<'_> {
             ));
         }
         let code = make_invite_code()?;
+        // The caller names a lifetime; the row stores the instant it ends
+        // (`expiresAt`), so the hub clock is added here — the one place that
+        // knows both halves.
+        let expires_at = now.saturating_add(ttl_ms);
         self.store
-            .create_invite(&code, ttl_ms, now)
+            .create_invite(&code, expires_at, now)
             .map_err(store_error)?;
         let hub_id = self.store.get_meta("hub_id").map_err(store_error)?;
         let hub_id = hub_id.ok_or_else(|| {

@@ -821,6 +821,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 	eam invites store the instant they end. TeamOperations::create_invite
+  handed its lifetime to the store as if it were the expiry, so a live clock
+  made every invite expire in 1970 and no join could ever be admitted. The
+  hub clock is now added once, where both halves are known.
+
 - The schedule pump runs against the data directory its caller passes
   instead of reading the machine's global one. A test or an embedding that
   passes its own directory to dispatch therefore no longer spawns a pump
