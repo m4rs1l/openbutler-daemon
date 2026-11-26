@@ -448,7 +448,7 @@ pub fn handle(
                     json!({ "running": false }),
                     vec![crate::shape::screen_line(
                         "info",
-                        "The web server is not running on this host. Start it with `openbutler daemon start --web`.",
+                        "The web server is not running on this host.",
                     )],
                 ),
             };

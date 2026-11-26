@@ -24,9 +24,7 @@ fn without_a_web_server_the_host_says_so() {
     assert_eq!(answer["running"], json!(false));
     assert_eq!(
         answer["lines"][0]["text"],
-        json!(
-            "The web server is not running on this host. Start it with `openbutler daemon start --web`."
-        )
+        json!("The web server is not running on this host.")
     );
 }
 
