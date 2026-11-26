@@ -332,3 +332,22 @@ fn empty_url_never_reaches_the_document() {
     let settings = load_settings(&dir).unwrap();
     assert!(settings.providers["mock"].url.is_none());
 }
+
+#[test]
+fn a_repeated_key_is_stored_once() {
+    // One key is one credential: the host owns the store's shape, so a
+    // repeated entry never reaches the document regardless of which client
+    // sent it.
+    let dir = temp_data_dir("setup-key-dedupe");
+    let payload = json!({
+        "providers": [{ "id": "mock", "keys": [KEY, KEY, "  sk-other-do-not-leak  ", KEY] }]
+    });
+    let DaemonResponse::Success { .. } = setup(&dir, "d1", payload) else {
+        panic!("expected success");
+    };
+    let secrets = load_secrets(&dir).unwrap();
+    assert_eq!(
+        secrets.providers["mock"].keys,
+        vec![KEY.to_owned(), "sk-other-do-not-leak".to_owned()]
+    );
+}

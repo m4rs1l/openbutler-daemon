@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `settings.setup` stores a repeated key once: one key is one credential,
+  and the store's shape no longer depends on which client sent the list.
 - `logs.tail` — the machine log's tail moved into the host, where the file
   lives. The tail is the CLI's algorithm moved verbatim (64 KiB blocks read
   backwards, CRLF stripped); `file` must arrive absolute because the caller's

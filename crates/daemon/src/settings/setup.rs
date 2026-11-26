@@ -66,6 +66,11 @@ pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<V
             })?;
             parsed_keys.push(key.trim().to_owned());
         }
+        // One key is one credential: a repeated entry is dropped here, the
+        // same rule `keys.add` applies, so the store's shape never depends on
+        // which client wrote it.
+        let mut seen = std::collections::HashSet::new();
+        parsed_keys.retain(|key| seen.insert(key.clone()));
         let url = match record.get("url") {
             None | Some(Value::Null) => None,
             Some(Value::String(url)) if crate::shape::js_len(url) <= 2048 => {
