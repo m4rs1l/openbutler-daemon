@@ -27,4 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
+      # The sidecar acceptance tests spawn the real Node process, which
+      # imports its dependencies from sidecar/node_modules.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sidecar/package-lock.json
+      - run: npm ci
+        working-directory: sidecar
       - run: cargo test
