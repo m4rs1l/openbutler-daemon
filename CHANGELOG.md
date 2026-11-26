@@ -721,6 +721,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The prompt assembly reads the shared home resolver (`state::paths`)
+  instead of keeping a second copy that preferred `USERPROFILE` on every
+  platform; the POSIX ordering is now the platform’s own.
+
 - `skills.list` answers the screen as well: the table when skills were
   found, otherwise the empty note, every root and the hint, composed in the
   host and printed by the client.

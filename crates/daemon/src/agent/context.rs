@@ -307,10 +307,9 @@ pub(crate) fn compaction_budget(
     (window, output)
 }
 
-/// The user's home the way the source resolves it: environment first.
+/// The user's home the way the source resolves it: the one resolver lives in
+/// `state::paths` (platform variable first, the other as fallback), and this
+/// module reads it instead of keeping a second copy with its own order.
 fn default_home() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    crate::state::home_dir()
 }
