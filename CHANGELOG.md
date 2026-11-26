@@ -41,6 +41,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `skills.list` — Agent Skill discovery, the `skills.ts` port: the seven
+  roots in source order, frontmatter metadata (name must match the
+  directory, description 1..=1024 chars, first 8 KiB, symlinks refused),
+  dedupe with later roots winning, 128 per scope, ordered builtin →
+  workspace → global then by name; the workspace is the stored default,
+  else `<data>/custodian`, and an explicit path canonicalizes. Pins: the
+  scope ordering, the duplicate override, mismatched names, description
+  bounds, an unclosed frontmatter block, invalid directory names, the
+  action's roots/default, and an explicit workspace scanned end to end.
 - `settings.set-default-workspace` — the workspace bare launches use:
   `{path}` canonicalizes through `canonical_scope_root` (the single
   normalizer every workspace path already resolves through) and saves

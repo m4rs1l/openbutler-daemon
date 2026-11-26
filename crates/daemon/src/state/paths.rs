@@ -142,7 +142,7 @@ pub(crate) fn canonical_scope_root(path: &str) -> Result<String, String> {
 }
 
 /// The home directory the source gets from `os.homedir()`.
-fn home_dir() -> String {
+pub(crate) fn home_dir() -> String {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default()

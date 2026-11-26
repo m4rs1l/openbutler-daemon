@@ -23,6 +23,8 @@ pub use attachments::{
 };
 /// The one workspace-path normalizer (`canonicalScopeRoot`).
 pub(crate) use paths::canonical_scope_root;
+/// The home directory (`os.homedir()`): skills roots and path expansion.
+pub(crate) use paths::home_dir;
 
 pub use header::{SessionHeader, read_session_header};
 pub use list::{WorkspaceFilter, list_sessions};

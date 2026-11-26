@@ -19,6 +19,7 @@ pub(crate) mod schedule;
 mod session_control;
 pub mod session_send;
 pub(crate) mod session_write;
+mod skills;
 mod usage_report;
 
 pub use host::{DispatchState, Host};
@@ -54,6 +55,7 @@ const PRE_ATTACH: &[&str] = &[
     "team.send-file",
     "team.manage",
     "schedule.manage",
+    "skills.list",
     "telegram.status",
     "telegram.pair",
     "telegram.test",
@@ -434,6 +436,12 @@ pub fn handle(
         // The manager screen's whole state: host-wide, needs no binding, and
         // safe on a view-only attachment (counts, never key material).
         "config.report" => match config_report::report(host, data_dir) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        // The Agent Skills the machine offers: a metadata scan of the
+        // source's seven roots. Host-wide — no workspace binding needed.
+        "skills.list" => match skills::list(host, data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
