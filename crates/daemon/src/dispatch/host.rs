@@ -12,6 +12,7 @@ use std::sync::{Arc, RwLock};
 
 use openbutler_protocol::DaemonStatus;
 use openbutler_protocol::ScreenLine;
+use openbutler_protocol::WebStatus;
 use openbutler_protocol::entry::UserEntrySource;
 use openbutler_protocol::runtime::RuntimeViewData;
 use tokio::sync::watch;
@@ -125,6 +126,9 @@ pub struct Host {
     /// The schedule runner (trigger lifetimes). Set once at boot; the
     /// `schedule.manage` CRUD reloads it and `list` reads its statuses.
     scheduler: RwLock<Option<crate::schedule::ScheduleRunner>>,
+    /// The browser surface this process serves, published through
+    /// `status` so no client guesses a URL.
+    web_status: std::sync::Mutex<Option<WebStatus>>,
     /// The host's own weak handle (set at boot): lets a `&self` method
     /// spawn the schedule pump with an owned `Arc<Host>` — spawned
     /// tasks need `'static`, and dispatch only ever holds `&Host`.
@@ -166,6 +170,7 @@ impl Host {
             runtime_view: RwLock::new(None),
             model_picks: std::sync::Mutex::new(std::collections::HashMap::new()),
             scheduler: RwLock::new(None),
+            web_status: std::sync::Mutex::new(None),
             self_ref: std::sync::OnceLock::new(),
             stop_generations: std::sync::Mutex::new(std::collections::HashMap::new()),
             catalog: std::sync::OnceLock::new(),
@@ -394,6 +399,14 @@ impl Host {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Records the web server's surface once it is serving (and only then).
+    pub fn publish_web(&self, status: WebStatus) {
+        *self
+            .web_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(status);
+    }
+
     /// The current status view (`status` action).
     pub fn status(&self) -> DaemonStatus {
         let connected_clients = self.connected_clients.load(Ordering::SeqCst);
@@ -420,6 +433,11 @@ impl Host {
             telegram: None,
             unresponsive: None,
             entry: None,
+            web: self
+                .web_status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
             // A source run reports an explicit null (contract: null = source
             // run, absent = older host).
             build_id: Some(None),

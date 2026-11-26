@@ -11,7 +11,7 @@ license = "MIT"
 # `dep = { workspace = true }`, so a version bump is a one-line change and two
 # crates can never drift onto different serde lines.
 [workspace.dependencies]
-openbutler-protocol = { git = "https://github.com/m4rs1l/openbutler-protocol", rev = "a1e468c74eaa2acf57183801d61a50031b070cec" }
+openbutler-protocol = { git = "https://github.com/m4rs1l/openbutler-protocol", rev = "72c0002" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde-saphyr = "2.1.1"

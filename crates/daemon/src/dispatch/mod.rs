@@ -50,6 +50,7 @@ const PRE_ATTACH: &[&str] = &[
     "settings.reload",
     "settings.setup",
     "settings.setup.review",
+    "web.report",
     "mcp.manage",
     "settings.set-listen",
     "settings.set-default-workspace",
@@ -433,6 +434,28 @@ pub fn handle(
         // The wizard's atomic write: a new contract (the source wrote the
         // files from the CLI), so the payload is validated here and the
         // settings module owns the merge and the pair save.
+        "web.report" => {
+            let status = host.status();
+            let (body, lines) = match status.web {
+                Some(web) => (
+                    json!({ "running": true, "bind": web.bind, "pairUrl": web.pair_url }),
+                    vec![
+                        crate::shape::screen_line("success", format!("Web UI: {}", web.pair_url)),
+                        crate::shape::kv_line("Bind", &web.bind),
+                    ],
+                ),
+                None => (
+                    json!({ "running": false }),
+                    vec![crate::shape::screen_line(
+                        "info",
+                        "The web server is not running on this host. Start it with `openbutler daemon start --web`.",
+                    )],
+                ),
+            };
+            let mut body = body;
+            body["lines"] = json!(lines);
+            success(request, body)
+        }
         "mcp.manage" => match crate::settings::mcp::manage(host, data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
