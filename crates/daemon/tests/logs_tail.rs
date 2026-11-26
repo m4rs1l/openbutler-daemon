@@ -42,8 +42,9 @@ fn texts(response: DaemonResponse) -> Vec<String> {
 #[test]
 fn the_tail_keeps_the_last_lines_with_their_tone() {
     let dir = temp_data_dir("logs-tail");
+    std::fs::create_dir_all(dir.join("logs")).unwrap();
     std::fs::write(
-        dir.join("daemon.log"),
+        dir.join("logs").join("openbutler.log"),
         "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n",
     )
     .unwrap();
@@ -63,7 +64,7 @@ fn the_tail_keeps_the_last_lines_with_their_tone() {
 fn a_missing_file_answers_the_empty_sentence_with_its_path() {
     let dir = temp_data_dir("logs-missing");
     let host = Host::new();
-    let path = dir.join("daemon.log");
+    let path = dir.join("logs").join("openbutler.log");
     assert_eq!(
         texts(call(&host, &dir, json!({}))),
         vec![format!("No log lines at {}.", path.display())]

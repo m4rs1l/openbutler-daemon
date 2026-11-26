@@ -89,6 +89,14 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        // The host's own structured log: one JSON record per line inside
+        // the data directory, redacted and rotated by the logging module.
+        let logger = openbutler_daemon::logging::Logger::for_data_dir(&config::data_dir());
+        {
+            let mut fields = serde_json::Map::new();
+            fields.insert("pid".to_owned(), serde_json::json!(std::process::id()));
+            logger.info("host.started", fields);
+        }
         if let Some(pid) = openbutler_daemon::start_lock::host_pid(&config::data_dir()).await {
             eprintln!("openbutler-daemon: An OpenButler host is already running (pid {pid}).");
             return ExitCode::FAILURE;
@@ -204,7 +212,15 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             )
             .await;
             match bound {
-                Ok(bound) => println!("remote listener: {bound}"),
+                Ok(bound) => {
+                    println!("remote listener: {bound}");
+                    let mut fields = serde_json::Map::new();
+                    fields.insert(
+                        "message".to_owned(),
+                        serde_json::json!(format!("remote listener: {bound}")),
+                    );
+                    logger.info("host.log", fields);
+                }
                 Err(error) => {
                     eprintln!("openbutler-daemon: could not listen on {addr}: {error}");
                     return ExitCode::FAILURE;
@@ -245,7 +261,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             None
         };
 
-        tokio::select! {
+        let code = tokio::select! {
             result = served => match result {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
@@ -259,7 +275,9 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                 }
                 ExitCode::SUCCESS
             }
-        }
+        };
+        logger.info("host.stopped", serde_json::Map::new());
+        code
     })
 }
 

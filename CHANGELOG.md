@@ -22,6 +22,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   source's sentence, `remove` refuses an unknown id. Writes go through the
   settings pair save and reload the live copy.
 
+### Added
+
+
+- Structured logging: `logging` writes one JSON record per line to
+  `<data>/logs/openbutler.log`, redacting credential-shaped keys and values
+  and rotating at 5 MiB with three kept files (the source's `logging.ts`
+  defaults). Boot writes `host.started`, the remote listener its
+  `host.log` line, and every exit `host.stopped`.
+- `logs.tail` defaults to that file, filters parsed records by `level` and
+  exact `event`, and `format: "json"` returns the raw records.
+
 ### Changed
 
 - `skills.list` answers the screen as well: the table when skills were

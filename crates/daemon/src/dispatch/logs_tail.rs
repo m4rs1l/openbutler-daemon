@@ -28,7 +28,10 @@ use crate::shape::is_absolute_path;
 /// The largest window a caller may ask for, mirroring the CLI parser.
 const MAX_LINES: u64 = 100_000;
 
-/// `logs.tail`: `{lines?, file?}`.
+/// `logs.tail`: `{lines?, file?, level?, event?, format?}`. Without a
+/// `file` the host's own structured log is the subject; `level` and
+/// `event` filter parsed records (unparsable lines survive only when no
+/// filter is set), and `format: "json"` returns the raw records.
 pub fn tail(data_dir: &Path, request: &DaemonRequest) -> Result<Value, String> {
     let lines = match request.get("lines") {
         None => 100,
@@ -39,11 +42,25 @@ pub fn tail(data_dir: &Path, request: &DaemonRequest) -> Result<Value, String> {
         Some(_) => return Err(lines_refusal()),
     };
     let path = match request.get("file") {
-        None | Some(Value::Null) => data_dir.join("daemon.log"),
-        Some(Value::String(text)) if text.is_empty() => data_dir.join("daemon.log"),
+        None | Some(Value::Null) => crate::logging::log_path(data_dir),
+        Some(Value::String(text)) if text.is_empty() => crate::logging::log_path(data_dir),
         Some(Value::String(text)) if is_absolute_path(text) => PathBuf::from(text),
         Some(_) => return Err("file must be an absolute path.".to_owned()),
     };
+    let level = match request.get("level") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(
+            crate::logging::Level::parse(text)
+                .ok_or_else(|| "level must be error, warn, info, or debug.".to_owned())?,
+        ),
+        Some(_) => return Err("level must be error, warn, info, or debug.".to_owned()),
+    };
+    let event = match request.get("event") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) if !text.is_empty() && text.len() <= 128 => Some(text.clone()),
+        Some(_) => return Err("event must be a non-empty string under 128 bytes.".to_owned()),
+    };
+    let raw = matches!(request.get("format").and_then(Value::as_str), Some("json"));
 
     let records = tail_lines(&path, lines as usize).unwrap_or_default();
     if records.is_empty() {
@@ -53,9 +70,37 @@ pub fn tail(data_dir: &Path, request: &DaemonRequest) -> Result<Value, String> {
             ]
         }));
     }
-    let lines: Vec<Value> = records
+    let filtered: Vec<String> = records
         .into_iter()
-        .map(|text| json!({ "tone": "plain", "text": text }))
+        .filter(|line| match (level, event.as_deref()) {
+            (None, None) => true,
+            _ => crate::logging::parse_line(line).is_some_and(|record| {
+                let level_ok = level.is_none_or(|wanted| {
+                    record.get("level").and_then(Value::as_str) == Some(wanted.as_str())
+                });
+                let event_ok = event.as_deref().is_none_or(|wanted| {
+                    record.get("event").and_then(Value::as_str) == Some(wanted)
+                });
+                level_ok && event_ok
+            }),
+        })
+        .collect();
+    if filtered.is_empty() && (level.is_some() || event.is_some()) {
+        return Ok(json!({ "lines": [{
+            "tone": "info",
+            "text": format!("No log lines at {}.", path.display()),
+        }] }));
+    }
+    let lines: Vec<Value> = filtered
+        .into_iter()
+        .map(|text| {
+            let shown = if raw {
+                text
+            } else {
+                crate::logging::format_line(&text)
+            };
+            json!({ "tone": "plain", "text": shown })
+        })
         .collect();
     Ok(json!({ "lines": lines }))
 }
