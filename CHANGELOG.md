@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `status` and `session.list` carry their screens: `DaemonStatus` gains
+  `lines` (skipped while empty) and `session.list` answers
+  `SessionListAnswer {sessions, lines}`. The protocol owns `ScreenLine` and
+  `Tone`, so every consumer decodes one shape and the client only maps a
+  tone to its glyph.
 - `about.report` and `config.report` answer the **finished screen lines**
   alongside their display values: section bars, kv rows, table padding and
   the empty-machine early stop are the host's layout now, and `shape` gains

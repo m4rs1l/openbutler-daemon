@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
 use openbutler_protocol::DaemonStatus;
+use openbutler_protocol::ScreenLine;
 use openbutler_protocol::entry::UserEntrySource;
 use openbutler_protocol::runtime::RuntimeViewData;
 use tokio::sync::watch;
@@ -395,13 +396,26 @@ impl Host {
 
     /// The current status view (`status` action).
     pub fn status(&self) -> DaemonStatus {
+        let connected_clients = self.connected_clients.load(Ordering::SeqCst);
+        // The status screen, composed here: the rows the source printed,
+        // label-padded to fourteen columns, with the optional rows only when
+        // the host actually reports them. A client prints it.
+        let lines = vec![
+            ScreenLine::plain(format!("{:<14} {}", "pid:", std::process::id())),
+            ScreenLine::plain(format!("{:<14} {}", "started:", self.started_at)),
+            ScreenLine::plain(format!("{:<14} 0", "workspaces:")),
+            ScreenLine::plain(format!("{:<14} {connected_clients}", "clients:")),
+            // A source run reports an explicit null (contract: null = source
+            // run, absent = older host), and the screen's row says `source`.
+            ScreenLine::plain(format!("{:<14} source", "build:")),
+        ];
         DaemonStatus {
             pid: std::process::id(),
             started_at: self.started_at.clone(),
             // Workspace runtimes are not implemented yet: an honest zero,
             // not a fabricated count.
             workspace_count: 0,
-            connected_clients: self.connected_clients.load(Ordering::SeqCst),
+            connected_clients,
             schedules: None,
             telegram: None,
             unresponsive: None,
@@ -409,6 +423,7 @@ impl Host {
             // A source run reports an explicit null (contract: null = source
             // run, absent = older host).
             build_id: Some(None),
+            lines,
         }
     }
 

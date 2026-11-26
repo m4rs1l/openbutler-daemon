@@ -695,8 +695,9 @@ fn an_attached_session_list_scopes_to_the_bound_workspace() {
         action_request("s0", "session.list", &[]),
     ));
     let ids: Vec<&str> = all
-        .as_array()
-        .expect("session.list answers an array")
+        .get("sessions")
+        .and_then(|answer| answer.as_array())
+        .expect("session.list answers a row set")
         .iter()
         .filter_map(|entry| entry["id"].as_str())
         .collect();
@@ -713,8 +714,9 @@ fn an_attached_session_list_scopes_to_the_bound_workspace() {
         action_request("s1", "session.list", &[("workspaceKey", json!(key))]),
     ));
     let ids: Vec<&str> = scoped
-        .as_array()
-        .expect("session.list answers an array")
+        .get("sessions")
+        .and_then(|answer| answer.as_array())
+        .expect("session.list answers a row set")
         .iter()
         .filter_map(|entry| entry["id"].as_str())
         .collect();

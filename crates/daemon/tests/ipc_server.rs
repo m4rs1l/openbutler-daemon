@@ -182,8 +182,13 @@ async fn session_list_returns_summaries_from_disk() {
     let DaemonResponse::Success { result, .. } = typed else {
         panic!("session.list must succeed");
     };
-    let sessions = result.as_array().expect("result is the summary array");
+    let sessions = result["sessions"]
+        .as_array()
+        .expect("result carries the summary rows");
     assert_eq!(sessions.len(), 1);
+    // The host composes the picker screen alongside the rows.
+    assert_eq!(result["lines"].as_array().expect("a screen").len(), 1);
+    assert!(result["lines"][0]["text"].as_str().unwrap().contains(&id));
     assert_eq!(sessions[0]["id"], id);
     assert_eq!(sessions[0]["title"], "Wire chat");
 

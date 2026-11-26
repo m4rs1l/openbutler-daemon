@@ -107,10 +107,10 @@ use std::path::Path;
 use openbutler_protocol::entry::UserEntrySource;
 use openbutler_protocol::runtime::RuntimeViewData;
 use openbutler_protocol::runtime::view::{ApprovalMode, ReasoningSupport};
-use openbutler_protocol::session::{SessionView, read};
+use openbutler_protocol::session::{SessionSummary, SessionView, read};
 use openbutler_protocol::{
-    DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, InlineAttachment, SessionEntriesRange,
-    SessionRecordWindow, validate_request,
+    DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, InlineAttachment, ScreenLine,
+    SessionEntriesRange, SessionListAnswer, SessionRecordWindow, validate_request,
 };
 use serde_json::{Value, json};
 
@@ -171,10 +171,16 @@ pub fn handle(
                 None => WorkspaceFilter::Any,
             };
             match state::list_sessions(data_dir, &filter) {
-                Ok(sessions) => success(
-                    request,
-                    serde_json::to_value(sessions).unwrap_or_else(|_| json!([])),
-                ),
+                Ok(sessions) => {
+                    // The picker screen, composed here: one line per row,
+                    // or the empty sentence. A client prints it.
+                    let lines = session_list_lines(&sessions);
+                    success(
+                        request,
+                        serde_json::to_value(SessionListAnswer { sessions, lines })
+                            .unwrap_or_else(|_| json!({ "sessions": [], "lines": [] })),
+                    )
+                }
                 Err(error) => failure(request, error.to_string()),
             }
         }
@@ -711,6 +717,34 @@ fn bootstrap_runtime_view(
 fn load_view(data_dir: &Path, session_id: &str) -> Option<SessionView> {
     let path = state::record_path(data_dir, session_id)?;
     state::read_session_view(&path, session_id)
+}
+
+/// The picker screen: one line per row — full id first (scripts select by
+/// it), then activity, `provider/model` with the running marker, and the
+/// title — or the source's empty sentence. Composed here so no client
+/// decides what a row says.
+fn session_list_lines(sessions: &[SessionSummary]) -> Vec<ScreenLine> {
+    if sessions.is_empty() {
+        return vec![ScreenLine::plain("No sessions.")];
+    }
+    sessions
+        .iter()
+        .map(|session| {
+            let running = if session.running == Some(true) {
+                " [running]"
+            } else {
+                ""
+            };
+            ScreenLine::plain(format!(
+                "{}  {}  {}/{}{running}  {}",
+                session.id,
+                session.updated_at,
+                session.provider_id,
+                session.model_id,
+                session.title
+            ))
+        })
+        .collect()
 }
 
 /// `requireString(value, name, max)`: the protocol validator with its
