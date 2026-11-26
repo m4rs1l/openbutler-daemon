@@ -172,7 +172,7 @@ pub async fn host_status(data_dir: &Path) -> Option<serde_json::Value> {
     #[cfg(windows)]
     type Stream = tokio::net::windows::named_pipe::NamedPipeClient;
     #[cfg(unix)]
-    type Stream = tokio::net::unix::Stream;
+    type Stream = tokio::net::UnixStream;
 
     async fn connect(endpoint: &Endpoint) -> Option<Stream> {
         #[cfg(windows)]
@@ -183,7 +183,7 @@ pub async fn host_status(data_dir: &Path) -> Option<serde_json::Value> {
         }
         #[cfg(unix)]
         if let Endpoint::UnixSocket(path) = endpoint {
-            return tokio::net::unix::Stream::connect(path).await.ok();
+            return tokio::net::UnixStream::connect(path).await.ok();
         }
         None
     }
