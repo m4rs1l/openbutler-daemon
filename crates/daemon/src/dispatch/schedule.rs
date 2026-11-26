@@ -82,8 +82,32 @@ pub(crate) fn handle_schedule_manage(
                     .unwrap_or("")
                     .to_owned();
                 let runtime = runtime_status(host, &schedule_id);
-                let mut body =
-                    json!({ "status": status_word(&runtime), "schedule": schedule, "saved": true });
+                // The source prints `describe(saved).human` in its save
+                // sentence; compose it here so no client does.
+                let human = match StateReader::open(data_dir) {
+                    Ok(reader) => schedules
+                        .iter()
+                        .find(|candidate| candidate.id == schedule_id)
+                        .map(|stored| {
+                            engine::describe_schedule(
+                                stored,
+                                chrono::Utc::now().timestamp_millis(),
+                                engine::read_trigger_due(stored, |key| reader.get(key)),
+                            )
+                            .human
+                        })
+                        .unwrap_or_default(),
+                    Err(_) => String::new(),
+                };
+                let mut body = json!({
+                    "status": status_word(&runtime),
+                    "schedule": schedule,
+                    "saved": true,
+                    "lines": [crate::shape::screen_line(
+                        "success",
+                        format!("Schedule {schedule_id} saved ({human}). Timers are live."),
+                    )],
+                });
                 attach_runtime(&mut body, runtime);
                 success(request, body)
             }

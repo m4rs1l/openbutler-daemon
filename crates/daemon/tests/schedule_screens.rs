@@ -105,3 +105,32 @@ fn an_empty_log_answers_the_source_sentence() {
     ));
     assert_eq!(rendered, vec![format!("No runs recorded for {id}.")]);
 }
+
+#[test]
+fn the_saved_sentence_names_the_description() {
+    let dir = temp_data_dir("schedule-saved-line");
+    let mut add = json!({ "input": {
+        "action": "add",
+        "schedule": {
+            "name": "morning",
+            "trigger": { "adapter": "daily", "options": { "at": "09:00" } },
+            "instruction": "say hi"
+        }
+    }});
+    add["input"]["schedule"]["workspaceRoot"] = json!(dir.display().to_string());
+    let (id, first) = match call(&dir, "v1", add) {
+        DaemonResponse::Success { result, .. } => (
+            result["schedule"]["id"].as_str().expect("an id").to_owned(),
+            result["lines"][0]["text"]
+                .as_str()
+                .expect("a line")
+                .to_owned(),
+        ),
+        DaemonResponse::Failure { error, .. } => panic!("add refused: {error}"),
+    };
+    assert!(
+        first.starts_with(&format!("Schedule {id} saved (")),
+        "{first}"
+    );
+    assert!(first.ends_with("). Timers are live."), "{first}");
+}
