@@ -51,6 +51,7 @@ pub struct ToolOutputWriter {
     root: PathBuf,
     file: Option<File>,
     saved_chars: usize,
+    saved_bytes: usize,
     dropped_chars: usize,
     cap: u64,
 }
@@ -58,6 +59,17 @@ pub struct ToolOutputWriter {
 impl ToolOutputWriter {
     /// Opens (or resumes) a spill file under the session's tool-output dir.
     pub fn open_at(root: &Path, session_id: Option<&str>, tool: &str) -> std::io::Result<Self> {
+        Self::open_with_cap(root, session_id, tool, TOOL_OUTPUT_MAX_FILE_BYTES)
+    }
+
+    /// The same writer under an explicit cap, so the unit tests can prove
+    /// the cap's arithmetic without a 64 MiB fixture.
+    pub(crate) fn open_with_cap(
+        root: &Path,
+        session_id: Option<&str>,
+        tool: &str,
+        cap: u64,
+    ) -> std::io::Result<Self> {
         std::fs::create_dir_all(root)?;
         let session = session_id
             .unwrap_or("session")
@@ -86,30 +98,49 @@ impl ToolOutputWriter {
             root: root.to_path_buf(),
             file: Some(file),
             saved_chars: 0,
+            saved_bytes: 0,
             dropped_chars: 0,
-            cap: TOOL_OUTPUT_MAX_FILE_BYTES,
+            cap,
         })
     }
 
-    /// Appends text to the spill file.
+    /// Appends text to the spill file, enforcing the cap in bytes.
     pub fn write(&mut self, text: &str) {
         if text.is_empty() || self.file.is_none() {
             return;
         }
-        let room = self.cap as usize - self.saved_chars;
+        // The cap is a byte budget, so the room is measured in bytes and
+        // the text is cut on a character boundary: a character that does
+        // not fit whole is left out rather than split. Counting characters
+        // against this budget let a multibyte file reach four times the
+        // stated ceiling.
+        let room = self.cap.saturating_sub(self.saved_bytes as u64) as usize;
         if room == 0 {
             self.dropped_chars += text.chars().count();
             return;
         }
-        let chunk: String = text.chars().take(room).collect();
-        let dropped_in_chunk = text.chars().count() - chunk.chars().count();
-        self.dropped_chars += dropped_in_chunk;
+        let mut used = 0usize;
+        let mut taken = 0usize;
+        for ch in text.chars() {
+            let width = ch.len_utf8();
+            if used + width > room {
+                break;
+            }
+            used += width;
+            taken += 1;
+        }
+        self.dropped_chars += text.chars().count() - taken;
+        if taken == 0 {
+            return;
+        }
+        let chunk: String = text.chars().take(taken).collect();
         if let Some(file) = self.file.as_mut()
             && file.write_all(chunk.as_bytes()).is_err()
         {
-            self.dropped_chars += chunk.chars().count();
+            self.dropped_chars += taken;
         } else {
-            self.saved_chars += chunk.chars().count();
+            self.saved_chars += taken;
+            self.saved_bytes += used;
         }
     }
 
@@ -178,4 +209,47 @@ fn short_token() -> String {
     let mut bytes = [0u8; 4];
     getrandom::fill(&mut bytes).map(|_| ()).unwrap_or(());
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// A scratch directory the tests own and remove.
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("ob-tool-output-{name}-{}", short_token()))
+    }
+
+    /// `TOOL_OUTPUT_MAX_FILE_BYTES` says bytes and the module documents a
+    /// 64 MiB ceiling, so the cap must hold for text whose characters are
+    /// wider than one byte. Counting characters against a byte budget let
+    /// the file reach four times the stated ceiling.
+    #[test]
+    fn the_cap_holds_for_multibyte_text() {
+        let dir = scratch("cap-multibyte");
+        let mut writer = ToolOutputWriter::open_with_cap(&dir, None, "t", 8).unwrap();
+        writer.write("\u{20AC}\u{20AC}\u{20AC}\u{20AC}");
+        let (path, saved_chars, dropped_chars) = writer.close();
+        let written = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            written <= 8,
+            "the file holds {written} bytes, over the 8-byte cap"
+        );
+        assert_eq!(saved_chars, 2);
+        assert_eq!(dropped_chars, 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ascii_output_fills_the_cap_exactly() {
+        let dir = scratch("cap-ascii");
+        let mut writer = ToolOutputWriter::open_with_cap(&dir, None, "t", 8).unwrap();
+        writer.write("abcdefghij");
+        let (path, saved_chars, dropped_chars) = writer.close();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 8);
+        assert_eq!(saved_chars, 8);
+        assert_eq!(dropped_chars, 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The tool-output spill cap now counts bytes, as its name and documentation
+  always claimed. It counted characters against a byte budget, so a command
+  emitting multibyte text could write four times the stated 64 MiB ceiling.
+  The writer keeps a byte total separate from the character totals the
+  notice reports, and cuts on a character boundary.
+
 - `settings.setup` now refuses a remote caller with the credential sentence
   `keys.add` already uses. The wizard writes the same secret store, so
   without the gate a paired remote token could replace any provider's API
