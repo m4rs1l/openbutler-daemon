@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 use self::shell::ResolvedShell;
 use crate::tool_runtime::pipeline::{DEFAULT_TOOL_TIMEOUT_SECONDS, MAX_TOOL_TIMEOUT_SECONDS};
 use crate::tool_runtime::tool_output::{
-    TOOL_OUTPUT_COMMAND_CHARS, ToolOutputWriter, tool_output_notice,
+    TOOL_OUTPUT_COMMAND_CHARS, ToolOutputWriter, tool_output_notice, tool_output_root_in,
 };
 use crate::tool_runtime::workspace_scope::{WorkspaceScope, classify_trusted_path};
 
@@ -539,8 +539,12 @@ fn run_shell(command: &str, cwd: &Path, env: &ExecuteEnvironment, timeout: Durat
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
     let session = env.session_id.clone();
-    let stdout_capture = Arc::new(Mutex::new(StreamCapture::new(env.data_dir.clone())));
-    let stderr_capture = Arc::new(Mutex::new(StreamCapture::new(env.data_dir.clone())));
+    // Spill files and the retention sweep that runs when one closes both
+    // work on this directory, so it must be the dedicated one: the data
+    // directory itself holds settings, tokens and schedules.
+    let spill_root = tool_output_root_in(&env.data_dir);
+    let stdout_capture = Arc::new(Mutex::new(StreamCapture::new(spill_root.clone())));
+    let stderr_capture = Arc::new(Mutex::new(StreamCapture::new(spill_root)));
     let readers = [
         spawn_reader(
             stdout_pipe,

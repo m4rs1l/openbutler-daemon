@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- xecute_command spilled overflowing output into the data directory
+  root instead of 	ool-output/. The retention sweep that runs when a spill
+  closes deletes files older than three days in the directory it was given,
+  so a long-running host could age out settings.yaml, the token store and
+  the schedules. Spill files now live under 	ool-output/.
+
 - The static file server refuses request paths that name an absolute
   location (`/C:/...`, `//...`). `Path::join` with a drive-prefixed or
   rooted argument discards the base directory on Windows, so such a path

@@ -152,3 +152,38 @@ fn the_host_deadline_stops_the_whole_tree() {
         "the deadline stops the wait, not just the report"
     );
 }
+
+/// A command whose output overflows the inline budget spills to the
+/// dedicated `tool-output` directory, and the retention sweep that runs
+/// when the spill closes touches only that directory. Pointing the writer
+/// at the data directory itself would age out the owner's settings, token
+/// store and schedules.
+#[test]
+fn an_overflowing_command_spills_under_tool_output_and_spares_the_data_dir() {
+    let dir = temp_data_dir("exec-spill-root");
+    let env = environment(&dir);
+    let precious = dir.join("settings.yaml");
+    std::fs::write(&precious, "defaultProvider: keep-me\n").unwrap();
+    let ten_days = std::time::Duration::from_secs(10 * 24 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(&precious)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - ten_days)
+        .unwrap();
+
+    let value = command(&format!("echo {}", "x".repeat(9_000)), &env);
+
+    assert_eq!(value["truncated"], true, "{value}");
+    let spilled = std::path::PathBuf::from(value["spilledTo"].as_str().expect("a spill path"));
+    assert_eq!(
+        spilled.parent().unwrap(),
+        dir.join("tool-output"),
+        "spill files live under tool-output, never in the data directory root"
+    );
+    assert!(
+        precious.exists(),
+        "the retention sweep must not touch files outside tool-output"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
