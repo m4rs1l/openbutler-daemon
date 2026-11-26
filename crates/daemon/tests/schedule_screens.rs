@@ -79,3 +79,29 @@ fn enable_disable_and_remove_answer_the_source_sentences() {
         assert_eq!(rendered, vec![expected], "{action}");
     }
 }
+
+#[test]
+fn an_empty_log_answers_the_source_sentence() {
+    let dir = temp_data_dir("schedule-log-empty");
+    let mut add = json!({ "input": {
+        "action": "add",
+        "schedule": {
+            "name": "morning",
+            "trigger": { "adapter": "daily", "options": { "at": "09:00" } },
+            "instruction": "say hi"
+        }
+    }});
+    add["input"]["schedule"]["workspaceRoot"] = json!(dir.display().to_string());
+    let id = match call(&dir, "l1", add) {
+        DaemonResponse::Success { result, .. } => {
+            result["schedule"]["id"].as_str().expect("an id").to_owned()
+        }
+        DaemonResponse::Failure { error, .. } => panic!("add refused: {error}"),
+    };
+    let rendered = texts(call(
+        &dir,
+        "l2",
+        json!({ "input": { "action": "log", "scheduleId": id } }),
+    ));
+    assert_eq!(rendered, vec![format!("No runs recorded for {id}.")]);
+}
