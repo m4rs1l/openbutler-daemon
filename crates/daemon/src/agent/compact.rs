@@ -194,7 +194,7 @@ impl TurnRunner {
         let request = CompactionRequest {
             call_tag: "compact".to_owned(),
             provider: SidecarProvider {
-                key: meta.provider_id.clone(),
+                key: context.provider_key,
                 url: context.provider_url,
                 api_key: context.provider_api_key,
             },

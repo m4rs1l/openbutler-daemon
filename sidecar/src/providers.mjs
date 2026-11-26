@@ -36,6 +36,12 @@ const registry = [
     settings: standardSettings,
   },
   {
+    key: "gateway",
+    load: () => import("@ai-sdk/gateway"),
+    create: (module, settings) => module.createGateway(settings),
+    settings: standardSettings,
+  },
+  {
     key: "google",
     load: () => import("@ai-sdk/google"),
     create: (module, settings) => module.createGoogle(settings),

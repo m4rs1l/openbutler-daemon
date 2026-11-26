@@ -619,3 +619,54 @@ fn the_answer_action_validates_and_forwards_through_the_seam() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A chat whose provider came from the catalog: the id is the catalog's
+/// own, the npm is the family the sidecar speaks.
+fn seed_catalog_chat(dir: &Path, provider_id: &str, npm: &str) -> String {
+    std::fs::write(
+        dir.join("settings.yaml"),
+        format!(
+            "providers:\n  {provider_id}:\n    enabled: true\n    npm: '{npm}'\n    url: http://127.0.0.1:9/v1\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("config.yaml"),
+        format!("providers:\n  {provider_id}:\n    keys:\n      - sk-test-key\n"),
+    )
+    .unwrap();
+    let id = uuid(7);
+    let body = format!(
+        "{{\n  \"version\": 1,\n  \"id\": \"{id}\",\n  \"title\": \"catalog chat\",\n  \"createdAt\": \"2026-11-17T00:00:00.000Z\",\n  \"updatedAt\": \"2026-11-17T00:00:00.000Z\",\n  \"providerId\": \"{provider_id}\",\n  \"modelId\": \"test-model\",\n  \"workspaceRoot\": \"work/chat\",\n  \"entries\": [],\n  \"conversation\": []\n}}\n"
+    );
+    write_session(dir, &id, &body);
+    id
+}
+
+#[test]
+fn a_catalog_provider_reaches_the_sidecar_as_its_npm_family() {
+    let dir = temp_data_dir("send-npm-key");
+    let session_id = seed_catalog_chat(&dir, "stepfun-ai", "@ai-sdk/openai-compatible");
+    let (host, recorder) = host_with_executor();
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = bound_state();
+    success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("load", "session.load", &[("sessionId", json!(session_id))]),
+    ));
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        send_request(message("hello", json!([]))),
+    );
+    assert_eq!(success_result(response), json!({ "accepted": true }));
+    let sent = recorder.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].1.provider_key, "openai-compatible",
+        "the catalog id never reaches the sidecar; its npm family does"
+    );
+}

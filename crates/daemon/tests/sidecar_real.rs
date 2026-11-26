@@ -21,13 +21,14 @@ use openbutler_protocol::sidecar::{SidecarCall, SidecarEvent, SidecarTool};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-/// The eleven keys the registry embeds — same order as the conformance
+/// The twelve keys the registry embeds — same order as the conformance
 /// vector.
-const PROVIDERS: [&str; 11] = [
+const PROVIDERS: [&str; 12] = [
     "anthropic",
     "cerebras",
     "cohere",
     "deepinfra",
+    "gateway",
     "google",
     "groq",
     "mistral",
@@ -407,7 +408,10 @@ async fn providers_load_lazily_one_call_at_a_time() {
         "the called provider loads"
     );
     for key in PROVIDERS {
-        if key == "openai-compatible" {
+        // The called provider loads by definition, and `ai@7.0.173`
+        // depends on `@ai-sdk/gateway` itself, so neither says anything
+        // about this registry's laziness.
+        if key == "openai-compatible" || key == "gateway" {
             continue;
         }
         let needle = format!("@ai-sdk/{key}/dist");

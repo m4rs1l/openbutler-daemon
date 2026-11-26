@@ -136,6 +136,8 @@ pub struct TurnInputs<'a> {
     pub workspace_root: Option<String>,
     pub provider_url: Option<String>,
     pub provider_api_key: Option<String>,
+    /// The sidecar's wire identity, already resolved from the provider's npm.
+    pub provider_key: String,
     pub team: Option<TeamInfo>,
     pub home: Option<&'a std::path::Path>,
     pub source: openbutler_protocol::entry::UserEntrySource,
@@ -160,6 +162,7 @@ pub fn prepare_turn(
         workspace_root,
         provider_url,
         provider_api_key,
+        provider_key,
         team,
         home,
         source,
@@ -173,7 +176,7 @@ pub fn prepare_turn(
     Ok(super::TurnRequest {
         text,
         source,
-        provider_key: meta.provider_id.clone(),
+        provider_key,
         provider_url,
         provider_api_key,
         model: meta.model_id.clone(),
@@ -225,6 +228,8 @@ pub(crate) fn build_turn_system(
 pub struct TurnContext {
     pub provider_url: Option<String>,
     pub provider_api_key: Option<String>,
+    /// The sidecar's wire identity (an npm family), never the catalog id.
+    pub provider_key: String,
     pub workspace_root: Option<String>,
     pub team: Option<TeamInfo>,
     pub approval_mode: crate::settings::ApprovalMode,
@@ -244,11 +249,15 @@ pub fn resolve_turn_context(
     let loaded = settings
         .as_ref()
         .ok_or_else(|| "settings are not loaded".to_owned())?;
-    let provider_url = loaded
-        .store
-        .providers
-        .get(&meta.provider_id)
-        .and_then(|provider| provider.url.clone());
+    let provider_state = loaded.store.providers.get(&meta.provider_id);
+    let provider_url = provider_state.and_then(|provider| provider.url.clone());
+    // The wire identity is the npm family the catalog recorded, never
+    // the catalog's own id: a `stepfun-ai` entry is `openai-compatible`
+    // to the sidecar, and `vercel` is `gateway`.
+    let provider_key = sidecar_provider_key(
+        provider_state.and_then(|provider| provider.npm.as_deref()),
+        &meta.provider_id,
+    );
     let workspace_root = meta
         .workspace_root
         .clone()
@@ -270,6 +279,7 @@ pub fn resolve_turn_context(
     Ok(TurnContext {
         provider_url,
         provider_api_key,
+        provider_key,
         workspace_root,
         team,
         approval_mode,
@@ -312,4 +322,61 @@ pub(crate) fn compaction_budget(
 /// module reads it instead of keeping a second copy with its own order.
 fn default_home() -> PathBuf {
     crate::state::home_dir()
+}
+
+/// The sidecar's wire identity for one configured provider: the npm
+/// family the catalog recorded, never the catalog's own id. A provider
+/// the owner configured by hand carries no npm, so its id is the key —
+/// the name `settings.setup` asked for and the only one the sidecar can
+/// resolve it by. An npm this build does not embed also keeps the id, so
+/// the sidecar's `unknown provider` sentence names what was configured.
+pub fn sidecar_provider_key(npm: Option<&str>, provider_id: &str) -> String {
+    let family = match npm {
+        Some("@ai-sdk/anthropic") => "anthropic",
+        Some("@ai-sdk/cerebras") => "cerebras",
+        Some("@ai-sdk/cohere") => "cohere",
+        Some("@ai-sdk/deepinfra") => "deepinfra",
+        Some("@ai-sdk/gateway") => "gateway",
+        Some("@ai-sdk/google") => "google",
+        Some("@ai-sdk/groq") => "groq",
+        Some("@ai-sdk/mistral") => "mistral",
+        Some("@ai-sdk/openai") => "openai",
+        Some("@ai-sdk/openai-compatible") => "openai-compatible",
+        Some("@ai-sdk/togetherai") => "togetherai",
+        Some("@ai-sdk/xai") => "xai",
+        _ => return provider_id.to_owned(),
+    };
+    family.to_owned()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::sidecar_provider_key;
+
+    #[test]
+    fn the_wire_key_is_the_npm_family_not_the_catalog_id() {
+        assert_eq!(
+            sidecar_provider_key(Some("@ai-sdk/openai-compatible"), "stepfun-ai"),
+            "openai-compatible"
+        );
+        assert_eq!(
+            sidecar_provider_key(Some("@ai-sdk/gateway"), "vercel"),
+            "gateway"
+        );
+        assert_eq!(
+            sidecar_provider_key(Some("@ai-sdk/openai"), "openai"),
+            "openai"
+        );
+    }
+
+    #[test]
+    fn a_hand_configured_provider_keeps_its_own_id() {
+        assert_eq!(sidecar_provider_key(None, "mock"), "mock");
+        assert_eq!(
+            sidecar_provider_key(Some("@openrouter/ai-sdk-provider"), "openrouter"),
+            "openrouter",
+            "an npm this build does not embed keeps the id, so the sidecar can name it"
+        );
+    }
 }

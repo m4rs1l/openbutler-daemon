@@ -17,11 +17,12 @@ use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-const PROVIDERS: [&str; 11] = [
+const PROVIDERS: [&str; 12] = [
     "anthropic",
     "cerebras",
     "cohere",
     "deepinfra",
+    "gateway",
     "google",
     "groq",
     "mistral",
@@ -158,7 +159,7 @@ async fn the_bundle_splits_lazy_chunks_and_behaves_like_the_source() {
             .expect("ready is JSON");
     assert_eq!(ready["aiSdkVersion"], "7.0.173");
     assert_eq!(ready["protocolVersion"], 1);
-    assert_eq!(ready["providers"].as_array().unwrap().len(), 11);
+    assert_eq!(ready["providers"].as_array().unwrap().len(), 12);
 
     let call = json!({
         "type": "call",

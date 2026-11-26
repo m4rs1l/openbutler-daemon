@@ -878,6 +878,7 @@ pub(crate) fn prepare_send(
             meta: &meta,
             workspace_root: context.workspace_root,
             provider_url: context.provider_url,
+            provider_key: context.provider_key,
             provider_api_key: context.provider_api_key,
             team: context.team,
             home: None,

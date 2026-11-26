@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Vercel AI Gateway is a provider. `@ai-sdk/gateway` was missing from
+  the sidecar registry while the catalog marks a provider with it (id
+  `vercel`), so configuring one produced `unknown provider`. The package
+  is a direct dependency pinned to 4.0.146, the version `ai@7.0.173`
+  already resolves, and the handshake now reports twelve keys.
+
 - A host started with `--web` now publishes the browser surface it serves:
   `status` carries `web.bind` and `web.pairUrl`, and `web.report` answers
   with them. Before, the publish call existed but nothing in the boot path
@@ -824,6 +830,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `http/` for the browser surface), each keeping its own authority.
 
 ### Fixed
+
+- A provider configured from the catalog reaches the sidecar. The host
+  sent the settings provider id while the registry speaks npm families,
+  so every catalog provider whose id differs from its family was refused:
+  `stepfun-ai` (npm `@ai-sdk/openai-compatible`) answered `unknown
+  provider`. `prepare_turn` now resolves the wire key through
+  `sidecar_provider_key` — the npm family when the catalog recorded one,
+  the configured id otherwise, which keeps hand-configured providers
+  working.
 
 - Stopping a run interrupts a running command. The stop flag was read only
   around approvals, questions and the model stream, so a tool that blocked —
