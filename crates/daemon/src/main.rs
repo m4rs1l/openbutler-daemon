@@ -250,6 +250,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             ) {
                 Ok(server) => {
                     println!("pair url: {}", server.pair_url());
+                    host.publish_web_server(&server);
                     Some(server)
                 }
                 Err(error) => {

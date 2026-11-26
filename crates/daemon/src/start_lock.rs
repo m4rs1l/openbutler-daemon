@@ -153,6 +153,16 @@ fn remove_stale(path: &Path, stale: Duration) -> bool {
 /// Asks a running host for its pid (the source's `getDaemonStatus`
 /// inside the contention loop); `None` means nobody answers.
 pub async fn host_pid(data_dir: &Path) -> Option<u32> {
+    host_status(data_dir)
+        .await?
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .map(|pid| pid as u32)
+}
+
+/// The running host's `status` answer as the wire carries it; `None` means
+/// nobody answers.
+pub async fn host_status(data_dir: &Path) -> Option<serde_json::Value> {
     use openbutler_protocol::endpoint::Endpoint;
     use openbutler_protocol::{
         DaemonRequest, DaemonResponse, FrameDecoder, MAX_DAEMON_FRAME_BYTES,
@@ -204,10 +214,7 @@ pub async fn host_pid(data_dir: &Path) -> Option<u32> {
             let value: serde_json::Value = serde_json::from_slice(&frame).ok()?;
             let response: DaemonResponse = serde_json::from_value(value).ok()?;
             return match response {
-                DaemonResponse::Success { result, .. } => result
-                    .get("pid")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|pid| pid as u32),
+                DaemonResponse::Success { result, .. } => Some(result),
                 DaemonResponse::Failure { .. } => None,
             };
         }

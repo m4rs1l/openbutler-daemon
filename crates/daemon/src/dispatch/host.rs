@@ -407,6 +407,14 @@ impl Host {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(status);
     }
 
+    /// Publishes a serving web server: its bound address and one-time link.
+    pub fn publish_web_server(&self, server: &crate::server::http::WebServer) {
+        self.publish_web(WebStatus {
+            bind: server.addr().to_string(),
+            pair_url: server.pair_url(),
+        });
+    }
+
     /// The current status view (`status` action).
     pub fn status(&self) -> DaemonStatus {
         let connected_clients = self.connected_clients.load(Ordering::SeqCst);

@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A host started with `--web` now publishes the browser surface it serves:
+  `status` carries `web.bind` and `web.pairUrl`, and `web.report` answers
+  with them. Before, the publish call existed but nothing in the boot path
+  made it, so the surface was never reported. `start_lock::host_status`
+  exposes the raw status answer.
+
 - `settings.setup.review` composes the wizard's Review block (`{lines}`)
   from the exact payload `settings.setup` takes, through one shared parse:
   the empty-set sentence, one bullet per provider with the default marker
