@@ -8,6 +8,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -97,7 +99,7 @@ fn run_queues_a_manual_event_for_an_enabled_schedule() {
     assert!(rows[0].payload["facts"]["requestedAt"].is_string());
     assert_eq!(
         rows[0].workspace_root.as_deref(),
-        Some(root.to_string_lossy().as_ref())
+        Some(common::canonical_root(&root).as_ref())
     );
     assert_eq!(added["saved"], true);
 }
@@ -157,7 +159,7 @@ fn list_reports_idle_adapter_states_and_the_describe_line() {
     assert_eq!(entry["id"], "s1");
     assert_eq!(
         entry["workspaceRoot"].as_str(),
-        Some(root.to_string_lossy().as_ref())
+        Some(common::canonical_root(&root).as_ref())
     );
     // No runner installed: the source's `?? 'idle'` for an unknown id.
     assert_eq!(entry["adapterState"], "idle");

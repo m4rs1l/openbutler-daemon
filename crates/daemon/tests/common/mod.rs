@@ -64,6 +64,19 @@ pub fn write_session(root: &Path, id: &str, body: &str) {
     fs::write(dir.join(format!("{id}.json")), body).unwrap();
 }
 
+/// The spelling the host stores for a workspace path: the resolved path
+/// with the Windows extended-length prefix removed. A CI runner keeps its
+/// temp directory behind an 8.3 short name, so a test that compares the
+/// raw spelling fails there and only there.
+pub fn canonical_root(path: &Path) -> String {
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = resolved.to_string_lossy().into_owned();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => rest.to_owned(),
+        None => text,
+    }
+}
+
 /// A fresh scratch data directory with an empty `sessions` root.
 pub fn temp_data_dir(tag: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!("ob-test-{tag}-{}", std::process::id()));

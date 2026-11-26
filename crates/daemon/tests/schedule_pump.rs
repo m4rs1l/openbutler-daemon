@@ -10,6 +10,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -217,7 +219,7 @@ async fn a_queued_schedule_event_runs_in_the_background_session_and_delivers() {
     let record = state::read_session_record(&path, &mapped).expect("background record");
     assert_eq!(
         record.meta.workspace_root.as_deref(),
-        Some(workspace.to_string_lossy().as_ref()),
+        Some(common::canonical_root(&workspace).as_ref()),
         "the background session runs in the schedule's workspace"
     );
     assert!(
