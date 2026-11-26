@@ -46,6 +46,7 @@ const PRE_ATTACH: &[&str] = &[
     "settings.reload",
     "settings.setup",
     "settings.set-listen",
+    "settings.set-default-workspace",
     "permissions.set-mode",
     "permissions.manage",
     "team.delivery",
@@ -422,6 +423,14 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
+        // The workspace bare launches use: the daemon writes it (the
+        // source wrote settings from the CLI process).
+        "settings.set-default-workspace" => {
+            match crate::settings::workspace::handle(host, data_dir, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
+            }
+        }
         // The manager screen's whole state: host-wide, needs no binding, and
         // safe on a view-only attachment (counts, never key material).
         "config.report" => match config_report::report(host, data_dir) {

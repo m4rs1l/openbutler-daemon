@@ -41,6 +41,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `settings.set-default-workspace` — the workspace bare launches use:
+  `{path}` canonicalizes through `canonical_scope_root` (the single
+  normalizer every workspace path already resolves through) and saves
+  `defaultWorkspaceRoot`; `{}`/`{path: null}` answers it, `null` when
+  nobody chose one. Source: `runWorkspaceCommand` (cli-main.ts L340-352);
+  the source wrote settings from the CLI process.
 - `openbutler about` — the source's `runAbout` screen from the host's
   `about.report`: this CLI's version, the host's version and pid, the
   resolved command shell (the same authority the `execute_command` tool

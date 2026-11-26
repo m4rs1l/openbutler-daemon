@@ -12,6 +12,7 @@ mod save;
 pub mod schema;
 pub mod setup;
 pub mod transaction;
+pub mod workspace;
 
 pub use load::{config_path, load_secrets, load_settings, settings_path};
 pub use remember::remember_provider_model;
