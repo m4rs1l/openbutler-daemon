@@ -46,3 +46,36 @@ fn an_empty_list_answers_the_source_sentence() {
         ]
     );
 }
+
+#[test]
+fn enable_disable_and_remove_answer_the_source_sentences() {
+    let dir = temp_data_dir("schedule-sentences");
+    let mut add = json!({ "input": {
+        "action": "add",
+        "schedule": {
+            "name": "morning",
+            "trigger": { "adapter": "daily", "options": { "at": "09:00" } },
+            "instruction": "say hi"
+        }
+    }});
+    add["input"]["schedule"]["workspaceRoot"] = json!(dir.display().to_string());
+    let id = match call(&dir, "s2", add) {
+        DaemonResponse::Success { result, .. } => {
+            result["schedule"]["id"].as_str().expect("an id").to_owned()
+        }
+        DaemonResponse::Failure { error, .. } => panic!("add refused: {error}"),
+    };
+    for (index, action) in ["disable", "enable", "remove"].iter().enumerate() {
+        let rendered = texts(call(
+            &dir,
+            &format!("s{}", index + 3),
+            json!({ "input": { "action": action, "scheduleId": id } }),
+        ));
+        let expected = match *action {
+            "disable" => format!("Schedule {id} disabled."),
+            "enable" => format!("Schedule {id} enabled."),
+            _ => format!("Schedule {id} removed. Run history stays in the ledger."),
+        };
+        assert_eq!(rendered, vec![expected], "{action}");
+    }
+}
