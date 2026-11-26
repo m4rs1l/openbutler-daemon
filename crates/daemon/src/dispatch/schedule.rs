@@ -111,8 +111,15 @@ pub(crate) fn handle_schedule_manage(
                 return fail(request, error.to_string());
             }
             reload_runner(host, &schedules);
+            let sentence = match action.as_str() {
+                "remove" => {
+                    format!("Schedule {schedule_id} removed. Run history stays in the ledger.")
+                }
+                "enable" => format!("Schedule {schedule_id} enabled."),
+                _ => format!("Schedule {schedule_id} disabled."),
+            };
             let runtime = runtime_status(host, &schedule_id);
-            let mut body = json!({ "status": status_word(&runtime), "scheduleId": schedule_id, "saved": true });
+            let mut body = json!({ "status": status_word(&runtime), "scheduleId": schedule_id, "saved": true, "lines": [crate::shape::screen_line("success", sentence)] });
             attach_runtime(&mut body, runtime);
             success(request, body)
         }
@@ -847,7 +854,14 @@ fn run_schedule(
     host.spawn_schedule_pump();
     success(
         request,
-        json!({ "status": "queued", "scheduleId": schedule_id }),
+        json!({
+            "status": "queued",
+            "scheduleId": schedule_id,
+            "lines": [crate::shape::screen_line(
+                "success",
+                format!("Schedule {schedule_id} queued. Watch it with: openbutler schedule log {schedule_id}"),
+            )],
+        }),
     )
 }
 
