@@ -156,6 +156,38 @@ async fn start_sampler(
     (stop, handle)
 }
 
+/// `/proc/<pid>/status` carries the two numbers the Windows sampler
+/// reads from the process object: resident size and anonymous resident
+/// size. Both are reported in kilobytes.
+#[cfg(unix)]
+async fn sample_rss(pid: u32) -> Option<(u64, u64)> {
+    let status = tokio::fs::read_to_string(format!("/proc/{pid}/status"))
+        .await
+        .ok()?;
+    let mut resident = None;
+    let mut anonymous = None;
+    for line in status.lines() {
+        let (field, rest) = match line.split_once(':') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let kilobytes = rest
+            .split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<u64>().ok());
+        match field {
+            "VmRSS" => resident = kilobytes,
+            "RssAnon" => anonymous = kilobytes,
+            _ => {}
+        }
+    }
+    let resident = resident.map(|kilobytes| kilobytes * 1024)?;
+    let anonymous = anonymous
+        .map(|kilobytes| kilobytes * 1024)
+        .unwrap_or(resident);
+    Some((resident, anonymous))
+}
+
 /// A worst-ish payload: a long history, a megabyte-class image data URL
 /// inside a real content part, and a huge assistant turn.
 fn big_messages() -> serde_json::Value {
