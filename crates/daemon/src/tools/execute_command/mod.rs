@@ -11,6 +11,8 @@ pub mod shell;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use crate::state::home_dir;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -226,13 +228,6 @@ fn command_may_access_outside_workspace(command: &str, cwd: &Path, roots: &[Path
         }
     }
     false
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// `command.split(/&&|\|\||[;&|\n]/)` — the segment boundaries the cd

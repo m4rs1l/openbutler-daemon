@@ -112,7 +112,7 @@ pub(crate) fn canonical_scope_root(path: &str) -> Result<String, String> {
     if requested.is_empty() {
         return Err("Workspace path cannot be empty.".to_owned());
     }
-    let home = home_dir();
+    let home = home_dir().to_string_lossy().into_owned();
     let expanded = if requested == "~" {
         home.clone()
     } else if let Some(rest) = requested
@@ -141,9 +141,17 @@ pub(crate) fn canonical_scope_root(path: &str) -> Result<String, String> {
     Ok(real.to_string_lossy().into_owned())
 }
 
-/// The home directory the source gets from `os.homedir()`.
-pub(crate) fn home_dir() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default()
+/// The home directory the source gets from `os.homedir()`: the platform
+/// variable first (USERPROFILE on Windows, HOME elsewhere), the other as a
+/// fallback. One authority — the settings paths, the skills roots and the
+/// shell's `~` expansion all read this.
+pub(crate) fn home_dir() -> PathBuf {
+    #[cfg(windows)]
+    let (first, second) = ("USERPROFILE", "HOME");
+    #[cfg(not(windows))]
+    let (first, second) = ("HOME", "USERPROFILE");
+    std::env::var_os(first)
+        .or_else(|| std::env::var_os(second))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
 }

@@ -8,6 +8,8 @@
 
 use std::path::PathBuf;
 
+use crate::state::home_dir;
+
 /// Resolves the data directory: `OPENBUTLER_DATA_DIR` when set, otherwise the
 /// platform default.
 pub fn data_dir() -> PathBuf {
@@ -50,11 +52,4 @@ fn default_data_dir() -> PathBuf {
             .unwrap_or_else(|| home_dir().join(".local").join("share"));
         base.join("openbutler-daemon")
     }
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }

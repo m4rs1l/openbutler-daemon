@@ -75,7 +75,7 @@ pub struct AgentSkill {
 
 /// The source's seven roots, in its order (`getSkillRoots`).
 pub fn skill_roots(workspace_root: &str, data_dir: &Path) -> Vec<SkillRoot> {
-    let home = crate::state::home_dir();
+    let home = crate::state::home_dir().to_string_lossy().into_owned();
     let codex_home = std::env::var("CODEX_HOME").unwrap_or_else(|_| format!("{home}/.codex"));
     let workspace = Path::new(workspace_root);
     vec![
