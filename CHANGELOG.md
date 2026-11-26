@@ -41,6 +41,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `openbutler about` — the source's `runAbout` screen from the host's
+  `about.report`: this CLI's version, the host's version and pid, the
+  resolved command shell (the same authority the `execute_command` tool
+  uses), the os/arch triple, the two configuration paths (names only) and
+  the bundled sidecar. One added row: `Host`, because this build has two
+  binaries and the source ran one process.
 - `usage.report` — the usage screen's whole state, computed by the host:
   optional `{days, session, model}` in (`days` defaults to 30 and must be a
   whole number in 1..=3650 — `days must be a whole number between 1 and

@@ -7,6 +7,7 @@
 //! `attach.rs`, `config_report.rs`, `session_control.rs`,
 //! `permissions.rs`, `schedule.rs` and `session_send.rs`.
 
+mod about;
 mod attach;
 pub mod clients;
 mod commands;
@@ -34,6 +35,7 @@ const CUSTODIAN_LOAD_ERROR: &str =
 /// only while the connection is unattached (L3303).
 const PRE_ATTACH: &[&str] = &[
     "status",
+    "about.report",
     "config.report",
     "usage.report",
     "pair.create",
@@ -423,6 +425,12 @@ pub fn handle(
         // The manager screen's whole state: host-wide, needs no binding, and
         // safe on a view-only attachment (counts, never key material).
         "config.report" => match config_report::report(host, data_dir) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        // What this machine runs: version, shell, paths. Host-wide and
+        // count-free — nothing here is a secret.
+        "about.report" => match about::report(host, data_dir) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },

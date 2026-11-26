@@ -25,6 +25,11 @@ pub fn config_path(data_root: &Path) -> PathBuf {
     data_root.join(CONFIG_FILE)
 }
 
+/// The settings file's path — the one authority for `settings.yaml`.
+pub fn settings_path(data_root: &Path) -> PathBuf {
+    data_root.join(SETTINGS_FILE)
+}
+
 /// Reads settings from disk, or returns the empty machine when the file is
 /// absent. Any other I/O failure stays visible — only a missing file means
 /// "defaults".
