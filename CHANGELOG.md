@@ -821,6 +821,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The schedule pump runs against the data directory its caller passes
+  instead of reading the machine's global one. A test or an embedding that
+  passes its own directory to dispatch therefore no longer spawns a pump
+  against the real store, where it could claim and fire the owner's
+  schedules.
+
 - `session.send` validates an image's bytes before it answers `accepted`.
   The source decodes each payload inside `parseQueuedMessage`; this port only
   checked the field shapes, so a message whose picture was not a PNG, was

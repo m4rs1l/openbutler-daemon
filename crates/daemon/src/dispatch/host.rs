@@ -356,17 +356,19 @@ impl Host {
     /// Runs one schedule-pump pass on the runtime (the source's
     /// `pumpEvents` at startup and after every queued event). Safe to
     /// call before `set_self_ref`: without the handle it does nothing.
-    pub fn spawn_schedule_pump(&self) {
+    /// The caller hands over its data directory: the pump must never guess
+    /// a global path, or a test that triggers a mutation would fire the
+    /// schedules in the owner's real store.
+    pub fn spawn_schedule_pump(&self, data_dir: &Path) {
         let Some(host) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else {
             return;
         };
         let Some(runtime) = tokio::runtime::Handle::try_current().ok() else {
             return;
         };
+        let data_dir = data_dir.to_path_buf();
         runtime.spawn(async move {
-            if let Err(error) =
-                crate::schedule::pump::pump_once(&host, &crate::config::data_dir()).await
-            {
+            if let Err(error) = crate::schedule::pump::pump_once(&host, &data_dir).await {
                 eprintln!("openbutler-daemon: schedule pump: {error}");
             }
         });

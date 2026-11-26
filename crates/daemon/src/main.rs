@@ -200,7 +200,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         // Placed after the host writer: both open the same schema, and
         // racing it deadlocks the first pump pass on Windows
         // (`database is locked`).
-        host.spawn_schedule_pump();
+        host.spawn_schedule_pump(&config::data_dir());
         let shutdown = host.subscribe_shutdown();
 
         if let Some(addr) = listen {

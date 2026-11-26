@@ -875,7 +875,7 @@ fn run_schedule(
     }
     // The queued event fires now — the pump is the only consumer
     // (legacy `receiveEvent` → `pumpEvents`).
-    host.spawn_schedule_pump();
+    host.spawn_schedule_pump(data_dir);
     success(
         request,
         json!({
