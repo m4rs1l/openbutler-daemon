@@ -142,7 +142,7 @@ async fn start_sampler(
                 tokio::select! {
                     _ = stop_signal.notified() => break,
                     _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                        if let Some((working, private)) = sample_rss(pid).await {
+                        if let Some((working, private)) = sample_rss(pid) {
                             measurement.peak_working = measurement.peak_working.max(working);
                             measurement.peak_private = measurement.peak_private.max(private);
                             measurement.samples += 1;
@@ -160,10 +160,8 @@ async fn start_sampler(
 /// reads from the process object: resident size and anonymous resident
 /// size. Both are reported in kilobytes.
 #[cfg(unix)]
-async fn sample_rss(pid: u32) -> Option<(u64, u64)> {
-    let status = tokio::fs::read_to_string(format!("/proc/{pid}/status"))
-        .await
-        .ok()?;
+fn sample_rss(pid: u32) -> Option<(u64, u64)> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     let mut resident = None;
     let mut anonymous = None;
     for line in status.lines() {
