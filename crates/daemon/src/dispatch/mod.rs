@@ -43,6 +43,7 @@ const PRE_ATTACH: &[&str] = &[
     "settings.setup",
     "settings.set-listen",
     "permissions.set-mode",
+    "permissions.manage",
     "team.delivery",
     "team.send",
     "team.send-file",
@@ -389,6 +390,10 @@ pub fn handle(
             Err(error) => failure(request, error),
         },
         "permissions.set-mode" => match permissions::set_mode(host, data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "permissions.manage" => match permissions::manage(host, data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },

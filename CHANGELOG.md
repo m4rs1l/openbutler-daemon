@@ -33,6 +33,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `permissions.manage` — the `openbutler permissions` surface in one atomic
+  write: optional `mode`, both timeouts (5-600, the source's flag sentences)
+  and `reviewModel` (`<provider>/<model>`, or `none` which clears the
+  `review` role and its legacy mirrors). Answers the four display values
+  (`formatApprovalMode` labels, `15 seconds (default)` spellings, the
+  reviewer pair or `(main model)`) plus `saved`; nothing carried means no
+  write. The source wrote settings CLI-side and pushed only the mode to a
+  live host. Pins: the default report, mode persistence + live copy, both
+  timeout sentences, the role write and the `none` clearing.
+
 - The auth token actions (`token.create` / `token.list` / `token.revoke`) and
   the local-only gate: the store lived CLI-side in the source and the host
   owns it now (salted hashes only; the plaintext is answered once). The
