@@ -30,7 +30,7 @@ use openbutler_protocol::DaemonRequest;
 use serde_json::{Value, json};
 
 use crate::ledger::{now_ms, parse_duration};
-use crate::shape::format_bytes;
+use crate::shape::{format_bytes, screen_line as line};
 use crate::state::{CUSTODIAN_SESSION_ID, is_session_id, record_path, sessions_directory};
 
 /// One selected record: the file it was seen at, the exact modification time
@@ -209,12 +209,6 @@ fn still_the_same(data_dir: &Path, file: &Candidate) -> bool {
 fn millis_of(time: SystemTime) -> Option<i64> {
     let elapsed = time.duration_since(UNIX_EPOCH).ok()?;
     i64::try_from(elapsed.as_millis()).ok()
-}
-
-/// One screen line: the tone is the host's decision, the glyph is the
-/// client's palette.
-fn line(tone: &str, text: impl Into<String>) -> Value {
-    json!({ "tone": tone, "text": text.into() })
 }
 
 #[cfg(test)]

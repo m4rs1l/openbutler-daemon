@@ -6,7 +6,7 @@
 //! `jsLen`, id-token regexes, `path.isAbsolute`); moved out when schedules
 //! left settings (owner ruling 2026-11-18).
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 /// The record check behind every `typeof x === 'object' && x !== null &&
 /// !Array.isArray(x)` in the source.
@@ -76,6 +76,18 @@ pub(crate) fn format_bytes(value: u64) -> String {
     let scaled = size / 1024f64.powi(exponent as i32);
     let digits = if exponent == 0 { 0 } else { 1 };
     format!("{} {}", to_fixed(scaled, digits), units[exponent])
+}
+
+/// One screen line: the host decides the tone and the sentence (the client
+/// owns the glyph palette).
+pub(crate) fn screen_line(tone: &str, text: impl Into<String>) -> Value {
+    json!({ "tone": tone, "text": text.into() })
+}
+
+/// `ui.kv` (cli/ui.ts L34) as a plain screen line: two spaces, the key padded
+/// to 22, one space, the value.
+pub(crate) fn kv_line(key: &str, value: &str) -> Value {
+    screen_line("plain", format!("  {key:<22} {value}"))
 }
 
 #[cfg(test)]

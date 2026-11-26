@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `logs.tail` — the machine log's tail moved into the host, where the file
+  lives. The tail is the CLI's algorithm moved verbatim (64 KiB blocks read
+  backwards, CRLF stripped); `file` must arrive absolute because the caller's
+  shell is the only correct base for a relative path. Local-only: reading
+  host files over a remote token is authority the source never granted.
+- `permissions.manage` now composes the whole screen and returns it as
+  `lines` (`{tone, text}`, the source's order) alongside the display values
+  and `saved`; the client prints it and applies its glyph palette instead of
+  deciding which success sentences apply.
 - `session.load` answers a **tail window** instead of the whole record:
   optional `entriesWindow` (integer 1..=2000 — `entriesWindow must be an
   integer between 1 and 2000.`; default 200) plus the

@@ -15,6 +15,7 @@ mod config_report;
 pub mod fanout;
 mod host;
 mod keys;
+mod logs_tail;
 mod permissions;
 pub(crate) mod schedule;
 mod session_control;
@@ -62,6 +63,7 @@ const PRE_ATTACH: &[&str] = &[
     "schedule.manage",
     "skills.list",
     "sessions.prune",
+    "logs.tail",
     "telegram.status",
     "telegram.pair",
     "telegram.test",
@@ -500,6 +502,21 @@ pub fn handle(
                 );
             }
             match sessions_prune::prune(data_dir, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
+            }
+        }
+        // The machine log's tail: the host owns the file, so the host reads
+        // it. Local-only — reading host files over a remote token is new
+        // authority the source never granted.
+        "logs.tail" => {
+            if state.remote {
+                return failure(
+                    request,
+                    "Log files are read on the host machine only.".to_owned(),
+                );
+            }
+            match logs_tail::tail(data_dir, request) {
                 Ok(payload) => success(request, payload),
                 Err(error) => failure(request, error),
             }

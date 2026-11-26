@@ -4,9 +4,10 @@
 //! computes; the mode itself is host-owned state.
 
 use openbutler_protocol::DaemonRequest;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::Host;
+use crate::shape::{kv_line, screen_line};
 
 /// `permissions.set-mode`: one message covers every rejected value;
 /// the computed mode is pushed to the live settings copy.
@@ -102,7 +103,7 @@ pub fn manage(
         loaded.store.approval_timeout_seconds = Some(value);
         saved.push("approvalTimeout");
     }
-    if let Some(binding) = review_model {
+    if let Some(binding) = &review_model {
         match binding {
             None => {
                 if let Some(roles) = loaded.store.roles.as_mut() {
@@ -123,8 +124,8 @@ pub fn manage(
                             model: model.clone(),
                         },
                     );
-                loaded.store.auto_review_provider = Some(provider);
-                loaded.store.auto_review_model = Some(model);
+                loaded.store.auto_review_provider = Some(provider.clone());
+                loaded.store.auto_review_model = Some(model.clone());
             }
         }
         saved.push("reviewModel");
@@ -136,21 +137,86 @@ pub fn manage(
     }
 
     let store = &loaded.store;
+    let mode_value = mode_label(store.approval_mode);
+    let review_timeout_value = store
+        .auto_review_timeout_seconds
+        .map(|value| format!("{value} seconds"))
+        .unwrap_or_else(|| "15 seconds (default)".to_owned());
+    let approval_timeout_value = store
+        .approval_timeout_seconds
+        .map(|value| format!("{value} seconds"))
+        .unwrap_or_else(|| "120 seconds (default)".to_owned());
+    let review_model_value = match (&store.auto_review_provider, &store.auto_review_model) {
+        (Some(provider), Some(model)) => format!("{provider}/{model}"),
+        _ => "(main model)".to_owned(),
+    };
+
+    // The screen, composed here: the source's order (L283-307) — the four
+    // values, the two explanations, then one success line per flag this call
+    // carried. The client only applies its glyph palette.
+    let mut lines: Vec<Value> = vec![
+        kv_line("Current mode", mode_value),
+        kv_line("Auto-review timeout", &review_timeout_value),
+        kv_line("Approval timeout", &approval_timeout_value),
+        kv_line("Auto-review model", &review_model_value),
+        screen_line(
+            "info",
+            "Workspace paths run without prompts. Auto-review asks the selected model about actions outside the workspace.",
+        ),
+        screen_line(
+            "info",
+            "Use `openbutler permissions full-access` to disable tool permission prompts.",
+        ),
+    ];
+    if saved.contains(&"mode") {
+        lines.push(screen_line("success", format!("Saved {mode_value} mode.")));
+    }
+    if let Some(value) = review_timeout
+        && saved.contains(&"reviewTimeout")
+    {
+        lines.push(screen_line(
+            "success",
+            format!("Auto-review timeout set to {value} seconds."),
+        ));
+    }
+    if let Some(value) = approval_timeout
+        && saved.contains(&"approvalTimeout")
+    {
+        lines.push(screen_line(
+            "success",
+            format!("Approval timeout set to {value} seconds."),
+        ));
+    }
+    if saved.contains(&"reviewModel") {
+        match &review_model {
+            Some(Some((provider, model))) => lines.push(screen_line(
+                "success",
+                format!("Auto-review model set to {provider}/{model}."),
+            )),
+            // Cleared: the source's sentence for reusing the main model.
+            _ => lines.push(screen_line(
+                "success",
+                "Auto-review will reuse the main model.",
+            )),
+        }
+    }
+    if review_model.is_some() {
+        // The source's sentence named its top-level `openbutler restart`;
+        // this surface has only the explicit subcommand (a documented
+        // divergence, same as the listener hint).
+        lines.push(screen_line(
+            "info",
+            "Restart the host for the reviewer model to take effect: openbutler daemon restart",
+        ));
+    }
+
     Ok(json!({
-        "mode": mode_label(store.approval_mode),
-        "reviewTimeout": store
-            .auto_review_timeout_seconds
-            .map(|value| format!("{value} seconds"))
-            .unwrap_or_else(|| "15 seconds (default)".to_owned()),
-        "approvalTimeout": store
-            .approval_timeout_seconds
-            .map(|value| format!("{value} seconds"))
-            .unwrap_or_else(|| "120 seconds (default)".to_owned()),
-        "reviewModel": match (&store.auto_review_provider, &store.auto_review_model) {
-            (Some(provider), Some(model)) => format!("{provider}/{model}"),
-            _ => "(main model)".to_owned(),
-        },
+        "mode": mode_value,
+        "reviewTimeout": review_timeout_value,
+        "approvalTimeout": approval_timeout_value,
+        "reviewModel": review_model_value,
         "saved": saved,
+        "lines": lines,
     }))
 }
 

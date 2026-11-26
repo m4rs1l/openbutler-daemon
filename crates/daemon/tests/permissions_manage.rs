@@ -39,16 +39,115 @@ fn the_default_report_names_the_source_displays() {
     let dir = temp_data_dir("perm-defaults");
     let host = Host::new();
     let report = manage(&dir, &host, json!({})).unwrap();
+    assert_eq!(report["mode"], json!("Workspace (default)"));
+    assert_eq!(report["reviewTimeout"], json!("15 seconds (default)"));
+    assert_eq!(report["approvalTimeout"], json!("120 seconds (default)"));
+    assert_eq!(report["reviewModel"], json!("(main model)"));
+    assert_eq!(report["saved"], json!([]));
+    // The screen the host composes: four kv rows, then the two explanations.
+    let tones: Vec<&str> = report["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["tone"].as_str().unwrap())
+        .collect();
     assert_eq!(
-        report,
-        json!({
-            "mode": "Workspace (default)",
-            "reviewTimeout": "15 seconds (default)",
-            "approvalTimeout": "120 seconds (default)",
-            "reviewModel": "(main model)",
-            "saved": []
-        })
+        tones,
+        vec!["plain", "plain", "plain", "plain", "info", "info"]
     );
+    assert_eq!(
+        report["lines"][0]["text"],
+        json!("  Current mode           Workspace (default)")
+    );
+}
+
+#[test]
+fn the_screen_lines_follow_the_source_order_and_sentences() {
+    let dir = temp_data_dir("perm-lines");
+    let host = Host::new();
+    let report = manage(
+        &dir,
+        &host,
+        json!({
+            "mode": "full-access",
+            "reviewTimeoutSeconds": 30,
+            "approvalTimeoutSeconds": 60,
+            "reviewModel": "mock/vision"
+        }),
+    )
+    .unwrap();
+    let pairs: Vec<(&str, &str)> = report["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| {
+            (
+                line["tone"].as_str().unwrap(),
+                line["text"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(pairs.len(), 11);
+    assert_eq!(
+        pairs[0],
+        (
+            "plain",
+            "  Current mode           Full access (no permission prompts)"
+        )
+    );
+    assert_eq!(
+        pairs[4],
+        (
+            "info",
+            "Workspace paths run without prompts. Auto-review asks the selected model about actions outside the workspace."
+        )
+    );
+    assert_eq!(
+        pairs[5],
+        (
+            "info",
+            "Use `openbutler permissions full-access` to disable tool permission prompts."
+        )
+    );
+    assert_eq!(
+        pairs[6],
+        ("success", "Saved Full access (no permission prompts) mode.")
+    );
+    assert_eq!(
+        pairs[7],
+        ("success", "Auto-review timeout set to 30 seconds.")
+    );
+    assert_eq!(pairs[8], ("success", "Approval timeout set to 60 seconds."));
+    assert_eq!(
+        pairs[9],
+        ("success", "Auto-review model set to mock/vision.")
+    );
+    assert_eq!(pairs[10].0, "info");
+    assert!(
+        pairs[10]
+            .1
+            .starts_with("Restart the host for the reviewer model"),
+        "{}",
+        pairs[10].1
+    );
+}
+
+#[test]
+fn clearing_the_review_model_says_it_reuses_the_main_model() {
+    let dir = temp_data_dir("perm-clear");
+    let host = Host::new();
+    let report = manage(&dir, &host, json!({ "reviewModel": "none" })).unwrap();
+    let lines = report["lines"].as_array().unwrap().clone();
+    assert_eq!(
+        lines[lines.len() - 2]["tone"],
+        json!("success"),
+        "the success line precedes the restart hint"
+    );
+    assert_eq!(
+        lines[lines.len() - 2]["text"],
+        json!("Auto-review will reuse the main model.")
+    );
+    assert_eq!(lines[lines.len() - 1]["tone"], json!("info"));
 }
 
 #[test]
