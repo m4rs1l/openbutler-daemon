@@ -90,6 +90,67 @@ pub(crate) fn kv_line(key: &str, value: &str) -> Value {
     screen_line("plain", format!("  {key:<22} {value}"))
 }
 
+/// `ui.section` (cli/ui.ts L9-12): `── Title ─────…`, a uniform 57-column line
+/// while the title fits, with the source's minimum fill of three.
+pub(crate) fn section_line(title: &str) -> Value {
+    let fill = (56usize.saturating_sub(title.len() + 3)).max(3);
+    let dashes = "\u{2500}".repeat(fill);
+    screen_line("plain", format!("\u{2500}\u{2500} {title} {dashes}"))
+}
+
+/// `ui.table` (cli/ui.ts L42-61) as plain screen lines: two spaces between
+/// columns, every cell padded to its column, an empty set answered with the
+/// source's `(nothing to show)` line.
+pub(crate) fn table_lines(headers: &[&str], rows: &[Vec<String>]) -> Vec<Value> {
+    if rows.is_empty() {
+        return vec![screen_line("plain", "  (nothing to show)")];
+    }
+    let mut widths: Vec<usize> = headers.iter().map(|head| head.chars().count()).collect();
+    for row in rows {
+        for (column, cell) in row.iter().enumerate() {
+            let width = cell.chars().count();
+            if column < widths.len() && width > widths[column] {
+                widths[column] = width;
+            }
+        }
+    }
+    let join = |cells: Vec<String>| {
+        cells
+            .iter()
+            .enumerate()
+            .map(|(column, cell)| {
+                let width = widths.get(column).copied().unwrap_or(0);
+                format!("{cell:<width$}")
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    let mut lines = vec![
+        screen_line(
+            "plain",
+            format!(
+                "  {}",
+                join(headers.iter().map(|head| (*head).to_owned()).collect())
+            ),
+        ),
+        screen_line(
+            "plain",
+            format!(
+                "  {}",
+                widths
+                    .iter()
+                    .map(|width| "\u{2500}".repeat(*width))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            ),
+        ),
+    ];
+    for row in rows {
+        lines.push(screen_line("plain", format!("  {}", join(row.clone()))));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]

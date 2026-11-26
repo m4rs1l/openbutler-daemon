@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `about.report` and `config.report` answer the **finished screen lines**
+  alongside their display values: section bars, kv rows, table padding and
+  the empty-machine early stop are the host's layout now, and `shape` gains
+  `section_line` / `table_lines` as the one place that layout is written.
+  A client prints the lines and owns only its glyph palette.
 - `settings.setup` stores a repeated key once: one key is one credential,
   and the store's shape no longer depends on which client sent the list.
 - `logs.tail` — the machine log's tail moved into the host, where the file

@@ -33,6 +33,7 @@ use super::Host;
 use crate::catalog::CatalogStore;
 use crate::default_model::{USAGE_WINDOW_MS, provider_is_configured, resolve_default_model};
 use crate::settings::schema::{ApprovalMode, McpServerState, SettingsStore};
+use crate::shape::{kv_line, screen_line, section_line, table_lines};
 
 /// Builds the whole report. `Err` carries a client-visible sentence.
 pub fn report(host: &Host, data_dir: &Path) -> Result<Value, String> {
@@ -135,7 +136,7 @@ pub fn report(host: &Host, data_dir: &Path) -> Result<Value, String> {
 
     let readiness = readiness(store, catalog_ref, catalog_loaded, default_choice.as_ref());
 
-    Ok(json!({
+    let mut report = json!({
         "mcpServers": mcp_servers,
         "defaultWorkspace": store.default_workspace_root,
         "toolAccess": format_approval_mode(store.approval_mode),
@@ -147,7 +148,156 @@ pub fn report(host: &Host, data_dir: &Path) -> Result<Value, String> {
         "reasoning": describe_reasoning(store),
         "showReasoning": store.show_reasoning != Some(false),
         "readiness": readiness,
-    }))
+    });
+    // The screen, composed here (the source's `runConfig` layout, L169-213):
+    // the client prints these lines and makes no decision.
+    report["lines"] = Value::Array(render(&report));
+    Ok(report)
+}
+
+/// The manager screen as finished lines: the MCP block, the two posture rows,
+/// the provider table with its default block, then readiness.
+fn render(report: &Value) -> Vec<Value> {
+    let mut lines: Vec<Value> = Vec::new();
+
+    lines.push(screen_line("plain", ""));
+    lines.push(section_line("MCP servers"));
+    let mcp = report["mcpServers"].as_array().cloned().unwrap_or_default();
+    if mcp.is_empty() {
+        lines.push(screen_line("info", "No MCP servers configured."));
+    } else {
+        let rows: Vec<Vec<String>> = mcp
+            .iter()
+            .map(|row| {
+                vec![
+                    row["id"].as_str().unwrap_or("").to_owned(),
+                    row["transport"].as_str().unwrap_or("").to_owned(),
+                    row["endpoint"].as_str().unwrap_or("").to_owned(),
+                ]
+            })
+            .collect();
+        lines.extend(table_lines(&["SERVER", "TRANSPORT", "ENDPOINT"], &rows));
+    }
+    lines.push(screen_line(
+        "info",
+        "Manage global servers with openbutler mcp. Credentials are environment-variable references, not saved values.",
+    ));
+    lines.push(screen_line("plain", ""));
+
+    let workspace = report["defaultWorkspace"]
+        .as_str()
+        .unwrap_or("(choose when opening OpenButler)");
+    lines.push(kv_line("Default workspace", workspace));
+    lines.push(kv_line(
+        "Tool access",
+        report["toolAccess"].as_str().unwrap_or(""),
+    ));
+
+    if !report["hasProviders"].as_bool().unwrap_or(false) {
+        lines.push(screen_line("plain", ""));
+        lines.push(section_line("Providers"));
+        lines.push(screen_line("plain", ""));
+        lines.push(screen_line("warn", "No provider is configured."));
+        lines.push(screen_line("info", "Set one up: openbutler setup"));
+        return lines;
+    }
+
+    lines.push(screen_line("plain", ""));
+    lines.push(section_line("Providers"));
+    let providers = report["providers"].as_array().cloned().unwrap_or_default();
+    let rows: Vec<Vec<String>> = providers
+        .iter()
+        .map(|row| {
+            let id = row["id"].as_str().unwrap_or("");
+            let tools = match row["toolCapableCount"].as_u64() {
+                Some(count) => count.to_string(),
+                None => "unknown".to_owned(),
+            };
+            vec![
+                if row["isDefault"].as_bool().unwrap_or(false) {
+                    format!("{id} *")
+                } else {
+                    id.to_owned()
+                },
+                if row["enabled"].as_bool().unwrap_or(false) {
+                    "on"
+                } else {
+                    "off"
+                }
+                .to_owned(),
+                row["keyCount"].as_u64().unwrap_or(0).to_string(),
+                tools,
+                row["defaultModel"].as_str().unwrap_or("").to_owned(),
+                if row["custom"].as_bool().unwrap_or(false) {
+                    "custom"
+                } else {
+                    "catalog"
+                }
+                .to_owned(),
+            ]
+        })
+        .collect();
+    lines.extend(table_lines(
+        &["PROVIDER", "STATE", "KEYS", "TOOLS", "DEFAULT", "KIND"],
+        &rows,
+    ));
+    lines.push(screen_line("plain", ""));
+
+    let default_line = match report["default"].as_object() {
+        Some(choice) => format!(
+            "{} / {}{}",
+            choice["providerId"].as_str().unwrap_or(""),
+            choice["modelId"].as_str().unwrap_or(""),
+            if choice["source"].as_str() == Some("usage") {
+                " (from usage)"
+            } else {
+                ""
+            }
+        ),
+        None => "(none)".to_owned(),
+    };
+    lines.push(kv_line("Default", &default_line));
+    lines.push(kv_line(
+        "Reasoning",
+        report["reasoning"].as_str().unwrap_or(""),
+    ));
+    lines.push(kv_line(
+        "Show reasoning",
+        if report["showReasoning"].as_bool().unwrap_or(false) {
+            "on"
+        } else {
+            "off"
+        },
+    ));
+    lines.push(screen_line("plain", ""));
+
+    if report["readiness"]["ready"].as_bool().unwrap_or(false) {
+        lines.push(screen_line("success", "Ready to run."));
+    } else if let Some(problems) = report["readiness"]["problems"].as_array() {
+        for problem in problems {
+            lines.push(screen_line("failure", problem.as_str().unwrap_or("")));
+        }
+    }
+    if let Some(hints) = report["readiness"]["hints"].as_array() {
+        for hint in hints {
+            lines.push(screen_line("info", hint.as_str().unwrap_or("")));
+        }
+    }
+    if report["catalogLoading"].as_bool().unwrap_or(false)
+        && !report["catalogLoaded"].as_bool().unwrap_or(false)
+    {
+        lines.push(screen_line(
+            "info",
+            "The catalog is downloading in the background; run this again when it finishes.",
+        ));
+    }
+    if report["default"].is_null() {
+        lines.push(screen_line(
+            "info",
+            "Change the default model: openbutler setup",
+        ));
+    }
+    lines
 }
 
 /// `formatApprovalMode` (cli-main.ts L334): the human label for the mode.
@@ -240,4 +390,123 @@ fn readiness(
     }
 
     json!({ "ready": problems.is_empty(), "problems": problems, "hints": hints })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    fn texts(lines: &[Value]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| line["text"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// The manager screen is composed here, so its layout is pinned here: the
+    /// section bars, the two posture rows, the provider table and the default
+    /// block, in the source's order.
+    #[test]
+    fn the_screen_lays_out_every_line_like_the_source() {
+        let report = json!({
+            "mcpServers": [
+                { "id": "local", "transport": "stdio", "endpoint": "npx -y server-files" }
+            ],
+            "defaultWorkspace": "C:\\work\\proj",
+            "toolAccess": "Workspace (default)",
+            "hasProviders": true,
+            "catalogLoaded": true,
+            "catalogLoading": false,
+            "providers": [
+                {
+                    "id": "mock", "enabled": true, "keyCount": 2,
+                    "toolCapableCount": 3, "isDefault": true, "custom": true,
+                    "url": "http://127.0.0.1:9/v1", "defaultModel": "test-model"
+                },
+                {
+                    "id": "other", "enabled": false, "keyCount": 0,
+                    "toolCapableCount": null, "isDefault": false, "custom": false,
+                    "url": "", "defaultModel": ""
+                }
+            ],
+            "default": { "providerId": "mock", "modelId": "test-model", "source": "settings" },
+            "reasoning": "default",
+            "showReasoning": true,
+            "readiness": { "ready": true, "problems": [], "hints": [] }
+        });
+        let lines = render(&report);
+        let got = texts(&lines);
+        let tones: Vec<&str> = lines
+            .iter()
+            .map(|line| line["tone"].as_str().unwrap())
+            .collect();
+
+        assert_eq!(got[0], "");
+        assert!(got[1].starts_with("\u{2500}\u{2500} MCP servers "));
+        assert_eq!(got[1].chars().count(), 57);
+        assert_eq!(got[2].trim_end(), "  SERVER  TRANSPORT  ENDPOINT");
+        assert!(got[3].starts_with("  \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}  "));
+        assert_eq!(
+            got[4].trim_end(),
+            "  local   stdio      npx -y server-files"
+        );
+        assert_eq!(
+            got[5],
+            "Manage global servers with openbutler mcp. Credentials are environment-variable references, not saved values."
+        );
+        assert_eq!(lines[5]["tone"], json!("info"));
+        assert_eq!(got[6], "");
+        assert_eq!(got[7], "  Default workspace      C:\\work\\proj");
+        assert_eq!(got[8], "  Tool access            Workspace (default)");
+        assert_eq!(got[9], "");
+        assert!(got[10].starts_with("\u{2500}\u{2500} Providers "));
+        assert_eq!(
+            got[11].trim_end(),
+            "  PROVIDER  STATE  KEYS  TOOLS    DEFAULT     KIND"
+        );
+        assert_eq!(
+            got[13].trim_end(),
+            "  mock *    on     2     3        test-model  custom"
+        );
+        assert_eq!(
+            got[14].trim_end(),
+            "  other     off    0     unknown              catalog"
+        );
+        assert_eq!(got[16], "  Default                mock / test-model");
+        assert_eq!(got[17], "  Reasoning              default");
+        assert_eq!(got[18], "  Show reasoning         on");
+        assert_eq!(got[20], "Ready to run.");
+        assert_eq!(*tones.last().unwrap(), "success");
+    }
+
+    /// An empty machine stops at the setup hint, exactly like the source.
+    #[test]
+    fn an_empty_machine_stops_at_the_setup_hint() {
+        let report = json!({
+            "mcpServers": [],
+            "defaultWorkspace": null,
+            "toolAccess": "Full access (no permission prompts)",
+            "hasProviders": false,
+            "catalogLoaded": false,
+            "catalogLoading": false,
+            "providers": [],
+            "default": null,
+            "reasoning": "default",
+            "showReasoning": true,
+            "readiness": { "ready": false, "problems": [], "hints": [] }
+        });
+        let lines = render(&report);
+        let got = texts(&lines);
+        assert_eq!(got[2], "No MCP servers configured.");
+        assert_eq!(
+            got[5],
+            "  Default workspace      (choose when opening OpenButler)"
+        );
+        assert_eq!(got[10], "No provider is configured.");
+        assert_eq!(got[11], "Set one up: openbutler setup");
+        assert_eq!(lines[10]["tone"], json!("warn"));
+        assert!(!got.iter().any(|line| line.contains("Reasoning")));
+    }
 }
