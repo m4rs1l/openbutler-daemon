@@ -614,7 +614,131 @@ fn list_schedules(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Daem
             entry
         })
         .collect();
-    success(request, json!({ "schedules": entries }))
+    let lines = schedule_lines(&entries, now);
+    success(request, json!({ "schedules": entries, "lines": lines }))
+}
+
+/// The source's schedule table (`renderScheduleRows`, cli-main.ts L1022):
+/// the state derivation, `LAST` as `<result> <age> ago`, and one warn line
+/// per schedule that carries a problem.
+fn schedule_lines(entries: &[Value], now: i64) -> Vec<Value> {
+    if entries.is_empty() {
+        return vec![crate::shape::screen_line(
+            "info",
+            "No schedules are configured. Ask OpenButler to create one, or use `openbutler schedule add <schedule.json>`.",
+        )];
+    }
+    let rows: Vec<Vec<String>> = entries
+        .iter()
+        .map(|entry| {
+            let runtime = &entry["runtime"];
+            let adapter_state = entry["adapterState"].as_str().unwrap_or("idle");
+            let adapter_error = entry["adapterError"].as_str();
+            let status = runtime["status"].as_str().unwrap_or("idle");
+            let status_error = runtime["statusError"].as_str();
+            let state = if !entry["enabled"].as_bool().unwrap_or(true) {
+                "disabled"
+            } else if adapter_error.is_some() || status_error.is_some() {
+                "error"
+            } else if status == "running" {
+                "running"
+            } else if adapter_state == "completed" {
+                "completed"
+            } else {
+                "idle"
+            };
+            let last = match (
+                runtime["lastResult"].as_str(),
+                runtime["lastRunAt"].as_i64(),
+            ) {
+                (Some(result), Some(at)) => format!("{result} {} ago", schedule_age(now - at)),
+                _ => "-".to_owned(),
+            };
+            vec![
+                entry["id"].as_str().unwrap_or_default().to_owned(),
+                entry["name"].as_str().unwrap_or_default().to_owned(),
+                state.to_owned(),
+                entry["trigger"]["adapter"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                entry["schedule"]["human"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                last,
+                runtime["runCount"].as_i64().unwrap_or(0).to_string(),
+            ]
+        })
+        .collect();
+    let mut lines = crate::shape::table_lines(
+        &["ID", "NAME", "STATE", "TRIGGER", "SCHEDULE", "LAST", "RUNS"],
+        &rows,
+    );
+    for entry in entries {
+        let problem = entry["adapterError"]
+            .as_str()
+            .or(entry["runtime"]["statusError"].as_str())
+            .or(entry["runtime"]["lastError"].as_str());
+        if let Some(problem) = problem {
+            lines.push(crate::shape::screen_line(
+                "warn",
+                format!("{}: {problem}", entry["id"].as_str().unwrap_or_default()),
+            ));
+        }
+    }
+    lines
+}
+
+/// `formatScheduleAge` (tools/schedule.ts L1): seconds, minutes, then
+/// `h m`/`d h` pairs.
+fn schedule_age(milliseconds: i64) -> String {
+    let seconds = (milliseconds.max(0) as f64 / 1000.0).round() as i64;
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 48 {
+        return format!("{}h {}m", hours, minutes % 60);
+    }
+    format!("{}d {}h", hours / 24, hours % 24)
+}
+
+/// The log table (`action === 'log'`, cli-main.ts L1091): `TIME` is the
+/// first 16 characters of the stamp with its `T` turned into a space.
+fn run_lines(schedule_id: &str, runs: &[Value]) -> Vec<Value> {
+    if runs.is_empty() {
+        return vec![crate::shape::screen_line(
+            "info",
+            format!("No runs recorded for {schedule_id}."),
+        )];
+    }
+    let rows: Vec<Vec<String>> = runs
+        .iter()
+        .map(|run| {
+            let time = |value: &str| -> String {
+                value.chars().take(16).collect::<String>().replace('T', " ")
+            };
+            let detail = match run["error"].as_str() {
+                Some(error) => error.to_owned(),
+                None => run["scheduledAt"]
+                    .as_str()
+                    .map(|at| format!("scheduled {}", time(at)))
+                    .unwrap_or_default(),
+            };
+            vec![
+                time(run["occurredAt"].as_str().unwrap_or_default()),
+                run["kind"].as_str().unwrap_or_default().to_owned(),
+                run["status"].as_str().unwrap_or_default().to_owned(),
+                detail,
+            ]
+        })
+        .collect();
+    crate::shape::table_lines(&["TIME", "EVENT", "STATUS", "DETAIL"], &rows)
 }
 
 /// `log`: the schedule's run history, newest first, with the payload's
@@ -666,7 +790,11 @@ fn log_schedule(
             run
         })
         .collect();
-    success(request, json!({ "scheduleId": schedule_id, "runs": runs }))
+    let lines = run_lines(&schedule_id, &runs);
+    success(
+        request,
+        json!({ "scheduleId": schedule_id, "runs": runs, "lines": lines }),
+    )
 }
 
 /// `run`: queue one manual firing. The pump (next slice) consumes it;
