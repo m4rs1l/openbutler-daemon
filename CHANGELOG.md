@@ -821,6 +821,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ledger.prune` and `sessions.prune` refuse a duration whose unit is a
+  multibyte character instead of unwinding the handler that read it.
+  `parse_duration` split the unit off the last byte of the caller's string,
+  and `str::split_at` panics when that index falls inside a character
+  (`olderThan: "30ğ"`). The split now takes the last character, so the
+  refusal is the source's `Invalid duration …` sentence. Reachable over a
+  remote token, because `ledger.prune` accepts one.
+
 - The tool-output spill cap now counts bytes, as its name and documentation
   always claimed. It counted characters against a byte budget, so a command
   emitting multibyte text could write four times the stated 64 MiB ceiling.

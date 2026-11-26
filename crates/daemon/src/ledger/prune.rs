@@ -143,7 +143,11 @@ pub fn prune(data_dir: &Path, request: &DaemonRequest) -> Result<Value, String> 
 /// surface (`sessions.prune` shares it).
 pub(crate) fn parse_duration(text: &str) -> Option<i64> {
     let normalized = text.trim().to_lowercase();
-    let (digits, unit) = normalized.split_at(normalized.len().checked_sub(1)?);
+    // Split on the last character, never on the last byte: a multibyte unit
+    // is a refusal, and `str::split_at` panics when the index is not a char
+    // boundary (the payload is caller-controlled).
+    let (unit_index, unit) = normalized.char_indices().next_back()?;
+    let digits = &normalized[..unit_index];
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
@@ -152,10 +156,10 @@ pub(crate) fn parse_duration(text: &str) -> Option<i64> {
         return None;
     }
     let unit_ms: i128 = match unit {
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        "w" => 604_800_000,
+        'm' => 60_000,
+        'h' => 3_600_000,
+        'd' => 86_400_000,
+        'w' => 604_800_000,
         _ => return None,
     };
     let milliseconds = value * unit_ms;

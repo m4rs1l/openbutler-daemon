@@ -197,6 +197,19 @@ fn actions_prune_only_terminal_rows() {
     assert_eq!(ids, vec!["req-running".to_owned()]);
 }
 
+/// The unit is split off the last character of the caller's string. A
+/// multibyte last character is not a byte boundary, and `str::split_at`
+/// panics on one; `ledger.prune` is reachable over a remote token, so the
+/// parser must refuse instead of unwinding the handler.
+#[test]
+fn a_multibyte_unit_is_refused_not_panicked_on() {
+    let dir = temp_data_dir("prune-multibyte");
+    assert_eq!(
+        prune(&dir, json!({ "kind": "events", "olderThan": "30ğ" })).unwrap_err(),
+        "Invalid duration \"30ğ\". Use a value like 30d, 12h, 90m, or 2w."
+    );
+}
+
 #[test]
 fn the_refusals_are_the_source_sentences() {
     let dir = temp_data_dir("prune-refusals");
