@@ -18,6 +18,7 @@ pub(crate) mod schedule;
 mod session_control;
 pub mod session_send;
 pub(crate) mod session_write;
+mod usage_report;
 
 pub use host::{DispatchState, Host};
 
@@ -34,6 +35,7 @@ const CUSTODIAN_LOAD_ERROR: &str =
 const PRE_ATTACH: &[&str] = &[
     "status",
     "config.report",
+    "usage.report",
     "pair.create",
     "token.create",
     "token.list",
@@ -387,6 +389,12 @@ pub fn handle(
         // The manager screen's whole state: host-wide, needs no binding, and
         // safe on a view-only attachment (counts, never key material).
         "config.report" => match config_report::report(host, data_dir) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        // The usage screen's whole state: host-wide, needs no binding, and
+        // safe on a view-only attachment (counts, never key material).
+        "usage.report" => match usage_report::report(data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },

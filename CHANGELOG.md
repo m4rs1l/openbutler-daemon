@@ -33,6 +33,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `usage.report` — the usage screen's whole state, computed by the host:
+  optional `{days, session, model}` in (`days` defaults to 30 and must be a
+  whole number in 1..=3650 — `days must be a whole number between 1 and
+  3650.`; the filters are optional non-empty strings under 512 bytes) and
+  `{label, summary, days, lines}` out. Reads its own `state.db` read-only
+  (5 s busy timeout; a missing file or table is no rows), buckets by each
+  row's own recorded offset, sums the fresh/cache split, walks the UTC
+  streak, splits the cost sources, and renders the source's lines and
+  sparkline — the CLI only prints them. Port of `cli/usage.ts` and
+  `usage/report.ts` (`bucketUsage`, `summarizeUsage`, `renderUsageReport`).
+  The source assembled all of this inside the client process; the daemon
+  owns it here. Pins: the byte-exact render (the CLI's old expectation,
+  moved), offset rollover, the busiest tie keeping the earliest day, the
+  streak stopping at a gap, the fresh-input fallback with its zero floor,
+  the cost-source split and both closing lines, the window cut, the
+  session/model filters (bare provider included), and both refusals.
+
 - `ledger.prune` — the settled-history selection from `activity-ledger.ts` with a preview that runs the identical SQL: worker identities and one-shot schedule identities never go, an inbox event waits for its read marker, and an event an action or usage row references is not history yet; only terminal actions with their transitions go. The duration parser (`30d`, `12h`, `90m`, `2w`) and the cutoff clock are the daemon's; `Invalid duration "…"`, `kind must be events or actions.` and `apply must be a boolean.` are the refusals. The source pruned from the CLI with the host stopped; the host is the one writer here, so the action runs inside it. `state.db`'s path now has one name (`ledger::db_path`). Pins: preview vs apply on the same selection with every guard row surviving, terminal-only actions with their transitions, the refusal sentences, and that a missing database counts zero without being created.
 
 - `permissions.manage` — the `openbutler permissions` surface in one atomic

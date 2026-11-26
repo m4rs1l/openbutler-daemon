@@ -383,6 +383,81 @@ pub struct UsagePick {
     pub at_ms: i64,
 }
 
+/// One usage row as the report reads it (`usageRows`,
+/// activity-ledger.ts L557) — the recorded numbers, never re-derived.
+#[derive(Debug, Clone)]
+pub struct UsageReportRow {
+    pub at_ms: i64,
+    pub tz_offset_min: i64,
+    pub input_tokens: Option<i64>,
+    pub no_cache_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub reasoning_tokens: Option<i64>,
+    pub cost_usd: Option<f64>,
+    pub duration_ms: Option<i64>,
+    pub cost_source: Option<String>,
+}
+
+/// The report window's rows: every supplied filter narrows the set (an
+/// AND), exactly as the source's `usageRows` composes them. Read-only —
+/// a missing database or table is an empty list, never a new file — and
+/// the busy timeout matches better-sqlite3's default so a live writer
+/// never fails a reader.
+pub fn usage_report_rows(
+    data_dir: &std::path::Path,
+    since_ms: i64,
+    session: Option<&str>,
+    provider: Option<&str>,
+    model_id: Option<&str>,
+) -> Result<Vec<UsageReportRow>, LedgerError> {
+    let Some(connection) = super::feed::open_readonly(data_dir)? else {
+        return Ok(Vec::new());
+    };
+    connection.busy_timeout(std::time::Duration::from_millis(5_000))?;
+    if !super::feed::table_exists(&connection, "openbutler_usage")? {
+        return Ok(Vec::new());
+    }
+    let mut sql = String::from(
+        "SELECT at_ms, tz_offset_min, input_tokens, no_cache_tokens, cache_read_tokens, \
+         cache_write_tokens, output_tokens, reasoning_tokens, cost_usd, duration_ms, cost_source \
+         FROM openbutler_usage WHERE at_ms >= ?1",
+    );
+    let mut filters: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(since_ms)];
+    if let Some(session) = session {
+        sql.push_str(" AND session_id = ?");
+        filters.push(Box::new(session.to_owned()));
+    }
+    if let Some(provider) = provider {
+        sql.push_str(" AND provider_id = ?");
+        filters.push(Box::new(provider.to_owned()));
+    }
+    if let Some(model_id) = model_id {
+        sql.push_str(" AND model_id = ?");
+        filters.push(Box::new(model_id.to_owned()));
+    }
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(filters.iter()), |row| {
+            Ok(UsageReportRow {
+                at_ms: row.get(0)?,
+                tz_offset_min: row.get(1)?,
+                input_tokens: row.get(2)?,
+                no_cache_tokens: row.get(3)?,
+                cache_read_tokens: row.get(4)?,
+                cache_write_tokens: row.get(5)?,
+                output_tokens: row.get(6)?,
+                reasoning_tokens: row.get(7)?,
+                cost_usd: row.get(8)?,
+                duration_ms: row.get(9)?,
+                cost_source: row.get(10)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 impl super::LedgerWriter {
     /// `recordUsage`: `INSERT OR IGNORE` — the id is the key, so a replayed
     /// report writes once (recorder.ts L612+). Never throws into the run:

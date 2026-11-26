@@ -131,7 +131,7 @@ pub(super) fn open_readonly(data_dir: &Path) -> Result<Option<Connection>, Ledge
     )?))
 }
 
-fn table_exists(connection: &Connection, name: &str) -> Result<bool, LedgerError> {
+pub(super) fn table_exists(connection: &Connection, name: &str) -> Result<bool, LedgerError> {
     let found: Option<i64> = connection
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",

@@ -16,7 +16,8 @@ pub use feed::{list_actions, list_events, retry_event, schedule_events};
 pub use prune::prune;
 pub use state::StateReader;
 pub use usage::{
-    StepUsageReport, TokenPrices, UsageInput, UsagePick, UsageRow, UsageTokens, usage_pick_rows,
+    StepUsageReport, TokenPrices, UsageInput, UsagePick, UsageReportRow, UsageRow, UsageTokens,
+    usage_pick_rows, usage_report_rows,
 };
 pub use writer::{LedgerWriter, TOOL_ACTION_STATES, ToolActionState, ToolActionUpdate};
 

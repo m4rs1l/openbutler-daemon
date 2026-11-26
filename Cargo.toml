@@ -13,7 +13,7 @@ license = "MIT"
 [workspace.dependencies]
 openbutler-protocol = { git = "https://github.com/m4rs1l/openbutler-protocol", rev = "c6bb9d447f5411bb32af4e030131c5ea2b94cd3f" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 serde-saphyr = "2.1.1"
 rusqlite = { version = "0.43", features = ["bundled"] }
 sha2 = "0.10"
