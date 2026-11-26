@@ -79,13 +79,7 @@ fn spec(context: Option<u64>, output: Option<u64>, name: Option<&str>) -> Provid
 }
 
 fn store_over(dir: &Path) -> CatalogStore {
-    write_catalog_snapshot(
-        dir,
-        &catalog_payload(),
-        1_700_000_000_000,
-        1_700_000_000_000,
-    )
-    .unwrap();
+    write_catalog_snapshot(dir, &catalog_payload(), 1_700_000_000_000).unwrap();
     CatalogStore::with_transport(dir, Arc::new(DeadTransport))
 }
 
@@ -266,7 +260,7 @@ fn the_view_follows_both_revisions() {
     // A catalog replacement rebuilds too, under the same settings revision.
     let mut payload = catalog_payload();
     payload["providers"]["mock"]["name"] = json!("Mock Renamed");
-    write_catalog_snapshot(&dir, &payload, 1_700_000_001_000, 1_700_000_001_000).unwrap();
+    write_catalog_snapshot(&dir, &payload, 1_700_000_001_000).unwrap();
     let third = store.view(&changed, "s2");
     assert!(
         !Arc::ptr_eq(&second, &third),

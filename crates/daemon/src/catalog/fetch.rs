@@ -96,7 +96,7 @@ impl CatalogStore {
                     inner.loaded.clear();
                     inner.retry_after_ms = 0;
                     inner.disk_revision =
-                        super::store::file_signature(&super::index_path(&inner.data_dir));
+                        super::store::file_signature(&inner.data_dir.join(super::CATALOG_FILE));
                 });
                 Ok(index)
             }
@@ -122,7 +122,7 @@ impl CatalogStore {
         let payload: serde_json::Value = serde_json::from_slice(body)
             .map_err(|_| "models.dev returned an invalid JSON payload".to_owned())?;
         let data_dir = self.with_state(|inner| inner.data_dir.clone());
-        write_catalog_snapshot(&data_dir, &payload, options.now_ms, options.now_ms)
+        write_catalog_snapshot(&data_dir, &payload, options.now_ms)
     }
 }
 

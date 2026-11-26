@@ -1,21 +1,27 @@
-//! The store: revision-aware reads over the committed index, one provider
-//! line at a time, with a memo that follows cross-process replacements
-//! (source: `currentIndex` + `loaded`).
+//! The store: revision-aware reads over the published catalog, one provider
+//! line at a time, with a memo that follows cross-process replacements.
+//!
+//! The file's first line is the header (fetch time plus every provider's byte
+//! range and counts); a run reads that line once per disk revision and then
+//! only the provider lines it is asked about.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use super::{
-    CatalogEntry, CatalogIndex, CatalogProvider, MAX_PROVIDER_LINE_BYTES, Transport, data_path,
-    index_path, is_generation_name, model_id_candidates,
+    CATALOG_FILE, CATALOG_FORMAT_VERSION, CatalogEntry, CatalogIndex, CatalogProvider,
+    MAX_PROVIDER_LINE_BYTES, Transport, model_id_candidates,
 };
+
+/// A header is a few hundred bytes per provider; anything far past that is
+/// not a header this build wrote.
+const MAX_HEADER_BYTES: usize = 8 * 1024 * 1024;
 
 /// One provider plus its index facts — the listing shape the source
 /// returns (`{id, ...entry}`).
@@ -31,7 +37,8 @@ pub(crate) struct Inner {
     pub(crate) index: Option<CatalogIndex>,
     pub(crate) disk_revision: String,
     /// Providers read during this run, so a second lookup costs nothing;
-    /// misses are memoised too (a torn pair stays unknown, not retried).
+    /// misses are memoised too (an id the catalog does not carry stays
+    /// unknown, not retried).
     pub(crate) loaded: HashMap<String, Option<CatalogProvider>>,
     pub(crate) retry_after_ms: i64,
     /// The derived view under the revisions it was built for (owner
@@ -48,7 +55,7 @@ pub struct CatalogStore {
 }
 
 impl CatalogStore {
-    /// Opens the store over `data_dir`'s committed index (read lazily on
+    /// Opens the store over `data_dir`'s published catalog (read lazily on
     /// first access, exactly like the source's first `currentIndex()`).
     pub fn with_transport(data_dir: &Path, transport: std::sync::Arc<dyn Transport>) -> Self {
         Self {
@@ -71,13 +78,13 @@ impl CatalogStore {
     }
 
     /// One provider, read on demand and then remembered for the rest of
-    /// the run. Never hits the network: an id the index does not carry is
+    /// the run. Never hits the network: an id the header does not carry is
     /// "not known", not "no".
     pub fn get_provider(&self, provider_id: &str) -> Option<CatalogProvider> {
         self.with_state(|inner| ensured_provider(inner, provider_id))
     }
 
-    /// Ids of every provider in the cached catalog, from the index alone.
+    /// Ids of every provider in the cached catalog, from the header alone.
     pub fn list_provider_ids(&self) -> Vec<String> {
         self.with_state(|inner| {
             refresh_if_changed(inner);
@@ -89,7 +96,7 @@ impl CatalogStore {
         })
     }
 
-    /// Per-provider facts held in the index, so listing needs no provider
+    /// Per-provider facts held in the header, so listing needs no provider
     /// read (source: `listProviderSummaries`).
     pub fn list_provider_summaries(&self) -> Vec<ProviderSummary> {
         self.with_state(|inner| {
@@ -124,9 +131,9 @@ impl CatalogStore {
         self.get_model(provider_id, model_id)?.cost
     }
 
-    /// Whether the catalog index is in hand. A count taken with no index
-    /// is zero, and zero reads as "nothing usable" — a different and
-    /// wrong claim from "we do not know yet" (source: `isCatalogLoaded`).
+    /// Whether a published catalog is in hand. A count taken with no catalog
+    /// is zero, and zero reads as "nothing usable" — a different and wrong
+    /// claim from "we do not know yet" (source: `isCatalogLoaded`).
     pub fn is_loaded(&self) -> bool {
         self.with_state(|inner| {
             refresh_if_changed(inner);
@@ -135,7 +142,7 @@ impl CatalogStore {
     }
 
     /// Tracks disk replacements across processes, including cached misses
-    /// and changed byte offsets (source: `getCatalogRevision`).
+    /// (source: `getCatalogRevision`).
     pub fn revision(&self) -> String {
         self.with_state(|inner| {
             refresh_if_changed(inner);
@@ -147,11 +154,10 @@ impl CatalogStore {
     pub fn size_on_disk(&self) -> u64 {
         self.with_state(|inner| {
             refresh_if_changed(inner);
-            inner
-                .index
-                .as_ref()
-                .map(|index| data_path(&inner.data_dir, index))
-                .and_then(|path| fs::metadata(path).ok())
+            if inner.index.is_none() {
+                return 0;
+            }
+            fs::metadata(inner.data_dir.join(CATALOG_FILE))
                 .map(|metadata| metadata.len())
                 .unwrap_or(0)
         })
@@ -178,59 +184,43 @@ pub(crate) fn ensured_provider(inner: &mut Inner, provider_id: &str) -> Option<C
     found
 }
 
-/// A committed line for `provider_id`, verified against its slot: the
-/// digest must match and the line's id must equal the slot (a torn pair
-/// answers unknown until the next refresh writes a consistent one).
+/// A published line for `provider_id`, verified against its slot: the line
+/// must parse as an object and carry the id the header filed it under.
 fn provider_from_disk(inner: &Inner, provider_id: &str) -> Option<CatalogProvider> {
     let index = inner.index.as_ref()?;
     let entry = index.entries.get(provider_id)?;
-    let provider = read_provider_line(&inner.data_dir, index, entry)?;
-    (provider.id == provider_id).then_some(provider)
-}
-
-/// Reads one provider line by its byte range and verifies its digest.
-fn read_provider_line(
-    data_dir: &Path,
-    index: &CatalogIndex,
-    entry: &CatalogEntry,
-) -> Option<CatalogProvider> {
     const JS_MAX_SAFE: u64 = 9_007_199_254_740_991;
     if entry.offset > JS_MAX_SAFE || entry.length == 0 || entry.length > MAX_PROVIDER_LINE_BYTES {
         return None;
     }
     let mut buffer = vec![0u8; entry.length as usize];
-    let mut file = fs::File::open(data_path(data_dir, index)).ok()?;
-    file.seek(SeekFrom::Start(entry.offset)).ok()?;
+    let mut file = fs::File::open(inner.data_dir.join(CATALOG_FILE)).ok()?;
+    file.seek(SeekFrom::Start(index.body_start + entry.offset))
+        .ok()?;
     file.read_exact(&mut buffer).ok()?;
-    if let Some(expected) = &entry.sha256
-        && format!("{:x}", Sha256::digest(&buffer)) != *expected
-    {
-        return None;
-    }
     let parsed: Value = serde_json::from_slice(&buffer).ok()?;
     if !parsed.is_object() {
         return None;
     }
-    serde_json::from_value(parsed).ok()
+    let provider: CatalogProvider = serde_json::from_value(parsed).ok()?;
+    (provider.id == provider_id).then_some(provider)
 }
 
-/// Re-reads the index when another process replaced it: the disk
-/// signature moved, so the index and the memo go with it (source:
-/// cached misses and changed byte offsets included).
+/// Re-reads the header when another process replaced the file: the disk
+/// signature moved, so the header and the memo go with it.
 pub(crate) fn refresh_if_changed(inner: &mut Inner) {
-    let revision = file_signature(&index_path(&inner.data_dir));
+    let revision = file_signature(&inner.data_dir.join(CATALOG_FILE));
     if revision == inner.disk_revision {
         return;
     }
-    inner.index = read_disk_index(&inner.data_dir);
+    inner.index = read_header(&inner.data_dir);
     inner.loaded.clear();
     inner.disk_revision = revision;
 }
 
 /// `{ino}:{size}:{mtimeNs}:{ctimeNs}` on unix (the source's exact
 /// signature); Windows has no stable file index in `std`, so the pair
-/// there is `{size}:{mtimeNs}:{createdNs}` — replacement still moves it
-/// (a new generation creates a new file record and usually a new size).
+/// there is `{size}:{mtimeNs}:{createdNs}` — an overwrite still moves it.
 pub(crate) fn file_signature(path: &Path) -> String {
     #[cfg(unix)]
     {
@@ -266,66 +256,42 @@ pub(crate) fn file_signature(path: &Path) -> String {
     }
 }
 
-/// Validates the index document (source: `readDiskIndex`): a record with
-/// an `entries` record, a well-formed generation name whose file exists,
-/// and a `modelProviders` map filtered down to valid pairs.
-pub(crate) fn read_disk_index(data_dir: &Path) -> Option<CatalogIndex> {
-    let text = fs::read_to_string(index_path(data_dir)).ok()?;
-    let parsed: Value = serde_json::from_str(&text).ok()?;
-    if !parsed.is_object() || !parsed.get("entries")?.is_object() {
+/// Reads the header line and validates it against the file: a range that
+/// does not fit means the catalog is not usable, which is "not yet" — never a
+/// guess about its contents.
+pub(crate) fn read_header(data_dir: &Path) -> Option<CatalogIndex> {
+    let path = data_dir.join(CATALOG_FILE);
+    let file = fs::File::open(&path).ok()?;
+    let total = file.metadata().ok()?.len();
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    reader.read_until(b'\n', &mut line).ok()?;
+    if line.last() != Some(&b'\n') || line.len() > MAX_HEADER_BYTES {
         return None;
     }
-
-    let data_file = match parsed.get("dataFile") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(name)) => {
-            if !is_generation_name(name) {
-                return None;
-            }
-            Some(name.clone())
-        }
-        Some(_) => return None,
-    };
-    let data_exists = match &data_file {
-        Some(name) => data_dir.join(name).exists(),
-        None => data_dir.join(super::CATALOG_FILENAMES.0).exists(),
-    };
-    if !data_exists {
+    let body_start = line.len() as u64;
+    let header: Value = serde_json::from_slice(&line[..line.len() - 1]).ok()?;
+    if header.get("version").and_then(Value::as_u64) != Some(CATALOG_FORMAT_VERSION) {
         return None;
     }
-
     let entries: BTreeMap<String, CatalogEntry> =
-        serde_json::from_value(parsed.get("entries")?.clone()).ok()?;
-
-    let model_providers = match parsed.get("modelProviders") {
-        Some(Value::Object(map)) => {
-            let mut filtered = BTreeMap::new();
-            for (model_id, providers) in map {
-                if let Value::Array(list) = providers
-                    && list.iter().all(Value::is_string)
-                {
-                    filtered.insert(
-                        model_id.clone(),
-                        list.iter()
-                            .map(|provider| provider.as_str().unwrap_or_default().to_owned())
-                            .collect::<Vec<_>>(),
-                    );
-                }
-            }
-            Some(filtered)
+        serde_json::from_value(header.get("providers")?.clone()).ok()?;
+    for entry in entries.values() {
+        let end = body_start
+            .checked_add(entry.offset)?
+            .checked_add(entry.length)?;
+        if entry.length == 0 || end > total {
+            return None;
         }
-        _ => None,
-    };
-
+    }
     Some(CatalogIndex {
-        fetched_at: parsed
+        fetched_at: header
             .get("fetchedAt")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        data_file,
+        body_start,
         entries,
-        model_providers,
     })
 }
 

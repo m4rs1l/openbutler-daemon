@@ -94,24 +94,40 @@ fn payload_bytes() -> Vec<u8> {
     serde_json::to_vec(&payload()).unwrap()
 }
 
-fn index_json(dir: &Path) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(dir.join("catalog-index.json")).unwrap()).unwrap()
+/// The file's first line: the header, which is the index.
+fn header_json(dir: &Path) -> Value {
+    let text = std::fs::read_to_string(dir.join("catalog.ndjson")).unwrap();
+    serde_json::from_str(text.lines().next().unwrap()).unwrap()
+}
+
+/// The catalog-named files in a directory, sorted.
+fn names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("catalog"))
+        .collect();
+    names.sort();
+    names
 }
 
 #[test]
 fn snapshot_round_trip_keeps_every_shipped_field() {
     let dir = temp_data_dir("catalog-roundtrip");
-    let index = write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000, 1_700_000_000_000)
+    let index = write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000)
         .expect("the writer accepts a providers map");
     let entry = &index.entries["mock"];
     assert_eq!(entry.model_count, 2);
     assert_eq!(entry.tool_capable_count, 1);
-    assert_eq!(entry.sha256.as_ref().unwrap().len(), 64, "digest pinned");
-    let data_file = index.data_file.as_ref().unwrap();
     assert!(
-        data_file.starts_with("catalog.") && data_file.ends_with(".ndjson"),
-        "generation-named data file, got {data_file}"
+        index.body_start > 0,
+        "the header ends where the provider lines begin"
     );
+    let header = header_json(&dir);
+    assert_eq!(header["version"], 1, "the header names its layout");
+    assert_eq!(header["providers"]["mock"]["modelCount"], 2);
+    assert_eq!(header["providers"]["mock"]["toolCapableCount"], 1);
+    assert_eq!(names(&dir), ["catalog.ndjson"], "one file, nothing else");
 
     let (transport, calls) = failing();
     let store = CatalogStore::with_transport(&dir, transport);
@@ -172,81 +188,70 @@ fn snapshot_round_trip_keeps_every_shipped_field() {
 }
 
 #[test]
-fn a_torn_pair_answers_unknown_not_absent() {
-    // (a) The digest no longer matches the committed line.
-    let dir = temp_data_dir("catalog-torn-sha");
-    write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000, 1_700_000_000_000).unwrap();
-    let mut index = index_json(&dir);
-    index["entries"]["mock"]["sha256"] = json!("0".repeat(64));
-    std::fs::write(
-        dir.join("catalog-index.json"),
-        serde_json::to_vec(&index).unwrap(),
-    )
-    .unwrap();
+fn a_truncated_catalog_answers_unknown_not_absent() {
+    let dir = temp_data_dir("catalog-truncated");
+    write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000).unwrap();
+    // Keep the header, drop the body: its ranges now point past the end.
+    let text = std::fs::read_to_string(dir.join("catalog.ndjson")).unwrap();
+    let header = text.lines().next().unwrap().to_owned();
+    std::fs::write(dir.join("catalog.ndjson"), format!("{header}\n")).unwrap();
+
     let (transport, _) = failing();
     let store = CatalogStore::with_transport(&dir, transport);
     assert!(
-        store.get_provider("mock").is_none(),
-        "a digest mismatch is unknown, not a crash"
+        !store.is_loaded(),
+        "a header whose ranges overrun the file is not a catalog"
     );
+    assert!(store.get_provider("mock").is_none());
+}
 
-    // (b) The line's id does not match its index slot (no digest to check).
-    let dir = temp_data_dir("catalog-torn-id");
-    std::fs::write(
-        dir.join("catalog.11111111-1111-4111-8111-111111111111.ndjson"),
-        "{\"id\":\"other\"}\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("catalog-index.json"),
-        serde_json::to_vec(&json!({
-            "fetchedAt": "2026-11-24T00:00:00.000Z",
-            "dataFile": "catalog.11111111-1111-4111-8111-111111111111.ndjson",
-            "entries": { "ghost": { "offset": 0, "length": 13, "modelCount": 0, "toolCapableCount": 0 } },
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+#[test]
+fn an_id_that_does_not_match_its_slot_is_unknown() {
+    let dir = temp_data_dir("catalog-mismatch");
+    let body = "{\"id\":\"other\",\"models\":{}}";
+    let header = json!({
+        "version": 1,
+        "fetchedAt": "2026-11-24T00:00:00.000Z",
+        "providers": { "ghost": { "offset": 0, "length": body.len(), "modelCount": 0, "toolCapableCount": 0 } },
+    });
+    std::fs::write(dir.join("catalog.ndjson"), format!("{header}\n{body}")).unwrap();
+
     let (transport, _) = failing();
     let store = CatalogStore::with_transport(&dir, transport);
+    assert!(store.is_loaded(), "the header itself is well formed");
     assert!(
         store.get_provider("ghost").is_none(),
-        "an id that does not match its slot is unknown until the next refresh"
+        "an id that does not match its slot is unknown, never a guess"
     );
 }
 
 #[test]
-fn an_unreadable_line_does_not_crash() {
-    let dir = temp_data_dir("catalog-short-line");
-    let index =
-        write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000, 1_700_000_000_000).unwrap();
-    // The data file shrinks underneath the committed index.
-    std::fs::write(dir.join(index.data_file.unwrap()), b"{\"id\"").unwrap();
+fn a_damaged_body_line_answers_unknown_but_the_listing_stands() {
+    let dir = temp_data_dir("catalog-damaged-line");
+    write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000).unwrap();
+    // Keep the header and the line's length; make the line unparseable.
+    let header = header_json(&dir);
+    let length = header["providers"]["mock"]["length"].as_u64().unwrap() as usize;
+    let text = std::fs::read_to_string(dir.join("catalog.ndjson")).unwrap();
+    let first = text.lines().next().unwrap().to_owned();
+    std::fs::write(
+        dir.join("catalog.ndjson"),
+        format!("{first}\n{}", "x".repeat(length)),
+    )
+    .unwrap();
 
     let (transport, _) = failing();
     let store = CatalogStore::with_transport(&dir, transport);
     assert!(
         store.get_provider("mock").is_none(),
-        "short read answers unknown"
+        "an unparseable line is unknown, not a crash"
     );
-    assert!(store.is_loaded(), "the store survives its own data file");
-    assert_eq!(store.list_provider_summaries().len(), 1);
-}
-
-#[test]
-fn listing_answers_from_the_index_alone() {
-    let dir = temp_data_dir("catalog-list");
-    let index =
-        write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000, 1_700_000_000_000).unwrap();
-    // Corrupt every provider line: listing must not notice (it reads the index).
-    std::fs::write(dir.join(index.data_file.unwrap()), b"not json at all").unwrap();
-
-    let (transport, _) = failing();
-    let store = CatalogStore::with_transport(&dir, transport);
-    let summaries = store.list_provider_summaries();
-    assert_eq!(summaries.len(), 1, "the index alone answers a listing");
-    assert_eq!(summaries[0].entry.model_count, 2);
-    assert!(store.get_provider("mock").is_none());
+    assert!(store.is_loaded(), "the header still describes a catalog");
+    assert_eq!(
+        store.list_provider_summaries().len(),
+        1,
+        "the listing reads the header"
+    );
 }
 
 #[tokio::test]
@@ -287,7 +292,7 @@ async fn an_oversize_payload_is_rejected_and_arms_the_backoff() {
 async fn a_fresh_cache_serves_without_calling_the_transport() {
     let dir = temp_data_dir("catalog-fresh");
     let at = 1_700_000_000_000;
-    write_catalog_snapshot(&dir, &payload(), at, at).unwrap();
+    write_catalog_snapshot(&dir, &payload(), at).unwrap();
 
     let (transport, calls) = failing();
     let store = CatalogStore::with_transport(&dir, transport);
@@ -302,7 +307,7 @@ async fn a_fresh_cache_serves_without_calling_the_transport() {
 async fn stale_cache_beats_a_failed_fetch() {
     let dir = temp_data_dir("catalog-stale");
     let at = 1_700_000_000_000;
-    write_catalog_snapshot(&dir, &payload(), at - 13 * 3_600_000, at).unwrap();
+    write_catalog_snapshot(&dir, &payload(), at - 13 * 3_600_000).unwrap();
 
     let (transport, calls) = fake(Err("connection refused".to_owned()));
     let store = CatalogStore::with_transport(&dir, transport);
@@ -349,36 +354,47 @@ async fn nothing_cached_names_the_url_and_the_backoff_holds() {
 }
 
 #[tokio::test]
-async fn a_successful_fetch_publishes_a_generation_and_prunes_old_ones() {
+async fn a_fetch_overwrites_the_single_file_and_sweeps_the_old_layout() {
     let dir = temp_data_dir("catalog-publish");
-    let old_generation = "catalog.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.ndjson";
-    std::fs::write(dir.join(old_generation), b"{}\n").unwrap();
+    // Leftovers from the layout this replaced.
+    std::fs::write(dir.join("catalog-index.json"), b"{}").unwrap();
+    std::fs::write(
+        dir.join("catalog.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.ndjson"),
+        b"{}\n",
+    )
+    .unwrap();
 
     let (transport, calls) = fake(Ok(payload_bytes()));
     let store = CatalogStore::with_transport(&dir, transport);
-    // The injected clock sits past the 30-day grace so the pre-created
-    // generation (real mtime) is old enough to prune.
-    let at = now_ms() + 31 * 24 * 3_600_000;
-    let index = store.get_index(&IndexOptions::at(at)).await.expect("fetch");
+    let index = store
+        .get_index(&IndexOptions::at(now_ms()))
+        .await
+        .expect("fetch");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(store.is_loaded());
-    let current = index.data_file.unwrap();
-    assert!(
-        dir.join(&current).exists(),
-        "the new generation is committed"
-    );
-    assert!(
-        !dir.join(old_generation).exists(),
-        "generations older than 30 days are pruned (grace for other processes)"
+    assert_eq!(index.entries.len(), 1);
+    assert_eq!(
+        names(&dir),
+        ["catalog.ndjson"],
+        "one file, the old layout swept"
     );
     assert!(store.get_provider("mock").is_some());
+
+    // The next fetch overwrites that same file.
+    let (transport, _) = fake(Ok(payload_bytes()));
+    let again = CatalogStore::with_transport(&dir, transport);
+    again
+        .get_index(&IndexOptions::at(now_ms() + 13 * 3_600_000))
+        .await
+        .expect("second fetch");
+    assert_eq!(names(&dir), ["catalog.ndjson"], "still one file");
 }
 
 #[test]
 fn a_cross_process_replacement_invalidates_the_memo() {
     let dir = temp_data_dir("catalog-watch");
     let at = 1_700_000_000_000;
-    write_catalog_snapshot(&dir, &payload(), at, at).unwrap();
+    write_catalog_snapshot(&dir, &payload(), at).unwrap();
 
     let (transport, _) = failing();
     let store = CatalogStore::with_transport(&dir, transport);
@@ -390,7 +406,7 @@ fn a_cross_process_replacement_invalidates_the_memo() {
     let mut bigger = payload();
     bigger["providers"]["mock"]["models"]["mock-small"]["name"] = json!("Mock Small Renamed");
     bigger["providers"]["second"] = json!({ "name": "Second", "models": {} });
-    write_catalog_snapshot(&dir, &bigger, at + 1_000, at + 1_000).unwrap();
+    write_catalog_snapshot(&dir, &bigger, at + 1_000).unwrap();
 
     let second = store
         .get_provider("mock")
@@ -436,7 +452,7 @@ fn model_id_candidates_spellings_in_preference_order() {
 #[test]
 fn get_model_and_price_follow_the_candidates() {
     let dir = temp_data_dir("catalog-model-lookup");
-    write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000, 1_700_000_000_000).unwrap();
+    write_catalog_snapshot(&dir, &payload(), 1_700_000_000_000).unwrap();
 
     let (transport, _) = failing();
     let store = CatalogStore::with_transport(&dir, transport);

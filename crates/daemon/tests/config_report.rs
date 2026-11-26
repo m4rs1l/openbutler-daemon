@@ -228,13 +228,7 @@ fn without_a_catalog_the_tool_count_is_unknown_not_zero() {
 #[test]
 fn a_loaded_catalog_counts_tool_capable_models_for_catalog_providers_only() {
     let dir = temp_data_dir("cfg-counts");
-    write_catalog_snapshot(
-        &dir,
-        &catalog_payload(),
-        1_700_000_000_000,
-        1_700_000_000_000,
-    )
-    .unwrap();
+    write_catalog_snapshot(&dir, &catalog_payload(), 1_700_000_000_000).unwrap();
     write_settings(
         &dir,
         "providers:\n\

@@ -2552,7 +2552,6 @@ async fn a_turn_prices_its_step_from_the_catalog() {
             }
         }),
         1_700_000_000_000,
-        1_700_000_000_000,
     )
     .unwrap();
     let host = std::sync::Arc::new(openbutler_daemon::dispatch::Host::new());

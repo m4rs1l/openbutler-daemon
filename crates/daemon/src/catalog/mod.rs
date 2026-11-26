@@ -8,12 +8,15 @@
 //!
 //! ## How it is stored
 //!
-//! One NDJSON file, one line per provider, plus a small index that maps a
-//! provider id to its byte range. Nothing is thrown away: the file holds
-//! exactly what models.dev ships, so a field that gains a reader later is
-//! already there. What is held in memory is a *decision*, not a copy: a
-//! run reads the index once per disk revision and then only the provider
-//! lines it is asked about. Measured 2026-11-24: the payload is 6.59 MB
+//! **One file:** `catalog.ndjson`. Every fetch overwrites it (staged beside
+//! it, synced, renamed), so the directory never holds a second copy or an
+//! old generation. Its first line is a small header — the fetch time and,
+//! per provider, the byte range of its line plus its model counts — and
+//! every following line is one provider: exactly what models.dev ships, so
+//! a field that gains a reader later is already there. What is held in
+//! memory is a *decision*, not a copy: a run reads the header once per disk
+//! revision and then only the provider lines it is asked about. Measured
+//! 2026-11-24: the payload is 6.59 MB
 //! (326 providers, 10 185 models) and never lands parsed in memory —
 //! `JSON.parse` cannot do this, because a JSON document has no
 //! addressable interior; NDJSON does, which is the entire reason for the
@@ -36,7 +39,6 @@
 //!   able to reject a whole provider line over a new option type.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -56,9 +58,11 @@ pub use write::write_catalog_snapshot;
 /// Where the catalog comes from (source: `CATALOG_URL`).
 pub const CATALOG_URL: &str = "https://models.dev/api.json";
 
-/// On-disk names (the index lives at the data-dir root; data files are
-/// generation-named beside it).
-pub const CATALOG_FILENAMES: (&str, &str) = ("catalog.ndjson", "catalog-index.json");
+/// The one on-disk file: a header line, then one provider per line.
+pub const CATALOG_FILE: &str = "catalog.ndjson";
+
+/// The header layout this build reads.
+pub const CATALOG_FORMAT_VERSION: u64 = 1;
 
 /// How long a cached catalog is served without asking the network again
 /// (source: 12 h — long enough that repeated runs cost nothing, short
@@ -173,8 +177,6 @@ pub struct CatalogEntry {
     pub offset: u64,
     /// Byte length of the line, newline excluded.
     pub length: u64,
-    #[serde(default)]
-    pub sha256: Option<String>,
     pub model_count: u64,
     pub tool_capable_count: u64,
 }
@@ -185,42 +187,9 @@ pub struct CatalogEntry {
 #[serde(rename_all = "camelCase")]
 pub struct CatalogIndex {
     pub fetched_at: String,
-    /// An immutable NDJSON generation. Absent only for legacy cache files.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_file: Option<String>,
+    /// Where the first provider line begins: the header's own length.
+    pub body_start: u64,
     pub entries: BTreeMap<String, CatalogEntry>,
-    /// Provider ids serving each model id, so custom providers can match
-    /// cataloged models.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_providers: Option<BTreeMap<String, Vec<String>>>,
-}
-
-/// Where the index lives for one data directory.
-pub(crate) fn index_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(CATALOG_FILENAMES.1)
-}
-
-/// Where one generation (or the legacy single file) lives.
-pub(crate) fn data_path(data_dir: &Path, index: &CatalogIndex) -> PathBuf {
-    match &index.data_file {
-        Some(file) => data_dir.join(file),
-        None => data_dir.join(CATALOG_FILENAMES.0),
-    }
-}
-
-/// The exact generation filename shape: `catalog.<36 chars of hex and
-/// dashes>.ndjson` (the source's `^catalog\.[0-9a-f-]{36}\.ndjson$`).
-pub(crate) fn is_generation_name(name: &str) -> bool {
-    let Some(middle) = name
-        .strip_prefix("catalog.")
-        .and_then(|rest| rest.strip_suffix(".ndjson"))
-    else {
-        return false;
-    };
-    middle.len() == 36
-        && middle
-            .chars()
-            .all(|char| char.is_ascii_hexdigit() || char == '-')
 }
 
 /// The one ceiling sentence: the flow and the transport both refuse with

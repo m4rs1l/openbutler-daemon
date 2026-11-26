@@ -727,6 +727,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The catalog is **one file**. Each fetch overwrites `catalog.ndjson`
+  (staged, synced, renamed) instead of writing an immutable generation
+  beside a separate `catalog-index.json`; the header line inside the file
+  carries the format version, the fetch time and, per provider, the byte
+  range of its line plus its model counts, so a listing still reads
+  kilobytes and a provider read is still one range. A month of daily
+  fetches no longer leaves a directory of generations (it had reached 36
+  files and 213 MB); the old layout is swept on the next publish.
+
 - The prompt assembly reads the shared home resolver (`state::paths`)
   instead of keeping a second copy that preferred `USERPROFILE` on every
   platform; the POSIX ordering is now the platform’s own.
