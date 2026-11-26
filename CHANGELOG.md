@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The static file server refuses request paths that name an absolute
+  location (`/C:/...`, `//...`). `Path::join` with a drive-prefixed or
+  rooted argument discards the base directory on Windows, so such a path
+  could read a file outside the bundle. Every segment must now be a plain
+  name.
+
 ### Added
 
 - A host started with `--web` now publishes the browser surface it serves:

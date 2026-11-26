@@ -59,6 +59,15 @@ pub(crate) struct StaticFile {
     pub cache_control: &'static str,
 }
 
+/// True when every component of `relative` is a plain name. A drive prefix
+/// (`C:`), a root, or an empty leading segment would make `Path::join`
+/// discard the bundle directory on Windows, so none of them is accepted.
+fn stays_inside_base(relative: &str) -> bool {
+    Path::new(relative)
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
 /// Maps a request path onto the bundle, or `None` when it does not exist.
 ///
 /// A `..` segment never reaches the filesystem (URL parsing normalizes it
@@ -76,6 +85,7 @@ pub(crate) fn resolve_static(assets_dir: &Path, url_path: &str) -> Option<Static
         || relative
             .split('/')
             .any(|part| part == ".." || part.contains('\0') || part.contains('\\'))
+        || !stays_inside_base(relative)
     {
         return None;
     }

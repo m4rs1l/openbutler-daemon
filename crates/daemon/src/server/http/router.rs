@@ -210,6 +210,9 @@ async fn api_gate(State(state): State<AppState>, request: Request, next: Next) -
     next.run(request).await
 }
 
+/// `clients` counts live browser channels. This server has no such channel
+/// yet (it serves the bundle and the pairing link only), so the count is
+/// genuinely zero; wire it to the channel roster when the bridge lands.
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "ok": true,

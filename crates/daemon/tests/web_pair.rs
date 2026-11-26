@@ -299,6 +299,37 @@ async fn static_serving_pins_caching_content_types_and_traversal() {
     server.close().await;
 }
 
+/// A request path that names an absolute location must never escape the
+/// bundle: `Path::join` with a drive-prefixed or rooted argument discards
+/// the base directory on Windows.
+#[tokio::test]
+async fn an_absolute_looking_path_never_reads_outside_the_bundle() {
+    let root = scratch("absolute");
+    let assets = root.join("client");
+    write_bundle(&assets);
+    let secret = root.join("secret.txt");
+    std::fs::write(&secret, "outside the bundle").unwrap();
+    let server = start_web_server(WebOptions {
+        bind: "127.0.0.1:0".to_owned(),
+        data_dir: root.join("data"),
+        assets: AssetsSource::Explicit(assets),
+    })
+    .expect("server must start on loopback");
+
+    let absolute = secret.to_string_lossy().replace('\\', "/");
+    assert!(!absolute.contains(' '), "the target must be one token");
+    for target in [format!("/{absolute}"), format!("//{absolute}")] {
+        let (status, _, body) = get(server.addr(), &target, &[]).await;
+        assert_eq!(status, 404, "absolute path is refused: {target}");
+        assert!(
+            !body.contains("outside the bundle"),
+            "a file outside the bundle leaked: {target}"
+        );
+    }
+
+    server.close().await;
+}
+
 // --- Persistence --------------------------------------------------------------
 
 #[tokio::test]
