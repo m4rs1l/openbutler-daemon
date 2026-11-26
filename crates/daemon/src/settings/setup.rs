@@ -21,95 +21,84 @@ use super::{
 };
 use crate::dispatch::Host;
 
+/// One setup payload parsed into what the wizard collected. `review` and
+/// `handle` share this parse, so the screen can never show a set the save
+/// would refuse (or refuse one it would accept).
+struct SetupPayload {
+    entries: Vec<SetupEntry>,
+    default_provider: Option<String>,
+    default_model: Option<String>,
+}
+
+/// The wizard's Review block: a blank line, the section bar, one bullet
+/// per provider, a blank line and the default-model row. Composed here
+/// because the layout is a decision the client must not make.
+pub fn review(request: &DaemonRequest) -> Result<Value, String> {
+    let SetupPayload {
+        entries,
+        default_provider,
+        default_model,
+    } = parse_payload(&request.payload)?;
+    Ok(json!({
+        "lines": review_lines(
+            &entries,
+            default_provider.as_deref(),
+            default_model.as_deref(),
+        ),
+    }))
+}
+
+/// The review lines (`cli/setup.ts` render, moved to the host under the
+/// backend-owned rule): `· on {id}{ *} — {n} key(s)` per provider, with
+/// the empty set answered by the source's own sentence.
+fn review_lines(
+    entries: &[SetupEntry],
+    default_provider: Option<&str>,
+    default_model: Option<&str>,
+) -> Vec<Value> {
+    let mut lines = vec![
+        crate::shape::screen_line("plain", ""),
+        crate::shape::section_line("Review"),
+    ];
+    if entries.is_empty() {
+        lines.push(crate::shape::screen_line(
+            "plain",
+            "  \u{00b7} no provider configured",
+        ));
+    } else {
+        for entry in entries {
+            let marker = if default_provider == Some(entry.id.as_str()) {
+                " *"
+            } else {
+                ""
+            };
+            let count = if entry.keys.len() == 1 {
+                "1 key".to_owned()
+            } else {
+                format!("{} keys", entry.keys.len())
+            };
+            lines.push(crate::shape::screen_line(
+                "plain",
+                format!("  \u{00b7} on {}{marker} \u{2014} {count}", entry.id),
+            ));
+        }
+    }
+    lines.push(crate::shape::screen_line("plain", ""));
+    let pair = match (default_provider, default_model) {
+        (Some(provider), Some(model)) => format!("{provider} / {model}"),
+        _ => "(none)".to_owned(),
+    };
+    lines.push(crate::shape::kv_line("Default model", &pair));
+    lines
+}
+
 /// Applies a setup payload and saves both documents atomically.
 pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<Value, String> {
-    let payload = &request.payload;
-    const PROVIDERS_ERROR: &str =
-        "settings.setup providers must be an array of at most 32 entries.";
-    let providers = match payload.get("providers") {
-        Some(Value::Array(providers)) if providers.len() <= 32 => providers,
-        _ => return Err(PROVIDERS_ERROR.to_owned()),
-    };
-    let default_provider = optional_string(payload, "defaultProvider", 256)?;
-    let default_model = optional_string(payload, "defaultModel", 256)?;
-
-    let mut entries: Vec<SetupEntry> = Vec::with_capacity(providers.len());
-    for (index, raw) in providers.iter().enumerate() {
-        let record = raw
-            .as_object()
-            .ok_or_else(|| format!("providers[{index}] must be a mapping with id and keys."))?;
-        let id = record
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty() && crate::shape::js_len(id) <= 256)
-            .ok_or_else(|| {
-                format!("providers[{index}].id must be a non-empty string under 256 bytes.")
-            })?
-            .to_owned();
-        let keys = record
-            .get("keys")
-            .and_then(Value::as_array)
-            .filter(|keys| (1..=16).contains(&keys.len()))
-            .ok_or_else(|| {
-                format!(
-                    "providers[{index}].keys must be a non-empty array of at most 16 strings under 4096 bytes each."
-                )
-            })?;
-        let mut parsed_keys = Vec::with_capacity(keys.len());
-        for key in keys {
-            let key = key.as_str().filter(|key| {
-                !key.trim().is_empty() && crate::shape::js_len(key) <= 4096
-            }).ok_or_else(|| {
-                format!(
-                    "providers[{index}].keys must be a non-empty array of at most 16 strings under 4096 bytes each."
-                )
-            })?;
-            parsed_keys.push(key.trim().to_owned());
-        }
-        // One key is one credential: a repeated entry is dropped here, the
-        // same rule `keys.add` applies, so the store's shape never depends on
-        // which client wrote it.
-        let mut seen = std::collections::HashSet::new();
-        parsed_keys.retain(|key| seen.insert(key.clone()));
-        let url = match record.get("url") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(url)) if crate::shape::js_len(url) <= 2048 => {
-                let trimmed = url.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_owned())
-                }
-            }
-            Some(_) => {
-                return Err(format!(
-                    "providers[{index}].url must be a string under 2048 bytes."
-                ));
-            }
-        };
-        let npm = match record.get("npm") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(npm)) if crate::shape::js_len(npm) <= 256 => {
-                let trimmed = npm.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_owned())
-                }
-            }
-            Some(_) => {
-                return Err(format!(
-                    "providers[{index}].npm must be a string under 256 bytes."
-                ));
-            }
-        };
-        entries.push(SetupEntry {
-            id,
-            keys: parsed_keys,
-            url,
-            npm,
-        });
-    }
+    let SetupPayload {
+        entries,
+        default_provider,
+        default_model,
+    } = parse_payload(&request.payload)?;
 
     let mut loaded = load_settings(data_dir).map_err(|error| error.to_string())?;
     let mut secrets = load_secrets(data_dir).map_err(|error| error.to_string())?;
@@ -184,6 +173,104 @@ pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<V
         "settingsFile": data_dir.join("settings.yaml").display().to_string(),
         "configFile": super::config_path(data_dir).display().to_string(),
     }))
+}
+
+/// The payload shape both `review` and `handle` accept: at most 32
+/// providers, each with a bounded id, 1..=16 unique non-empty keys, an
+/// optional URL and an optional npm package.
+fn parse_payload(payload: &serde_json::Map<String, Value>) -> Result<SetupPayload, String> {
+    const PROVIDERS_ERROR: &str =
+        "settings.setup providers must be an array of at most 32 entries.";
+    let providers = match payload.get("providers") {
+        Some(Value::Array(providers)) if providers.len() <= 32 => providers,
+        _ => return Err(PROVIDERS_ERROR.to_owned()),
+    };
+    let default_provider = optional_string(payload, "defaultProvider", 256)?;
+    let default_model = optional_string(payload, "defaultModel", 256)?;
+
+    let mut entries: Vec<SetupEntry> = Vec::with_capacity(providers.len());
+    for (index, raw) in providers.iter().enumerate() {
+        let record = raw
+            .as_object()
+            .ok_or_else(|| format!("providers[{index}] must be a mapping with id and keys."))?;
+        let id = record
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty() && crate::shape::js_len(id) <= 256)
+            .ok_or_else(|| {
+                format!("providers[{index}].id must be a non-empty string under 256 bytes.")
+            })?
+            .to_owned();
+        let keys = record
+            .get("keys")
+            .and_then(Value::as_array)
+            .filter(|keys| (1..=16).contains(&keys.len()))
+            .ok_or_else(|| {
+                format!(
+                    "providers[{index}].keys must be a non-empty array of at most 16 strings under 4096 bytes each."
+                )
+            })?;
+        let mut parsed_keys = Vec::with_capacity(keys.len());
+        for key in keys {
+            let key = key
+                .as_str()
+                .filter(|key| !key.trim().is_empty() && crate::shape::js_len(key) <= 4096)
+                .ok_or_else(|| {
+                    format!(
+                        "providers[{index}].keys must be a non-empty array of at most 16 strings under 4096 bytes each."
+                    )
+                })?;
+            parsed_keys.push(key.trim().to_owned());
+        }
+        // One key is one credential: a repeated entry is dropped here, the
+        // same rule `keys.add` applies, so the store's shape never depends on
+        // which client wrote it.
+        let mut seen = std::collections::HashSet::new();
+        parsed_keys.retain(|key| seen.insert(key.clone()));
+        let url = match record.get("url") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(url)) if crate::shape::js_len(url) <= 2048 => {
+                let trimmed = url.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
+            }
+            Some(_) => {
+                return Err(format!(
+                    "providers[{index}].url must be a string under 2048 bytes."
+                ));
+            }
+        };
+        let npm = match record.get("npm") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(npm)) if crate::shape::js_len(npm) <= 256 => {
+                let trimmed = npm.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
+            }
+            Some(_) => {
+                return Err(format!(
+                    "providers[{index}].npm must be a string under 256 bytes."
+                ));
+            }
+        };
+        entries.push(SetupEntry {
+            id,
+            keys: parsed_keys,
+            url,
+            npm,
+        });
+    }
+    Ok(SetupPayload {
+        entries,
+        default_provider,
+        default_model,
+    })
 }
 
 /// One wizard answer: the provider's whole key list replaces whatever

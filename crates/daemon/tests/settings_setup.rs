@@ -351,3 +351,83 @@ fn a_repeated_key_is_stored_once() {
         vec![KEY.to_owned(), "sk-other-do-not-leak".to_owned()]
     );
 }
+
+/// One review call: the screen the wizard shows before the save.
+fn review(dir: &Path, id: &str, payload: Value) -> DaemonResponse {
+    let host = Host::new();
+    let mut state = dispatch::DispatchState::new();
+    let mut request = DaemonRequest::new(id, "settings.setup.review");
+    if let Value::Object(fields) = payload {
+        for (key, value) in fields {
+            request.payload.insert(key, value);
+        }
+    }
+    dispatch::handle(&host, dir, &mut state, &request)
+}
+
+fn lines(response: DaemonResponse) -> Vec<String> {
+    match response {
+        DaemonResponse::Success { result, .. } => result["lines"]
+            .as_array()
+            .expect("lines must be an array")
+            .iter()
+            .map(|line| {
+                assert_eq!(line["tone"], "plain", "every review line is plain");
+                line["text"].as_str().expect("text").to_owned()
+            })
+            .collect(),
+        DaemonResponse::Failure { error, .. } => panic!("expected lines, got {error}"),
+    }
+}
+
+#[test]
+fn review_composes_the_screen_and_writes_nothing() {
+    let dir = temp_data_dir("setup-review");
+    let payload = json!({
+        "providers": [provider("mock", vec![json!("k1")]), provider("acme", vec![json!("k1"), json!("k2")])],
+        "defaultProvider": "mock",
+        "defaultModel": "mock/model-a",
+    });
+    let bar = format!("\u{2500}\u{2500} Review {}", "\u{2500}".repeat(47));
+    assert_eq!(
+        lines(review(&dir, "r1", payload)),
+        vec![
+            String::new(),
+            bar,
+            "  \u{b7} on mock * \u{2014} 1 key".to_owned(),
+            "  \u{b7} on acme \u{2014} 2 keys".to_owned(),
+            String::new(),
+            "  Default model          mock / mock/model-a".to_owned(),
+        ]
+    );
+    // A review is a question, not a write: neither document appears.
+    assert!(!dir.join("settings.yaml").exists());
+    assert!(!dir.join("config.yaml").exists());
+}
+
+#[test]
+fn review_answers_the_empty_set() {
+    let dir = temp_data_dir("setup-review-empty");
+    let rendered = lines(review(&dir, "r2", json!({ "providers": [] })));
+    assert_eq!(
+        rendered.last().expect("a last line"),
+        "  Default model          (none)"
+    );
+    assert!(rendered.contains(&"  \u{b7} no provider configured".to_owned()));
+}
+
+#[test]
+fn review_refuses_what_the_save_would() {
+    let dir = temp_data_dir("setup-review-refuse");
+    assert_eq!(
+        refusal_of(review(&dir, "r3", json!({ "providers": "mock" }))),
+        "settings.setup providers must be an array of at most 32 entries."
+    );
+}
+
+fn refusal_of(response: DaemonResponse) -> String {
+    match response {
+        DaemonResponse::Failure { error, .. } => error,
+        DaemonResponse::Success { result, .. } => panic!("expected a refusal, got {result}"),
+    }
+}

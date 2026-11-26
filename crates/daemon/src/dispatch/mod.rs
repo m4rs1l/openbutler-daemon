@@ -49,6 +49,7 @@ const PRE_ATTACH: &[&str] = &[
     "stop",
     "settings.reload",
     "settings.setup",
+    "settings.setup.review",
     "settings.set-listen",
     "settings.set-default-workspace",
     "keys.list",
@@ -431,6 +432,10 @@ pub fn handle(
         // The wizard's atomic write: a new contract (the source wrote the
         // files from the CLI), so the payload is validated here and the
         // settings module owns the merge and the pair save.
+        "settings.setup.review" => match crate::settings::setup::review(request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
         "settings.setup" => match crate::settings::setup::handle(host, data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),

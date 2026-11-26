@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `settings.setup.review` composes the wizard's Review block (`{lines}`)
+  from the exact payload `settings.setup` takes, through one shared parse:
+  the empty-set sentence, one bullet per provider with the default marker
+  and its key count, and the default-model row. A review writes nothing.
+
 ### Changed
 
 - `skills.list` answers the screen as well: the table when skills were
