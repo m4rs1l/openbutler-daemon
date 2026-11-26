@@ -49,6 +49,68 @@ fn texts(result: &Value) -> Vec<String> {
         .collect()
 }
 
+/// A stdio server definition is a command the host spawns on its own
+/// machine, so installing or removing one over a remote token would grant
+/// process execution the source never granted remotely. Reading stays open.
+#[test]
+fn a_remote_connection_cannot_install_or_remove_a_server() {
+    let dir = temp_data_dir("mcp-remote");
+    let host = Host::new();
+
+    // Local: the install lands, so the remote remove has something to hit.
+    let mut local = dispatch::DispatchState::new();
+    let mut add = DaemonRequest::new("l1", "mcp.manage");
+    add.payload.insert("command".to_owned(), json!("add"));
+    add.payload.insert("id".to_owned(), json!("local"));
+    add.payload.insert("server".to_owned(), stdio_server());
+    let DaemonResponse::Success { .. } = dispatch::handle(&host, &dir, &mut local, &add) else {
+        panic!("the local install must land");
+    };
+
+    let mut remote = dispatch::DispatchState::new();
+    remote.set_remote(true);
+
+    // Reads are still allowed to a remote caller.
+    let mut list = DaemonRequest::new("r1", "mcp.manage");
+    list.payload.insert("command".to_owned(), json!("list"));
+    let DaemonResponse::Success { result, .. } = dispatch::handle(&host, &dir, &mut remote, &list)
+    else {
+        panic!("a remote caller may read the list");
+    };
+    assert_eq!(
+        texts(&result)
+            .iter()
+            .filter(|line| line.contains("local"))
+            .count(),
+        1
+    );
+
+    // Every mutation is refused, with the one sentence.
+    let mut add = DaemonRequest::new("r2", "mcp.manage");
+    add.payload.insert("command".to_owned(), json!("add"));
+    add.payload.insert("id".to_owned(), json!("remote"));
+    add.payload.insert("server".to_owned(), stdio_server());
+    let DaemonResponse::Failure { error, .. } = dispatch::handle(&host, &dir, &mut remote, &add)
+    else {
+        panic!("a remote install must be refused");
+    };
+    assert_eq!(error, "MCP servers are managed on the host machine only.");
+
+    let mut remove = DaemonRequest::new("r3", "mcp.manage");
+    remove.payload.insert("command".to_owned(), json!("remove"));
+    remove.payload.insert("id".to_owned(), json!("local"));
+    let DaemonResponse::Failure { error, .. } = dispatch::handle(&host, &dir, &mut remote, &remove)
+    else {
+        panic!("a remote removal must be refused");
+    };
+    assert_eq!(error, "MCP servers are managed on the host machine only.");
+
+    // Neither refusal touched the document.
+    let loaded = load_settings(&dir).expect("settings");
+    assert!(loaded.store.mcp_servers.contains_key("local"));
+    assert!(!loaded.store.mcp_servers.contains_key("remote"));
+}
+
 fn stdio_server() -> Value {
     json!({
         "transport": "stdio",

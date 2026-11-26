@@ -7,8 +7,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `settings.setup` now refuses a remote caller with the credential sentence
+  `keys.add` already uses. The wizard writes the same secret store, so
+  without the gate a paired remote token could replace any provider's API
+  keys through the other door.
+
+- `mcp.manage` refuses `add` and `remove` to a remote caller. A server
+  definition is a command the host spawns on its own machine, so a remote
+  token could install an arbitrary process that runs at session start.
+  `list` stays open to a remote caller.
+
 - The remote TCP listener no longer stops for good on the first failed
-  ccept. A failed accept (a peer that reset before it was taken, a
+  accept. A failed accept (a peer that reset before it was taken, a
   momentary descriptor shortage) ended the accept loop without a message,
   leaving the host running with its remote door closed. The loop now reports
   the failure on stderr, waits 50 ms and keeps listening until shutdown.
@@ -19,7 +29,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with no way to retry. PairingCodes::redeem_with runs the mint while the
   lock is held and clears the code only on success.
 
-- xecute_command spilled overflowing output into the data directory
+- execute_command spilled overflowing output into the data directory
   root instead of 	ool-output/. The retention sweep that runs when a spill
   closes deletes files older than three days in the directory it was given,
   so a long-running host could age out settings.yaml, the token store and

@@ -425,6 +425,33 @@ fn review_refuses_what_the_save_would() {
     );
 }
 
+/// The credential invariant: `keys.add` refuses a remote caller, and the
+/// wizard writes the same secret store, so it must refuse there too — one
+/// sentence, one authority.
+#[test]
+fn a_remote_connection_cannot_write_credentials_through_setup() {
+    let dir = temp_data_dir("setup-remote");
+    let host = Host::new();
+    let mut state = dispatch::DispatchState::new();
+    state.set_remote(true);
+    let mut request = DaemonRequest::new("s-remote", "settings.setup");
+    request.payload.insert(
+        "providers".to_owned(),
+        json!([provider("mock", vec![json!(KEY)])]),
+    );
+    let DaemonResponse::Failure { error, .. } = dispatch::handle(&host, &dir, &mut state, &request)
+    else {
+        panic!("a remote credential write must be refused");
+    };
+    assert_eq!(error, "API keys are managed on the host machine only.");
+    // The refusal runs before the merge: nothing reached the disk.
+    assert!(
+        !dir.join("config.yaml").exists(),
+        "the secret store was written"
+    );
+    assert!(!dir.join("settings.yaml").exists(), "settings were written");
+}
+
 fn refusal_of(response: DaemonResponse) -> String {
     match response {
         DaemonResponse::Failure { error, .. } => error,

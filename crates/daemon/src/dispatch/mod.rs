@@ -456,7 +456,7 @@ pub fn handle(
             body["lines"] = json!(lines);
             success(request, body)
         }
-        "mcp.manage" => match crate::settings::mcp::manage(host, data_dir, request) {
+        "mcp.manage" => match crate::settings::mcp::manage(host, data_dir, request, state.remote) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
@@ -464,10 +464,18 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
-        "settings.setup" => match crate::settings::setup::handle(host, data_dir, request) {
-            Ok(payload) => success(request, payload),
-            Err(error) => failure(request, error),
-        },
+        // The wizard writes the same secret store `keys.add` writes, so it
+        // carries the same local-only gate: a remote token must not be able
+        // to replace a provider's credentials by a different door.
+        "settings.setup" => {
+            if state.remote {
+                return failure(request, keys::REMOTE_REFUSAL.to_owned());
+            }
+            match crate::settings::setup::handle(host, data_dir, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
+            }
+        }
         "settings.set-listen" => match crate::settings::listen::handle(host, data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
@@ -492,8 +500,6 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
-        // What this machine runs: version, shell, paths. Host-wide and
-        // count-free — nothing here is a secret.
         // What this machine runs: version, shell, paths. Host-wide and
         // count-free — nothing here is a secret.
         "about.report" => match about::report(host, data_dir) {

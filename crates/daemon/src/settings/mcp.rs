@@ -18,15 +18,23 @@ use crate::dispatch::Host;
 /// underscores or dashes (the pattern is the schema's `is_mcp_id`).
 const UNIQUE_ID: &str = "Use a unique id with 1-59 letters, digits, underscores, or dashes.";
 
+/// Writes are local-only: a server definition is a command the host
+/// spawns on its own machine, so installing or removing one over a remote
+/// token would grant process execution the source never granted remotely.
+/// Reading stays open to a remote caller.
+pub const REMOTE_REFUSAL: &str = "MCP servers are managed on the host machine only.";
+
 /// `mcp.manage`: `{command: "list" | "add" | "remove"}` (the envelope
 /// already owns `action`, so the payload field carries the other name).
 pub fn manage(
     host: &Host,
     data_dir: &Path,
     request: &openbutler_protocol::DaemonRequest,
+    remote: bool,
 ) -> Result<Value, String> {
     match request.payload.get("command").and_then(Value::as_str) {
         None | Some("list") => list(data_dir),
+        Some("add") | Some("remove") if remote => Err(REMOTE_REFUSAL.to_owned()),
         Some("add") => add(host, data_dir, &request.payload),
         Some("remove") => remove(host, data_dir, &request.payload),
         Some(_) => Err("mcp.manage action must be list, add, or remove.".to_owned()),
