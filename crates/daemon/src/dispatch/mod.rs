@@ -79,6 +79,16 @@ const VIEW_ONLY_ACTIONS: &[&str] = &[
 /// The workspaceKey size gate (daemon-host.ts L151).
 const MAX_WORKSPACE_PATH_BYTES: usize = 32 * 1024;
 
+/// `session.load` answers a tail window by default so one frame can never
+/// carry an unbounded transcript — the legacy CLI crashed on records over
+/// the 32 MiB frame cap. Older entries come from
+/// `session.entries-range`, which pages the chat this connection loaded;
+/// the `entriesFrom`/`totalEntries` markers say so.
+const DEFAULT_LOAD_WINDOW: i64 = 200;
+/// The largest window a caller may ask for — the same ceiling the attach
+/// window uses.
+const MAX_LOAD_WINDOW: i64 = 2000;
+
 use std::path::Path;
 
 use openbutler_protocol::entry::UserEntrySource;
@@ -87,9 +97,9 @@ use openbutler_protocol::runtime::view::{ApprovalMode, ReasoningSupport};
 use openbutler_protocol::session::{SessionView, read};
 use openbutler_protocol::{
     DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonResponse, InlineAttachment, SessionEntriesRange,
-    validate_request,
+    SessionRecordWindow, validate_request,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::agent::TurnRequest;
 use crate::ledger;
@@ -160,6 +170,18 @@ pub fn handle(
         "session.load" => match read::load_session_id(&request.payload) {
             Err(error) => failure(request, error.to_string()),
             Ok(session_id) => {
+                let entries_window = match request.payload.get("entriesWindow") {
+                    None | Some(Value::Null) => DEFAULT_LOAD_WINDOW,
+                    Some(value) => match value.as_i64() {
+                        Some(window) if (1..=MAX_LOAD_WINDOW).contains(&window) => window,
+                        _ => {
+                            return failure(
+                                request,
+                                "entriesWindow must be an integer between 1 and 2000.".to_owned(),
+                            );
+                        }
+                    },
+                };
                 // L3621: loading your own chat answers itself before any
                 // gate — the disk read below is this build's snapshot.
                 let is_current = state.current_session.as_deref() == Some(session_id.as_str());
@@ -182,7 +204,14 @@ pub fn handle(
                     }
                 }
                 match load_view(data_dir, &session_id) {
-                    Some(view) => {
+                    Some(mut view) => {
+                        // A tail window, always: one frame can never carry
+                        // an unbounded transcript. Older entries come from
+                        // `session.entries-range`.
+                        let total = view.entries.len() as i64;
+                        let from = (total - entries_window).max(0);
+                        let tail = view.entries.split_off(from as usize);
+                        view.entries = tail;
                         state.current_session = Some(session_id);
                         // attachChat rebinding (L3633: bindingKey =
                         // chat.workspace.root): the connection belongs
@@ -192,9 +221,14 @@ pub fn handle(
                         if let Some(root) = session_write::chat_workspace_root(host, &view) {
                             state.binding_key = Some(root);
                         }
+                        let record = SessionRecordWindow {
+                            session: view,
+                            entries_from: Some(from),
+                            total_entries: Some(total),
+                        };
                         success(
                             request,
-                            serde_json::to_value(&view).unwrap_or_else(|_| json!({})),
+                            serde_json::to_value(&record).unwrap_or_else(|_| json!({})),
                         )
                     }
                     // A failed load leaves the connection's chat untouched,

@@ -7,6 +7,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `session.load` answers a **tail window** instead of the whole record:
+  optional `entriesWindow` (integer 1..=2000 — `entriesWindow must be an
+  integer between 1 and 2000.`; default 200) plus the
+  `entriesFrom`/`totalEntries` markers (`SessionRecordWindow`), and older
+  pages come from `session.entries-range`. A transcript over the 32 MiB
+  frame cap can now be opened at all — the source returned the full
+  record and the legacy CLI crashed on such files. Protocol rev bumped
+  to `2a4a4af`.
 - The daemon clock has one reading: `ledger::now_ms` (epoch
   milliseconds) — `auth`, `sidecar` and `schedule` had three copies of the
   same `SystemTime`/`chrono` body and now delegate. Trigger math, pairing

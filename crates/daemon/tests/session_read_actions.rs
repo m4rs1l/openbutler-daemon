@@ -118,6 +118,133 @@ fn load_returns_the_saved_record_with_meta_and_entries() {
 }
 
 #[test]
+fn load_answers_a_tail_window_with_markers() {
+    let dir = temp_data_dir("load-window");
+    let id = uuid(3);
+    let texts: Vec<String> = (0..250).map(|index| format!("m{index:03}")).collect();
+    write_session(&dir, &id, &session_with_entries(&id, &texts));
+
+    let host = Host::new();
+    let mut state = bound_state();
+    let result = success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("r1", "session.load", &[("sessionId", json!(id))]),
+    ));
+    // The default window (200) is the tail; the markers name it so a
+    // client knows what it holds and what to page for.
+    assert_eq!(result["totalEntries"], json!(250));
+    assert_eq!(result["entriesFrom"], json!(50));
+    let entries = result["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 200);
+    assert_eq!(entries[0]["text"], json!("m050"));
+    assert_eq!(entries[199]["text"], json!("m249"));
+}
+
+#[test]
+fn load_honors_an_explicit_entries_window() {
+    let dir = temp_data_dir("load-window-explicit");
+    let id = uuid(4);
+    let texts: Vec<String> = (0..120).map(|index| format!("m{index:03}")).collect();
+    write_session(&dir, &id, &session_with_entries(&id, &texts));
+
+    let host = Host::new();
+    let mut state = bound_state();
+    let result = success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "r1",
+            "session.load",
+            &[("sessionId", json!(id)), ("entriesWindow", json!(10))],
+        ),
+    ));
+    assert_eq!(result["entriesFrom"], json!(110));
+    assert_eq!(result["totalEntries"], json!(120));
+    assert_eq!(result["entries"].as_array().unwrap().len(), 10);
+
+    // A window larger than the transcript is the whole transcript, still
+    // marked as a window.
+    let result = success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "r2",
+            "session.load",
+            &[("sessionId", json!(id)), ("entriesWindow", json!(2000))],
+        ),
+    ));
+    assert_eq!(result["entriesFrom"], json!(0));
+    assert_eq!(result["entries"].as_array().unwrap().len(), 120);
+}
+
+#[test]
+fn load_refuses_an_invalid_entries_window() {
+    let dir = temp_data_dir("load-window-bad");
+    let id = uuid(5);
+    write_session(&dir, &id, &pretty_session(&id, None, "A chat", true));
+    let host = Host::new();
+    let mut state = bound_state();
+    for value in [json!(0), json!(2001), json!("x"), json!(1.5)] {
+        let error = failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            request(
+                "r1",
+                "session.load",
+                &[("sessionId", json!(id)), ("entriesWindow", value)],
+            ),
+        ));
+        assert_eq!(
+            error,
+            "entriesWindow must be an integer between 1 and 2000."
+        );
+    }
+}
+
+#[test]
+fn the_windowed_load_feeds_entries_range_for_the_rest() {
+    let dir = temp_data_dir("load-window-range");
+    let id = uuid(6);
+    let texts: Vec<String> = (0..120).map(|index| format!("m{index:03}")).collect();
+    write_session(&dir, &id, &session_with_entries(&id, &texts));
+    let host = Host::new();
+    let mut state = bound_state();
+    // Only the tail arrives with the load ...
+    let loaded = success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "r1",
+            "session.load",
+            &[("sessionId", json!(id)), ("entriesWindow", json!(10))],
+        ),
+    ));
+    assert_eq!(loaded["entriesFrom"], json!(110));
+    // ... and the start of the same chat is one page away.
+    let page = success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "r2",
+            "session.entries-range",
+            &[("before", json!(10)), ("limit", json!(10))],
+        ),
+    ));
+    assert_eq!(page["from"], json!(0));
+    assert_eq!(page["to"], json!(10));
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["text"], json!("m000"));
+    assert_eq!(entries.len(), 10);
+}
+
+#[test]
 fn load_refuses_the_machine_custodian_with_the_fixed_sentence() {
     let dir = temp_data_dir("load-custodian");
     let host = Host::new();
