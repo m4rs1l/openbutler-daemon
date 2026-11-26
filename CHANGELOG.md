@@ -12,6 +12,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the empty-set sentence, one bullet per provider with the default marker
   and its key count, and the default-model row. A review writes nothing.
 
+### Added
+
+
+- `mcp.manage` lists, adds and removes global MCP servers: the list
+  screen is the host's (section, table or the source's empty sentence, and
+  the management hint), `add` validates through the settings loader's own
+  `parse_mcp_server_state` and refuses unseen-id collisions with the
+  source's sentence, `remove` refuses an unknown id. Writes go through the
+  settings pair save and reload the live copy.
+
 ### Changed
 
 - `skills.list` answers the screen as well: the table when skills were

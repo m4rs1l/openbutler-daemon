@@ -7,6 +7,7 @@
 
 pub mod listen;
 mod load;
+pub mod mcp;
 mod remember;
 mod save;
 pub mod schema;
