@@ -189,6 +189,7 @@ fn parse_payload(payload: &serde_json::Map<String, Value>) -> Result<SetupPayloa
     let default_model = optional_string(payload, "defaultModel", 256)?;
 
     let mut entries: Vec<SetupEntry> = Vec::with_capacity(providers.len());
+    let mut seen_ids = std::collections::HashSet::new();
     for (index, raw) in providers.iter().enumerate() {
         let record = raw
             .as_object()
@@ -201,6 +202,11 @@ fn parse_payload(payload: &serde_json::Map<String, Value>) -> Result<SetupPayloa
                 format!("providers[{index}].id must be a non-empty string under 256 bytes.")
             })?
             .to_owned();
+        // One entry per provider: the merge keeps the last value for a
+        // repeated id, which would silently drop the earlier entry's keys.
+        if !seen_ids.insert(id.clone()) {
+            return Err("settings.setup providers must have unique ids.".to_owned());
+        }
         let keys = record
             .get("keys")
             .and_then(Value::as_array)

@@ -821,6 +821,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `settings.setup` refuses a payload that names the same provider twice. The
+  merge kept the last entry, so the earlier entry's keys vanished while the
+  answer still reported a save; the wizard's "Back to LLM providers" branch
+  could produce that shape.
+
 - 	eam invites store the instant they end. TeamOperations::create_invite
   handed its lifetime to the store as if it were the expiry, so a live clock
   made every invite expire in 1970 and no join could ever be admitted. The

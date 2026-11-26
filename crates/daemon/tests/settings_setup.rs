@@ -425,6 +425,26 @@ fn review_refuses_what_the_save_would() {
     );
 }
 
+/// One provider may appear once: the merge keeps the last value for a
+/// repeated id, so the earlier entry's keys would vanish without a word.
+#[test]
+fn a_repeated_provider_id_is_refused() {
+    let dir = temp_data_dir("setup-duplicate-id");
+    assert_eq!(
+        refusal(
+            &dir,
+            "s-dup",
+            json!({
+                "providers": [
+                    provider("mock", vec![json!("sk-one")]),
+                    provider("mock", vec![json!("sk-two")]),
+                ]
+            })
+        ),
+        "settings.setup providers must have unique ids."
+    );
+}
+
 /// The credential invariant: `keys.add` refuses a remote caller, and the
 /// wizard writes the same secret store, so it must refuse there too — one
 /// sentence, one authority.
