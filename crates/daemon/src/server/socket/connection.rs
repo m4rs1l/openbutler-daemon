@@ -301,16 +301,21 @@ async fn admit(host: &Host, data_dir: &Path, frame: &[u8], outbound: &Outbound) 
             }
         }
         FirstFrame::Pair { id, code } => {
-            if !host.pairing().redeem(code, now_ms()) {
-                let _ = reply(
-                    outbound,
-                    dispatch::envelope_failure(id, auth_plane::PAIR_FAILED),
-                )
-                .await;
-                return false;
-            }
-            match TokenStore::new(data_dir).mint() {
-                Ok(minted) => {
+            // The code is consumed only when the token was actually minted;
+            // a store failure must not cost the owner the one-time code.
+            let redeemed = host
+                .pairing()
+                .redeem_with(code, now_ms(), || TokenStore::new(data_dir).mint());
+            match redeemed {
+                None => {
+                    let _ = reply(
+                        outbound,
+                        dispatch::envelope_failure(id, auth_plane::PAIR_FAILED),
+                    )
+                    .await;
+                    false
+                }
+                Some(Ok(minted)) => {
                     let result = serde_json::to_value(PairSuccess {
                         token: minted.token,
                     })
@@ -319,7 +324,7 @@ async fn admit(host: &Host, data_dir: &Path, frame: &[u8], outbound: &Outbound) 
                         .await
                         .is_ok()
                 }
-                Err(error) => {
+                Some(Err(error)) => {
                     let _ =
                         reply(outbound, dispatch::envelope_failure(id, &error.to_string())).await;
                     false

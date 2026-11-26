@@ -53,28 +53,45 @@ impl PairingCodes {
     /// redemption consumes the code; expiry and wrong guesses leave the
     /// pending code in place for the client the owner is about to hand it to.
     pub fn redeem(&self, code: &str, now_ms: u64) -> bool {
+        self.redeem_with(code, now_ms, || Ok::<(), std::convert::Infallible>(()))
+            .is_some_and(|outcome| outcome.is_ok())
+    }
+
+    /// Redeems `code` and, only when it matches, runs `produce` — the step
+    /// that turns the redemption into something durable (a minted token).
+    /// The code is consumed only when `produce` succeeds: a failed mint
+    /// leaves the code in place so the owner can retry instead of having to
+    /// issue a new one. `None` means the code did not match or has expired.
+    ///
+    /// The lock stays held through `produce` and the clear: releasing it
+    /// first would let a concurrent `issue()` land between the match and the
+    /// consume, and this redemption would wipe the freshly issued code, and
+    /// two clients holding the same code could both mint a token.
+    pub fn redeem_with<T, E>(
+        &self,
+        code: &str,
+        now_ms: u64,
+        produce: impl FnOnce() -> Result<T, E>,
+    ) -> Option<Result<T, E>> {
         let Ok(mut pending) = self.pending.lock() else {
-            return false;
+            return None;
         };
-        let Some(current) = pending.as_ref() else {
-            return false;
-        };
+        let current = pending.as_ref()?;
         if now_ms > current.expires_at_ms {
-            return false;
+            return None;
         }
         let submitted = Sha256::digest(code.as_bytes());
         let issued = Sha256::digest(current.code.as_bytes());
-        let matches = super::ct_eq(submitted.as_ref(), issued.as_ref());
-        // The lock stays held through the clear: releasing it first would let
-        // a concurrent issue() land between the match and the consume, and
-        // this redemption would wipe the freshly issued code.
-        if matches {
+        if !super::ct_eq(submitted.as_ref(), issued.as_ref()) {
+            return None;
+        }
+        let outcome = produce();
+        if outcome.is_ok() {
             *pending = None;
         }
-        matches
+        Some(outcome)
     }
 }
-
 impl Default for PairingCodes {
     fn default() -> Self {
         Self::new()

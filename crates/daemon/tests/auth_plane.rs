@@ -139,6 +139,26 @@ fn a_pairing_code_redeems_once_and_wrong_guesses_burn_nothing() {
 }
 
 #[test]
+fn a_failed_mint_does_not_burn_the_pairing_code() {
+    let pairing = PairingCodes::new();
+    let (code, _) = pairing.issue(1_000).unwrap();
+
+    let failed: Option<Result<(), &str>> = pairing.redeem_with(&code, 1_001, || Err("disk full"));
+    assert_eq!(failed, Some(Err("disk full")), "the mint error is surfaced");
+
+    let retried = pairing.redeem_with(&code, 1_002, || Ok::<_, &str>("token"));
+    assert_eq!(
+        retried,
+        Some(Ok("token")),
+        "the code survives a failed mint and redeems on the retry"
+    );
+    let again = pairing.redeem_with(&code, 1_003, || Ok::<_, &str>("token"));
+    assert_eq!(again, None, "a successful redemption still consumes it");
+
+    let wrong: Option<Result<(), &str>> = pairing.redeem_with("000000000000", 1_004, || Ok(()));
+    assert_eq!(wrong, None, "a wrong guess never runs the mint");
+}
+#[test]
 fn an_expired_code_does_not_redeem_and_a_reissue_kills_the_previous_code() {
     let pairing = PairingCodes::new();
 

@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A pairing code is consumed only when the token was minted. Before, the
+  code was spent first, so a token-store failure (full disk, unreadable data
+  directory) cost the owner the one-time code and the client got an error
+  with no way to retry. PairingCodes::redeem_with runs the mint while the
+  lock is held and clears the code only on success.
+
 - xecute_command spilled overflowing output into the data directory
   root instead of 	ool-output/. The retention sweep that runs when a spill
   closes deletes files older than three days in the directory it was given,
