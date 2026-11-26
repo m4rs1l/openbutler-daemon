@@ -27,6 +27,7 @@ pub mod prompt;
 pub mod providers;
 mod question;
 pub mod queue;
+mod retry;
 
 pub use executor::TurnExecutor;
 pub use queue::QueueAction;
@@ -34,7 +35,7 @@ pub use queue::QueueAction;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use openbutler_protocol::SessionEntryMeta;
@@ -156,6 +157,9 @@ pub struct TurnRunner {
     session_id: String,
     state: Mutex<SessionState>,
     stop: Arc<AtomicBool>,
+    /// The backoff before each further attempt while nothing has reached
+    /// the transcript (the source's `RETRY_DELAYS_MS`).
+    retry_delays: Vec<u64>,
     /// The one pending manual approval while a gate waits (the queue
     /// behind `session.approve`; one at a time, like the source's
     /// `pendingApproval` pair). Std mutex: every critical section here
@@ -260,6 +264,7 @@ impl TurnRunner {
                 dirty: false,
             }),
             stop: Arc::new(AtomicBool::new(false)),
+            retry_delays: retry::RETRY_DELAYS_MS.to_vec(),
             approval: std::sync::Mutex::new(None),
             question: Arc::new(std::sync::Mutex::new(None)),
             publish_notify: Arc::new(tokio::sync::Notify::new()),
@@ -298,6 +303,55 @@ impl TurnRunner {
                 .turns
                 .clear();
         }
+    }
+
+    /// Overrides the retry backoff table (the source's `delaysMs`
+    /// option: tests pass a zero table to retry without waiting).
+    pub fn with_retry_delays(mut self, delays: Vec<u64>) -> Self {
+        self.retry_delays = delays;
+        self
+    }
+
+    /// Waits out a retry backoff, waking early when the owner stops the
+    /// run. Returns true when the stop arrived.
+    async fn wait_or_stop(&self, total: Duration) -> bool {
+        let deadline = Instant::now() + total;
+        loop {
+            if self.stop.load(Ordering::SeqCst) {
+                return true;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            tokio::time::sleep(left.min(Duration::from_millis(50))).await;
+        }
+    }
+
+    /// The one notice a retry sequence owns: the first attempt appends it
+    /// and each further attempt replaces that same line (the source's
+    /// `retryNotice`), so a slow turn is one line, not one per second.
+    fn upsert_retry_notice(
+        &self,
+        state: &mut SessionState,
+        turn_id: &str,
+        slot: Option<usize>,
+        text: &str,
+    ) -> usize {
+        if let Some(index) = slot
+            && let Some(SessionEntry::Notice {
+                text: current,
+                tone,
+                ..
+            }) = state.record.entries.get_mut(index)
+        {
+            *current = text.to_owned();
+            *tone = Some(NoticeTone::Warn);
+            state.dirty = true;
+            return index;
+        }
+        push_notice(state, turn_id, text, Some(NoticeTone::Warn));
+        state.record.entries.len().saturating_sub(1)
     }
 
     /// Runs one turn to settlement: the user entry lands and is saved
@@ -670,16 +724,52 @@ impl TurnRunner {
         // When the provider call began — the source resets this in
         // `prepareStep`, so the row's duration covers the request.
         let started_at_ms = Utc::now().timestamp_millis();
-        let mut stream = match self.door.call(Lane::Interactive, call).await {
-            Ok(stream) => stream,
-            Err(error) => {
-                push_notice(state, turn_id, &error.to_string(), Some(NoticeTone::Error));
-                return DrainResult {
-                    outcome: TurnOutcome::Failed,
-                    reply: String::new(),
-                    calls: Vec::new(),
-                    usage: None,
-                };
+        // Retry state: the source's backoff applies while nothing has
+        // reached the transcript, so a retried step can never duplicate
+        // output. `retry_slot` is the one notice line the sequence owns.
+        let mut retry_attempt = 0usize;
+        let mut retry_slot: Option<usize> = None;
+        let mut stream = loop {
+            match self.door.call(Lane::Interactive, call.clone()).await {
+                Ok(stream) => break stream,
+                Err(DoorError::Cancelled) => {
+                    push_notice(state, turn_id, "Run cancelled.", None);
+                    return DrainResult {
+                        outcome: TurnOutcome::Cancelled,
+                        reply: String::new(),
+                        calls: Vec::new(),
+                        usage: None,
+                    };
+                }
+                Err(error) => {
+                    let wait = self
+                        .retry_delays
+                        .get(retry_attempt)
+                        .copied()
+                        .filter(|_| retry::door_is_retryable(&error));
+                    let Some(wait_ms) = wait else {
+                        push_notice(state, turn_id, &error.to_string(), Some(NoticeTone::Error));
+                        return DrainResult {
+                            outcome: TurnOutcome::Failed,
+                            reply: String::new(),
+                            calls: Vec::new(),
+                            usage: None,
+                        };
+                    };
+                    let text =
+                        retry::notice_text(retry_attempt, self.retry_delays.len(), wait_ms, None);
+                    retry_slot = Some(self.upsert_retry_notice(state, turn_id, retry_slot, &text));
+                    retry_attempt += 1;
+                    if self.wait_or_stop(Duration::from_millis(wait_ms)).await {
+                        push_notice(state, turn_id, "Run cancelled.", None);
+                        return DrainResult {
+                            outcome: TurnOutcome::Cancelled,
+                            reply: String::new(),
+                            calls: Vec::new(),
+                            usage: None,
+                        };
+                    }
+                }
             }
         };
 
@@ -802,7 +892,54 @@ impl TurnRunner {
                             response_id = response;
                             break;
                         }
-                        SidecarEvent::Error { message, .. } => {
+                        SidecarEvent::Error {
+                            status,
+                            retryable,
+                            message,
+                            ..
+                        } => {
+                            // Nothing has reached the transcript yet, so a
+                            // retryable provider failure restarts the step
+                            // (retry.ts); once output exists a retry would
+                            // duplicate it.
+                            let untouched = assistant_index.is_none()
+                                && reasoning_index.is_none()
+                                && calls.is_empty()
+                                && !finish_seen;
+                            let wait = self
+                                .retry_delays
+                                .get(retry_attempt)
+                                .copied()
+                                .filter(|_| untouched && retry::is_retryable(status, retryable));
+                            if let Some(wait_ms) = wait {
+                                let text = retry::notice_text(
+                                    retry_attempt,
+                                    self.retry_delays.len(),
+                                    wait_ms,
+                                    status,
+                                );
+                                retry_slot = Some(self.upsert_retry_notice(
+                                    state,
+                                    turn_id,
+                                    retry_slot,
+                                    &text,
+                                ));
+                                retry_attempt += 1;
+                                if self.wait_or_stop(Duration::from_millis(wait_ms)).await {
+                                    cancelled = true;
+                                    break;
+                                }
+                                match self.door.call(Lane::Interactive, call.clone()).await {
+                                    Ok(next) => {
+                                        stream = next;
+                                        continue;
+                                    }
+                                    Err(error) => {
+                                        run_error = Some(error.to_string());
+                                        break;
+                                    }
+                                }
+                            }
                             // The taxonomy always carries a message in
                             // practice; the fallback text is authored here
                             // (not ported) for the impossible empty case.

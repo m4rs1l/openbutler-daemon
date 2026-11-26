@@ -831,6 +831,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A transient provider failure no longer ends the turn. The host had no
+  retry at all while the SDK runs with `maxRetries: 0`, so a 429 or a 5xx
+  surfaced as a failed run; the source retries on its own backoff
+  (`provider/retry.ts`: 1-2-4-8-16-32-32-32-64 s, ten attempts).
+  `agent::retry` ports that classification and backoff — 408/409/429/5xx
+  and transport failures, never another 4xx — and `drain` applies it only
+  while nothing has reached the transcript, so a retried step can never
+  duplicate output. The sequence owns one notice line replaced in place
+  (`Rate limited (429). Retry 1 of 9 in 1s.`), and the wait wakes early
+  when the owner stops the run. Key rotation is deliberately not ported
+  (one key per provider; owner decision, 2026-11-26).
+
 - A provider configured from the catalog reaches the sidecar. The host
   sent the settings provider id while the registry speaks npm families,
   so every catalog provider whose id differs from its family was refused:

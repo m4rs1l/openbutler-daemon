@@ -317,6 +317,26 @@ async fn chat(
                 ))
             }
         }
+        // Two retryable failures, then the answer: the host's retry must
+        // absorb them without a second transcript line per attempt.
+        "flaky" => {
+            let requests = mock.bodies.lock().unwrap().len();
+            if requests <= 2 {
+                Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        "{\"error\":{\"message\":\"busy\",\"type\":\"server_error\"}}",
+                    ))
+                    .unwrap()
+            } else {
+                sse(&format!(
+                    "{}{}data: [DONE]\n\n",
+                    chunk(json!({ "role": "assistant", "content": "recovered" })),
+                    finish_chunk("stop"),
+                ))
+            }
+        }
         "question" => {
             let requests = mock.bodies.lock().unwrap().len();
             if requests == 1 {
@@ -846,6 +866,59 @@ async fn a_stop_mid_batch_keeps_the_finished_calls_and_pairs_the_interrupted_one
     assert!(
         last.contains("one") && last.contains("two") && last.contains("three"),
         "the finished calls keep their outputs"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A retryable provider failure that arrives before any output is retried
+/// on the source's backoff, and the whole sequence is a single notice line
+/// replaced in place — not one line per attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retryable_provider_failure_is_retried_with_one_notice_line() {
+    let root = temp_root("retry");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
+        .await
+        .expect("open")
+        .with_retry_delays(vec![0, 0]);
+
+    let mut req = request("flaky", addr, UserEntrySource::Terminal);
+    req.workspace_root = Some(root.display().to_string());
+    let turn = runner.send(req).await.expect("turn");
+
+    assert_eq!(
+        turn.outcome,
+        TurnOutcome::Completed,
+        "notices: {:?}",
+        notice_texts(&saved(&root))
+    );
+    assert_eq!(assistant_texts(&saved(&root)), ["recovered"]);
+
+    let bodies = mock.bodies.lock().unwrap().clone();
+    assert_eq!(
+        bodies.len(),
+        3,
+        "two failures and the attempt that answered"
+    );
+
+    let record = saved(&root);
+    let notices: Vec<String> = record
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::Notice { text, .. } if text.starts_with("Provider error (503)") => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "one line for the sequence: {notices:?}");
+    assert_eq!(
+        notices[0], "Provider error (503). Retry 2 of 2 in 1s.",
+        "the last attempt replaces the line"
     );
 
     let _ = std::fs::remove_dir_all(&root);
