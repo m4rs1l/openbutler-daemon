@@ -55,7 +55,7 @@ use crate::tool_runtime::catalog::native_definition;
 use crate::tool_runtime::format::format_tool_result;
 use crate::tool_runtime::pipeline::{
     ApprovalOutcome, AskFuture, AskPort, GateDecision, ToolCallContext, assess, proposal_failure,
-    run_tool_call, stop_result,
+    run_tool_call, stop_result, stopped_result,
 };
 use entry::{
     finish_reasoning_block, finish_user_entry, grow_assistant, grow_reasoning, push_notice,
@@ -465,6 +465,10 @@ impl TurnRunner {
                 let (result, call_stopped) = if stopped {
                     // A prior decline refuses the rest of the batch (L237).
                     (stop_result(), false)
+                } else if self.stop.load(Ordering::SeqCst) {
+                    // The owner stopped the run: the calls the model queued
+                    // after the interrupted one never start.
+                    (stopped_result(), false)
                 } else if let Some(error) = ledger_error.take() {
                     // Fail closed like the source's failed write-ahead: the
                     // run stops and the sentence names the failure.
@@ -488,6 +492,9 @@ impl TurnRunner {
                         // no ledger row, the pair still lands (timeout.ts).
                         Err(message) => (json!({ "status": "error", "error": message }), false),
                         Ok(context) => {
+                            // A stop pressed during the run reaches the tool:
+                            // a blocking command reads this flag and unwinds.
+                            let context = context.with_stop(Some(Arc::clone(&self.stop)));
                             let approval = match assess(&definition, &context) {
                                 GateDecision::AutoApproved => ApprovalOutcome::Approved,
                                 GateDecision::NeedsApproval { gate_reason } => {
@@ -610,6 +617,13 @@ impl TurnRunner {
             // Persist the pairs before the next request — the admission
             // save's twin (a crash must not orphan a tool message).
             let _ = self.save(&mut state);
+            // A stop that landed during the batch ends the turn here: the
+            // pair above already names the interruption, so the next turn
+            // reads a stopped command, not a finished one.
+            if self.stop.swap(false, Ordering::SeqCst) {
+                push_notice(&mut state, &turn_id, "Run cancelled.", None);
+                break (TurnOutcome::Cancelled, drained.reply);
+            }
             if stopped {
                 push_notice(
                     &mut state,

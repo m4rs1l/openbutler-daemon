@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::state::home_dir;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -40,6 +41,14 @@ pub struct ExecuteEnvironment {
     pub command_shell: Option<String>,
     pub session_id: Option<String>,
     pub data_dir: PathBuf,
+    /// The turn's stop flag: a running command polls it and is killed the
+    /// moment the owner stops the turn, instead of waiting out the timeout.
+    pub stop: Option<Arc<AtomicBool>>,
+}
+
+/// Whether the owner has asked the running turn to stop.
+fn stop_requested(stop: Option<&Arc<AtomicBool>>) -> bool {
+    stop.is_some_and(|flag| flag.load(Ordering::SeqCst))
 }
 
 /// `execute` for `execute_command`: never throws — every refusal is a
@@ -558,10 +567,21 @@ fn run_shell(command: &str, cwd: &Path, env: &ExecuteEnvironment, timeout: Durat
     // One absolute deadline for the whole tree.
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
+    let mut interrupted = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
             Ok(None) => {
+                // The owner's stop reaches a running command: the tree is
+                // killed where it stands and the result names the
+                // interruption instead of waiting out the deadline.
+                if stop_requested(env.stop.as_ref()) {
+                    interrupted = true;
+                    kill_process_tree(pid);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
                 if Instant::now() >= deadline {
                     timed_out = true;
                     kill_process_tree(pid);
@@ -584,7 +604,14 @@ fn run_shell(command: &str, cwd: &Path, env: &ExecuteEnvironment, timeout: Durat
     let mut stdout = stdout_capture.lock().unwrap_or_else(|p| p.into_inner());
     let mut stderr = stderr_capture.lock().unwrap_or_else(|p| p.into_inner());
     let mut result = serde_json::Map::new();
-    if timed_out {
+    if interrupted {
+        result.insert("status".into(), json!("stopped"));
+        result.insert(
+            "error".into(),
+            json!("The command was stopped by the user."),
+        );
+        result.insert("exitCode".into(), Value::Null);
+    } else if timed_out {
         result.insert("status".into(), json!("timed_out"));
         result.insert(
             "error".into(),

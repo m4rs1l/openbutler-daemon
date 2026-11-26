@@ -76,9 +76,26 @@ pub fn create_execute_command_tool(
                 resolve_command_directory(context.input.get("cwd"), &context.workspace_root);
             let input = context.input.clone();
             let timeout = context.timeout_seconds;
-            Box::pin(
-                async move { execute_command(&input, &environment, Some(&target), Some(timeout)) },
-            )
+            Box::pin(async move {
+                // The command blocks on its child process; running it on an
+                // async worker would starve the runtime for the whole
+                // timeout, so it takes a blocking thread of its own.
+                match tokio::task::spawn_blocking(move || {
+                    execute_command(&input, &environment, Some(&target), Some(timeout))
+                })
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => json!({
+                        "status": "failed",
+                        "exitCode": Value::Null,
+                        "stdout": "",
+                        "stderr": "",
+                        "error": format!("The command runner stopped unexpectedly ({error})."),
+                        "truncated": false,
+                    }),
+                }
+            })
         },
     }
 }
@@ -220,6 +237,7 @@ fn environment(context: &ToolCallContext) -> ExecuteEnvironment {
         command_shell: context.command_shell.clone(),
         session_id: Some(context.session_id.clone()),
         data_dir: context.data_dir.clone(),
+        stop: context.stop.clone(),
     }
 }
 

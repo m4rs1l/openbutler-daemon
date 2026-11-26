@@ -825,6 +825,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stopping a run interrupts a running command. The stop flag was read only
+  around approvals, questions and the model stream, so a tool that blocked —
+  `execute_command` waiting on its child — ran to completion or to its own
+  timeout while the turn stayed busy (measured: 6.5 s for a 6 s command).
+  The flag now reaches the tool, the process tree is killed where it stands,
+  and the result carries `status: "stopped"` with `The command was stopped by
+  the user.` The ledger records `cancelled` rather than `completed`, and the
+  tool-result pair lands in the conversation, so the next turn reads which
+  command was interrupted instead of a finished one. The command also runs on
+  a blocking thread now, so a long command no longer stalls an async worker
+  for its whole timeout.
+
 - A skill’s description budget is measured in UTF-16 units on both sides.
   The `skills.list` action already read the source’s rule that way while the
   system prompt compared bytes, so a Turkish description of 600 characters

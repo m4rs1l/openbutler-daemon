@@ -10,6 +10,7 @@
 //! (L676); `src/tools/timeout.ts` (field, limits, schema injection).
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use serde_json::{Value, json};
 
@@ -66,6 +67,10 @@ pub struct ToolCallContext {
     /// callers with no interactive owner (the source's `ask ===
     /// undefined` path, question.ts L56).
     pub ask: Option<Arc<dyn AskPort>>,
+    /// The turn's stop flag when a runner drives this call: a tool that
+    /// blocks (a command) reads it and unwinds instead of waiting out its
+    /// own timeout. `None` for callers with no owner who could stop it.
+    pub stop: Option<Arc<AtomicBool>>,
 }
 
 impl ToolCallContext {
@@ -123,7 +128,16 @@ impl ToolCallContext {
             session_id,
             command_shell,
             ask,
+            stop: None,
         })
+    }
+
+    /// Carries the turn's stop flag (the batch loop's runner wires it in):
+    /// a blocking tool reads it and unwinds instead of waiting out its own
+    /// timeout. The flag is left set for the runner to consume.
+    pub fn with_stop(mut self, stop: Option<Arc<AtomicBool>>) -> Self {
+        self.stop = stop;
+        self
     }
 }
 
@@ -269,6 +283,15 @@ pub fn stop_result() -> Value {
     })
 }
 
+/// The owner's stop reached a call that never started: the batch still
+/// pairs it, so every tool call keeps a result that names why it did not run.
+pub fn stopped_result() -> Value {
+    json!({
+        "status": "stopped",
+        "error": "The run was stopped by the user; this tool call did not run.",
+    })
+}
+
 /// Fail-closed wrappers (L286/L303/L352): every one is a result, never a
 /// panic, so the model gets the sentence and the exchange stays paired.
 pub fn policy_failure(message: &str) -> Value {
@@ -309,7 +332,9 @@ pub struct CallOutcome {
 fn tool_outcome(result: &Value) -> ToolActionState {
     if let Some(record) = result.as_object() {
         match record.get("status").and_then(Value::as_str) {
-            Some("cancelled") => return ToolActionState::Cancelled,
+            // A user stop is a cancellation, not a finished run: the
+            // ledger must not read `completed` for a killed command.
+            Some("cancelled" | "stopped") => return ToolActionState::Cancelled,
             Some("timed_out" | "failed" | "error") => return ToolActionState::Failed,
             _ => {}
         }

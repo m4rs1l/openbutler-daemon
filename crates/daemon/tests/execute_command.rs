@@ -23,6 +23,7 @@ fn environment(workspace: &Path) -> ExecuteEnvironment {
         command_shell: None,
         session_id: None,
         data_dir: workspace.to_path_buf(),
+        stop: None,
     }
 }
 

@@ -10,7 +10,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::Body;
@@ -231,6 +231,33 @@ async fn chat(
         }
         // The question scenario: the model asks once and reads the
         // answer from the paired tool result on the second request.
+        // The stop scenario: one command long enough that a stop lands
+        // while it is still running. Nothing but the host's own stop may
+        // end it inside the assertion window.
+        "long_command" => {
+            let requests = mock.bodies.lock().unwrap().len();
+            if requests == 1 {
+                let command = if cfg!(windows) {
+                    "powershell -NoProfile -Command Start-Sleep 6"
+                } else {
+                    "sleep 6"
+                };
+                sse(&format!(
+                    "{}{}data: [DONE]\n\n",
+                    tool_call_chunk(
+                        "execute_command",
+                        &json!({ "command": command }).to_string()
+                    ),
+                    finish_chunk("tool_calls"),
+                ))
+            } else {
+                sse(&format!(
+                    "{}{}data: [DONE]\n\n",
+                    chunk(json!({ "role": "assistant", "content": "the command was interrupted" })),
+                    finish_chunk("stop"),
+                ))
+            }
+        }
         "question" => {
             let requests = mock.bodies.lock().unwrap().len();
             if requests == 1 {
@@ -590,6 +617,118 @@ async fn stop_cancels_the_running_turn() {
     assert!(
         assistant_texts(&record).is_empty(),
         "a cancelled stream writes no assistant entry"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Whether the host has recorded the command's start. The table appears
+/// only once the ledger writer opens, and this poll may run first, so a
+/// missing table is "not yet", not a failure.
+fn command_started(root: &Path) -> bool {
+    let Ok(connection) = rusqlite::Connection::open(root.join("state.db")) else {
+        return false;
+    };
+    let Ok(mut statement) = connection.prepare(
+        "SELECT state FROM openbutler_action_transitions WHERE request_id = ?1 ORDER BY id",
+    ) else {
+        return false;
+    };
+    let Ok(rows) = statement.query_map(["call_batch"], |row| row.get::<_, String>(0)) else {
+        return false;
+    };
+    rows.filter_map(Result::ok).any(|state| state == "started")
+}
+
+/// A stop pressed while a command runs must interrupt that command, and the
+/// interruption must survive into the next turn: the pair names the stop and
+/// still carries the command it cut short. Without the stop reaching the tool
+/// the turn simply waits out the command, and the next request reads it as a
+/// finished command — the state the source could not recover from.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_during_a_running_command_ends_it_and_the_next_turn_sees_it() {
+    let root = temp_root("stop-command");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
+            .await
+            .expect("open"),
+    );
+
+    let mut req = request("long_command", addr, UserEntrySource::Terminal);
+    req.workspace_root = Some(root.display().to_string());
+    let worker = {
+        let runner = Arc::clone(&runner);
+        tokio::spawn(async move { runner.send(req).await })
+    };
+
+    // The host's own ledger is the record that the command is running;
+    // waiting on it puts the stop inside the command, not before it.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !command_started(&root) {
+        assert!(Instant::now() < deadline, "the command never started");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let stopped_at = Instant::now();
+    runner.stop(false);
+    let turn = worker.await.expect("join").expect("turn settles");
+    let elapsed = stopped_at.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the stop waited {elapsed:?} for the command; it must interrupt it"
+    );
+    assert_eq!(turn.outcome, TurnOutcome::Cancelled);
+
+    // The transcript names the interruption instead of a finished command.
+    let record = saved(&root);
+    let tools = tool_entries(&record);
+    assert_eq!(tools.len(), 1, "one tool entry");
+    let SessionEntry::Tool {
+        result, running, ..
+    } = &tools[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        *running,
+        Some(false),
+        "the interrupted command settles as not running"
+    );
+    assert!(
+        result.contains("stopped by the user"),
+        "the entry names the stop: {result}"
+    );
+    assert_eq!(
+        ledger_states(&root),
+        ["proposed", "approved", "started", "cancelled"],
+        "the ledger records the interruption, not a finished command"
+    );
+
+    // The next turn's request carries the stopped pair together with the
+    // command it cut short, so the model knows what did not finish.
+    let mut next = request("long_command", addr, UserEntrySource::Terminal);
+    next.workspace_root = Some(root.display().to_string());
+    next.text = "what happened?".to_owned();
+    let second = runner.send(next).await.expect("second turn");
+    assert_eq!(second.outcome, TurnOutcome::Completed);
+
+    let bodies = mock.bodies.lock().unwrap().clone();
+    let last = bodies.last().expect("the next turn makes a request");
+    assert!(
+        last.contains("what happened?"),
+        "the last body is the next turn's request"
+    );
+    assert!(
+        last.contains("stopped by the user"),
+        "the next turn sees the interrupted command: {last}"
+    );
+    assert!(
+        last.contains("Start-Sleep") || last.contains("sleep 6"),
+        "and the command it named: {last}"
     );
 
     let _ = std::fs::remove_dir_all(&root);
