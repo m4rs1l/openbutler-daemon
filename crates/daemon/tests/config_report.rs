@@ -122,9 +122,11 @@ fn seed_usage(dir: &Path, provider: &str, model: &str, at_ms: i64) {
 #[test]
 fn mcp_rows_and_the_two_kv_lines_match_the_source() {
     let dir = temp_data_dir("cfg-mcp");
+    let workspace = dir.to_string_lossy().into_owned();
     write_settings(
         &dir,
-        "mcpServers:\n\
+        &format!(
+            "mcpServers:\n\
          \x20 local:\n\
          \x20   transport: stdio\n\
          \x20   command: npx\n\
@@ -134,8 +136,10 @@ fn mcp_rows_and_the_two_kv_lines_match_the_source() {
          \x20 remote:\n\
          \x20   transport: sse\n\
          \x20   url: https://mcp.example/sse\n\
-         defaultWorkspaceRoot: C:\\work\\proj\n\
+         defaultWorkspaceRoot: {}\n\
          approvalMode: auto-review\n",
+            workspace
+        ),
     );
     let host = host_over(&dir);
     let report = report_of(call(&host, &dir, &mut DispatchState::new()));
@@ -151,7 +155,7 @@ fn mcp_rows_and_the_two_kv_lines_match_the_source() {
     assert_eq!(mcp[1]["id"], "remote");
     assert_eq!(mcp[1]["transport"], "sse");
     assert_eq!(mcp[1]["endpoint"], "https://mcp.example/sse");
-    assert_eq!(report["defaultWorkspace"], r"C:\work\proj");
+    assert_eq!(report["defaultWorkspace"], workspace.as_str());
     assert_eq!(
         report["toolAccess"],
         "Approve for me (Auto-review outside workspace)"
