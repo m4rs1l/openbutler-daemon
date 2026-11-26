@@ -6,8 +6,7 @@
 //! `readScheduleRuntime`..`writeScheduleError`, `describeSchedule`,
 //! `assembleWakeText`, the formatters, `triggerStateKey`/`readTriggerDue`),
 //! read 2026-11-18. Every refusal string and rendered line is the source's
-//! own text; deliberate divergences are recorded per file and in
-//! `docs/schedule.md`.
+//! own text; deliberate divergences are recorded per file.
 
 mod describe;
 mod format;

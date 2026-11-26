@@ -1,5 +1,5 @@
 //! M2b acceptance: the real sidecar against a local OpenAI-compatible
-//! mock — no network, no keys. Criteria 1-3 of `docs/sidecar-door.md`:
+//! mock - no network, no keys. Criteria 1-3:
 //! the SDK stops at a tool call instead of running its own loop, the
 //! sidecar refuses unknown providers and keeps keys off stdout, and the
 //! pinned SDK version plus per-provider lazy registry are what the

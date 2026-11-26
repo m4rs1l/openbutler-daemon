@@ -286,7 +286,7 @@ impl LedgerWriter {
     /// `setEventState`: the plain status/error write (no state guard —
     /// the source has none). The source passes the error through its
     /// redaction engine; that gate is deferred with the tool-output one
-    /// (`docs/agent-loop.md`), a cutover prerequisite.
+    /// a cutover prerequisite.
     pub fn set_event_state(
         &self,
         event_id: &str,

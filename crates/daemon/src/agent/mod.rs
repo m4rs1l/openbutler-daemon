@@ -13,9 +13,8 @@
 //!   stream (the legacy debounce's role).
 //! - **The system prompt and its context are landed** (`prompt`,
 //!   `providers`, `context`); the batch loop executes tools host-side
-//!   between steps (`docs/tool-pipeline.md`), while the visible queue
-//!   and the approval API remain with their own slices and are recorded
-//!   in `docs/agent-loop.md`.
+//!   between steps, while the visible queue and the approval API live
+//!   in their own modules.
 
 mod approval;
 mod compact;

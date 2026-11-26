@@ -565,8 +565,8 @@ async fn an_unknown_tool_pairs_an_authored_error_and_fails_the_run() {
         .await
         .expect("turn");
     // The catalog never sent `get_weather`: the pair lands, the entry
-    // settles, the run stops with the authored sentence (documented in
-    // docs/tool-pipeline.md — the SDK would have thrown instead).
+    // settles, the run stops with the authored sentence (the SDK would
+    // have thrown instead).
     assert_eq!(turn.outcome, TurnOutcome::Failed);
 
     let record = saved(&root);

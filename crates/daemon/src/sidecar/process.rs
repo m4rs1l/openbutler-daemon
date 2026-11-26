@@ -4,7 +4,7 @@
 //! its own (the portable rule on every platform), `kill_on_drop` covers a
 //! dropped writer, and the hard per-platform guards (Windows Job Object,
 //! Linux PDEATHSIG) are pending the workspace `unsafe_code = "forbid"`
-//! decision — see `docs/sidecar-door.md`.
+//! decision.
 
 use std::process::Stdio;
 

@@ -32,8 +32,7 @@ pub struct SessionRecord {
 }
 
 /// Bound on a full read; a larger record is treated as unreadable rather
-/// than allocated wholesale (the commit-pressure question stays open in
-/// docs/state-formats.md).
+/// than allocated wholesale (the commit-pressure question stays open).
 const FULL_READ_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Parses a record body — partial or whole. Callers verify the id.

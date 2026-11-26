@@ -4,7 +4,7 @@
 //!
 //! Sources: legacy `src/image-data.ts` and `src/attachments.ts`
 //! (`storeAttachment`, `verifyAttachmentPath`), read 2026-11-17. The
-//! layout matches `docs/state-formats.md`.
+//! layout is the on-disk contract.
 
 use std::path::{Path, PathBuf};
 

@@ -4,7 +4,7 @@
 //!
 //! Source: legacy `daemon-host.ts` case `session.compact` (L3514) and
 //! `agent-session.ts` `compact()` (L2737) / `applyCompaction` (L2849),
-//! read 2026-11-18. Deferred work recorded in `docs/context-compaction.md`:
+//! read 2026-11-18. Deferred work:
 //! mid-run queue serving at the step boundary and the streamed
 //! checkpoint deltas arrive with the auto-trigger slice.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

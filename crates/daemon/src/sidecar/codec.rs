@@ -1,6 +1,6 @@
 //! Line framing for the sidecar's stdout, and the handshake gate.
 //!
-//! The three-way rule from `docs/sidecar-door.md`: a line that is not
+//! The three-way rule: a line that is not
 //! JSON, is not an event object, or exceeds the cap, is a protocol
 //! violation that kills the door; a well-formed event whose `type` is
 //! unknown is skipped and logged so a newer sidecar never breaks us.

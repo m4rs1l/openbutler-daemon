@@ -4,10 +4,9 @@
 //!
 //! Source: legacy `compaction.ts` + `conversation.ts` (read 2026-11-18).
 //! This module is the pure half - no model call, no disk, no state, no
-//! sidecar. The engine that streams a summarisation request (`compactConversation`)
-//! and its session hooks arrive with the sidecar wiring (C2/C3); the
-//! refusal-is-data contract they must honour is recorded in
-//! `docs/context-compaction.md` when that slice lands.
+//! sidecar. The engine that streams a summarisation request
+//! (`compactConversation`) and its session hooks live above it, in the
+//! engine; they honour a refusal-is-data contract.
 
 mod conversation;
 mod core;

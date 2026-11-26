@@ -5,7 +5,7 @@
 //! writer (recompute + header order + atomic rename), `header` reads display
 //! fields without materialising transcripts, `list` runs the picker query,
 //! `projects` owns `projects.json` and folder canonicalisation.
-//! The on-disk contract itself is documented in `docs/state-formats.md`.
+//! The on-disk contract itself is stated on each module below.
 
 mod attachments;
 mod header;

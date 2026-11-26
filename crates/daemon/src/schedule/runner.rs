@@ -3,7 +3,7 @@
 //! by the host; this type owns only timers, statuses, and the emit that
 //! publishes observed events.
 //!
-//! Deliberate divergences (documented in `docs/schedule-engine.md`):
+//! Deliberate divergences:
 //! - The source's adapter registry (`Map` of starters) is a `match` over
 //!   the same closed set — `validateScheduleTrigger` guarantees the name
 //!   before dispatch.

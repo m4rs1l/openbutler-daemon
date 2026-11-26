@@ -188,7 +188,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flow keeps the source's rules: fresh cache without a transport call,
   stale cache beating no catalog, a 60 s backoff, and the wrapped
   URL-bearing failure sentence — transport injected (no HTTP dependency
-  yet). Owner design recorded in `docs/provider-catalog.md`: override
+  yet). Design decision: override
   resolution and the derived-view plan for hot paths. 12 pins in
   `tests/catalog_store.rs`. The real transport (`HttpTransport`,
   reqwest 0.13 with platform TLS — rustls's aws-lc-rs needs a native
@@ -458,7 +458,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `no-reduction`), the recovery suffix, and the full sliced chain
   (per-slice notes, bounded condense rounds, verbatim tail, forced
   final call) through the real door against the fake sidecar.
-  `docs/context-compaction.md` documents the contract.
 - Compaction slice chunker (`compaction/slicing.rs`): greedy
   transcript chunking that never splits a tool call from its result -
   a slice closes only while no call inside it is unresolved (the
@@ -626,8 +625,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   denotation + `_timeoutSeconds` schema injection, and 16 000 unit
   result bounding through the spill writer. `execute_command` is the
   first catalog entry; 6 fail-before tests (`tool_pipeline`).
-  Deviations in `docs/tool-pipeline.md` (no redaction engine yet,
-  unreachable timeout-exception path).
+  Known deviations: no redaction engine yet, and an unreachable
+  timeout-exception path.
 - `tools/execute_command.rs`: the flagship native tool — input
   validation with the source's sentences, the workspace-scope rules
   (cd walk, install/elevation/home/fetcher/piped-interpreter regexes,

@@ -3,8 +3,7 @@
 //! Layout: `codec` owns line framing and the handshake, `process` owns
 //! spawning, `queue` owns lanes and admission, `route` owns event
 //! routing and call termination, `supervisor` owns the state machine
-//! and timers. Contract: `docs/sidecar-door.md`; wire types:
-//! `openbutler_protocol::sidecar`.
+//! and timers. Wire types: `openbutler_protocol::sidecar`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -1,8 +1,7 @@
 //! The sidecar door: handshake, framing discipline, cancellation,
 //! queue lanes, timeouts and the supervisor state machine — all against
 //! the fake sidecar. The real `sidecar.mjs` behaviors (allowlist, stdout
-//! hygiene, the SDK execute-lock) are M2b acceptance criteria; see
-//! `docs/sidecar-door.md`.
+//! hygiene, the SDK execute-lock) are M2b acceptance criteria.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
