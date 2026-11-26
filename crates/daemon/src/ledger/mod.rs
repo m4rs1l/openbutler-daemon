@@ -13,6 +13,8 @@ mod writer;
 
 pub use events::{EventInput, OBSERVED_EVENT_STATES};
 pub use feed::{list_actions, list_events, retry_event, schedule_events};
+/// The one retention-duration parser (`30d`, `12h`, `90m`, `2w`).
+pub(crate) use prune::parse_duration;
 pub use prune::prune;
 pub use state::StateReader;
 pub use usage::{

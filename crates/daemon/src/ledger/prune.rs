@@ -139,8 +139,9 @@ pub fn prune(data_dir: &Path, request: &DaemonRequest) -> Result<Value, String> 
 }
 
 /// `parseRetentionDuration` (retention.ts L9): `<digits><m|h|d|w>`, trimmed
-/// and lowercased, a positive safe integer.
-fn parse_duration(text: &str) -> Option<i64> {
+/// and lowercased, a positive safe integer. One parser for every pruning
+/// surface (`sessions.prune` shares it).
+pub(crate) fn parse_duration(text: &str) -> Option<i64> {
     let normalized = text.trim().to_lowercase();
     let (digits, unit) = normalized.split_at(normalized.len().checked_sub(1)?);
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {

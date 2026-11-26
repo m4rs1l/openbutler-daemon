@@ -23,6 +23,8 @@
 //! `state.db` read-only (the same numbers, one owner).
 
 use std::collections::{BTreeMap, HashSet};
+
+use crate::shape::to_fixed;
 use std::path::Path;
 
 use chrono::TimeZone;
@@ -290,22 +292,16 @@ fn summarize(days: &[UsageDay], rows: &[ledger::UsageReportRow]) -> Summary {
 fn format_tokens(value: i64) -> String {
     let value = value as f64;
     if value >= 1_000_000.0 {
-        format!("{}M", fixed(value / 1_000_000.0, 1))
+        format!("{}M", to_fixed(value / 1_000_000.0, 1))
     } else if value >= 1_000.0 {
-        format!("{}k", fixed(value / 1_000.0, 1))
+        format!("{}k", to_fixed(value / 1_000.0, 1))
     } else {
         format!("{}", value.round() as i64)
     }
 }
 
-/// `Number.toFixed(digits)` for non-negative values.
-fn fixed(value: f64, digits: i32) -> String {
-    let scale = 10f64.powi(digits);
-    format!("{:.*}", digits as usize, (value * scale).round() / scale)
-}
-
 fn format_cost(value: f64) -> String {
-    format!("${}", fixed(value, 4))
+    format!("${}", to_fixed(value, 4))
 }
 
 fn format_duration(ms: i64) -> String {

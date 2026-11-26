@@ -20,6 +20,7 @@ pub(crate) mod schedule;
 mod session_control;
 pub mod session_send;
 pub(crate) mod session_write;
+mod sessions_prune;
 mod skills;
 mod usage_report;
 
@@ -60,6 +61,7 @@ const PRE_ATTACH: &[&str] = &[
     "team.manage",
     "schedule.manage",
     "skills.list",
+    "sessions.prune",
     "telegram.status",
     "telegram.pair",
     "telegram.test",
@@ -487,6 +489,21 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
+        // Session retention: the host owns the files, so the host prunes
+        // them. Local-only — the source ran this in the CLI process on the
+        // host, and this port keeps that authority envelope.
+        "sessions.prune" => {
+            if state.remote {
+                return failure(
+                    request,
+                    "Session files are pruned on the host machine only.".to_owned(),
+                );
+            }
+            match sessions_prune::prune(data_dir, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
+            }
+        }
         "permissions.set-mode" => match permissions::set_mode(host, data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),

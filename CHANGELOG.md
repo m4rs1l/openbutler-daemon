@@ -41,6 +41,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `sessions.prune` — the source's retention pass over saved sessions
+  (`cli-main.ts` L1465-1526, `retention.ts`, `session-store.ts`), run
+  inside the host because the host owns the files: a strict
+  modification-time cutoff, the machine custodian never selected, rows
+  `  <UTC date>  <id>  <bytes>`, a preview that deletes nothing, and an
+  apply that re-reads path/mtime/size before removing the record's own
+  directory. Each answer line carries the host's tone
+  (`plain`/`info`/`success`/`warn`) so the client only applies its glyph
+  palette. `Invalid duration "…"` (the shared retention parser) and
+  `apply must be a boolean.` are the refusals; the action is local-only
+  (`Session files are pruned on the host machine only.`), preserving the
+  source's authority envelope. Deletion is a hard delete like the
+  source's `rmSync` — pruning exists to reclaim disk, so routing the
+  tree through the platform trash would keep the bytes.
 - `keys.list` / `keys.add` / `keys.remove` — the provider key store
   (`cli/keys.ts`): rows carry `…tail` display fragments only; writes trim,
   drop empties, skip duplicates, create the entry enabled and keep
