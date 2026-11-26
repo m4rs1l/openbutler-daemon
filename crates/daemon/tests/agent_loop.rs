@@ -258,6 +258,65 @@ async fn chat(
                 ))
             }
         }
+        // Four calls in one step: three finish, the fourth blocks until the
+        // owner stops it. The body of the answer decides which call ran.
+        "batch_four" => {
+            let requests = mock.bodies.lock().unwrap().len();
+            if requests == 1 {
+                let mut body = String::new();
+                let quick = [
+                    ("call_b1", "echo one"),
+                    ("call_b2", "echo two"),
+                    ("call_b3", "echo three"),
+                ];
+                for (index, (id, command)) in quick.iter().enumerate() {
+                    body.push_str(&chunk(json!({
+                        "tool_calls": [{
+                            "index": index,
+                            "id": id,
+                            "function": {
+                                "name": "execute_command",
+                                "arguments": json!({ "command": command }).to_string()
+                            }
+                        }]
+                    })));
+                }
+                let slow = if cfg!(windows) {
+                    "powershell -NoProfile -Command Start-Sleep 6"
+                } else {
+                    "sleep 6"
+                };
+                body.push_str(&chunk(json!({
+                    "tool_calls": [{
+                        "index": 3,
+                        "id": "call_b4",
+                        "function": {
+                            "name": "execute_command",
+                            "arguments": json!({ "command": slow }).to_string()
+                        }
+                    }]
+                })));
+                body.push_str(&chunk(json!({
+                    "tool_calls": [{
+                        "index": 4,
+                        "id": "call_b5",
+                        "function": {
+                            "name": "execute_command",
+                            "arguments": json!({ "command": "echo five" }).to_string()
+                        }
+                    }]
+                })));
+                body.push_str(&finish_chunk("tool_calls"));
+                body.push_str("data: [DONE]\n\n");
+                sse(&body)
+            } else {
+                sse(&format!(
+                    "{}{}data: [DONE]\n\n",
+                    chunk(json!({ "role": "assistant", "content": "batch complete" })),
+                    finish_chunk("stop"),
+                ))
+            }
+        }
         "question" => {
             let requests = mock.bodies.lock().unwrap().len();
             if requests == 1 {
@@ -622,10 +681,10 @@ async fn stop_cancels_the_running_turn() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Whether the host has recorded the command's start. The table appears
-/// only once the ledger writer opens, and this poll may run first, so a
+/// Whether the host has recorded the start of one call. The table appears
+/// only once the ledger writer opens, and these polls may run first, so a
 /// missing table is "not yet", not a failure.
-fn command_started(root: &Path) -> bool {
+fn command_started_for(root: &Path, request_id: &str) -> bool {
     let Ok(connection) = rusqlite::Connection::open(root.join("state.db")) else {
         return false;
     };
@@ -634,10 +693,162 @@ fn command_started(root: &Path) -> bool {
     ) else {
         return false;
     };
-    let Ok(rows) = statement.query_map(["call_batch"], |row| row.get::<_, String>(0)) else {
+    let Ok(rows) = statement.query_map([request_id], |row| row.get::<_, String>(0)) else {
         return false;
     };
     rows.filter_map(Result::ok).any(|state| state == "started")
+}
+
+fn command_started(root: &Path) -> bool {
+    command_started_for(root, "call_batch")
+}
+
+/// The ledger's recorded states for one call, oldest first.
+fn ledger_states_for(root: &Path, request_id: &str) -> Vec<String> {
+    let connection = rusqlite::Connection::open(root.join("state.db")).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT state FROM openbutler_action_transitions \
+             WHERE request_id = ?1 ORDER BY id",
+        )
+        .unwrap();
+    statement
+        .query_map([request_id], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+/// Four calls in one step, the owner stops during the fourth: the three that
+/// finished keep their own results and the interrupted one names the stop.
+/// Every call keeps exactly one result — a batch must never leave a tool call
+/// unanswered, or the next request to the provider is invalid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_mid_batch_keeps_the_finished_calls_and_pairs_the_interrupted_one() {
+    let root = temp_root("stop-batch");
+    seed_session(&root);
+    let (addr, mock) = mock_server().await;
+    let door = spawn_door().await;
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
+            .await
+            .expect("open"),
+    );
+
+    let mut req = request("batch_four", addr, UserEntrySource::Terminal);
+    req.workspace_root = Some(root.display().to_string());
+    let worker = {
+        let runner = Arc::clone(&runner);
+        tokio::spawn(async move { runner.send(req).await })
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while !command_started_for(&root, "call_b4") {
+        assert!(
+            Instant::now() < deadline,
+            "the fourth command never started"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    runner.stop(false);
+
+    let turn = worker.await.expect("join").expect("turn settles");
+    assert_eq!(turn.outcome, TurnOutcome::Cancelled);
+
+    // Every finished call keeps its own result; the interrupted one says so.
+    let record = saved(&root);
+    let tools = tool_entries(&record);
+    assert_eq!(tools.len(), 5, "one entry per call");
+    let results: Vec<String> = tools
+        .iter()
+        .map(|entry| match entry {
+            SessionEntry::Tool { result, .. } => result.clone(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert!(results[0].contains("one"), "first: {}", results[0]);
+    assert!(results[1].contains("two"), "second: {}", results[1]);
+    assert!(results[2].contains("three"), "third: {}", results[2]);
+    assert!(
+        results[3].contains("stopped by the user"),
+        "fourth: {}",
+        results[3]
+    );
+    assert!(
+        results[4].contains("did not run"),
+        "a call after the interrupted one never starts: {}",
+        results[4]
+    );
+
+    // The pairing invariant: four calls, four results, in order.
+    assert_eq!(record.conversation.len(), 7, "user, assistant, five tools");
+    let ids: Vec<&str> = record.conversation[2..]
+        .iter()
+        .map(|message| {
+            message["content"][0]["toolCallId"]
+                .as_str()
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(ids, ["call_b1", "call_b2", "call_b3", "call_b4", "call_b5"]);
+    assert_eq!(
+        record.conversation[5]["content"][0]["output"]["value"]["status"],
+        "stopped"
+    );
+
+    // The ledger keeps three completed runs and one cancellation.
+    for id in ["call_b1", "call_b2", "call_b3"] {
+        assert_eq!(
+            ledger_states_for(&root, id),
+            ["proposed", "approved", "started", "completed"],
+            "{id} finished"
+        );
+    }
+    assert_eq!(
+        ledger_states_for(&root, "call_b4"),
+        ["proposed", "approved", "started", "cancelled"],
+        "the interrupted call is a cancellation"
+    );
+    assert!(
+        ledger_states_for(&root, "call_b5").is_empty(),
+        "a call that never started has no ledger row"
+    );
+
+    // The next turn's request carries all four: three outputs and the stop.
+    let mut next = request("batch_four", addr, UserEntrySource::Terminal);
+    next.workspace_root = Some(root.display().to_string());
+    next.text = "what happened?".to_owned();
+    let second = runner.send(next).await.expect("second turn");
+    assert_eq!(second.outcome, TurnOutcome::Completed);
+
+    let bodies = mock.bodies.lock().unwrap().clone();
+    let last = bodies.last().expect("the next turn makes a request");
+    assert_eq!(
+        last.matches("\"role\":\"tool\"").count(),
+        5,
+        "five paired tool messages in one request"
+    );
+    // The pairing is per call and in order: a missing or reordered id
+    // would make the next request invalid.
+    let mut cursor = 0;
+    for id in ["call_b1", "call_b2", "call_b3", "call_b4", "call_b5"] {
+        let needle = format!("\"tool_call_id\":\"{id}\"");
+        let at = last[cursor..]
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{id} has no paired result in the next request"));
+        cursor += at + needle.len();
+    }
+    assert!(last.contains("stopped by the user"), "the stop survives");
+    assert!(
+        last.contains("Start-Sleep") || last.contains("sleep 6"),
+        "and the command it interrupted"
+    );
+    assert!(
+        last.contains("one") && last.contains("two") && last.contains("three"),
+        "the finished calls keep their outputs"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// A stop pressed while a command runs must interrupt that command, and the
