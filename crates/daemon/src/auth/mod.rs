@@ -12,7 +12,7 @@ use std::fs;
 use std::path::Path;
 
 pub use pair::PairingCodes;
-pub use store::{Minted, TokenStore};
+pub use store::{Minted, TokenStore, TokenSummary};
 
 /// Everything a credential operation can fail with. The messages are the
 /// fixed wordings, verbatim — they are part of the wire contract.

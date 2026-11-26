@@ -25,6 +25,15 @@ pub struct Minted {
     pub token: String,
 }
 
+/// A minted token as the owner sees it: id and creation time only — the
+/// store never lists anything secret (`listAuthTokens` in the source).
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// A token's public summary.
+pub struct TokenSummary {
+    pub id: String,
+    pub created_at: String,
+}
+
 /// The pair-token store (issue, verify, single-use consume).
 pub struct TokenStore {
     path: PathBuf,
@@ -92,6 +101,40 @@ impl TokenStore {
             }
         }
         Ok(false)
+    }
+
+    /// Every minted token, id and creation time only (`listAuthTokens`).
+    pub fn list(&self) -> Result<Vec<TokenSummary>, AuthError> {
+        let mut summaries = Vec::new();
+        for record in self.read()?.tokens {
+            let (Some(id), Some(created_at)) = (
+                record.get("id").and_then(Value::as_str),
+                record.get("createdAt").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            summaries.push(TokenSummary {
+                id: id.to_owned(),
+                created_at: created_at.to_owned(),
+            });
+        }
+        Ok(summaries)
+    }
+
+    /// Removes one token (`revokeAuthToken`): `true` when the id was there,
+    /// `false` (and no write) when it was not.
+    pub fn revoke(&self, id: &str) -> Result<bool, AuthError> {
+        let tokens = self.read()?.tokens;
+        let kept: Vec<Map<String, Value>> = tokens
+            .iter()
+            .filter(|record| record.get("id").and_then(Value::as_str) != Some(id))
+            .cloned()
+            .collect();
+        if kept.len() == tokens.len() {
+            return Ok(false);
+        }
+        self.write(&kept)?;
+        Ok(true)
     }
 
     /// Reads and validates the store, matching the TypeScript error texts.

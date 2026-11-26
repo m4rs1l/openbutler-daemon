@@ -52,6 +52,11 @@ pub struct DispatchState {
     /// wrote the ack before `setImmediate(requestStop)` (L3211-3212), and
     /// a process that exits first would lose the answer.
     pub(super) shutdown_after_response: bool,
+    /// Whether this connection arrived through the remote TCP door. The
+    /// server sets it for `Admission::Remote`; credential-minting actions
+    /// (`pair.create`, `token.*`) refuse a remote caller — a new contract,
+    /// the source had no gate there.
+    pub remote: bool,
 }
 
 impl DispatchState {
@@ -83,6 +88,11 @@ impl DispatchState {
         let requested = self.shutdown_after_response;
         self.shutdown_after_response = false;
         requested
+    }
+
+    /// Marks the connection as remote (the server, before the first frame).
+    pub fn set_remote(&mut self, remote: bool) {
+        self.remote = remote;
     }
 }
 

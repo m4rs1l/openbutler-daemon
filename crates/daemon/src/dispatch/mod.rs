@@ -35,6 +35,9 @@ const PRE_ATTACH: &[&str] = &[
     "status",
     "config.report",
     "pair.create",
+    "token.create",
+    "token.list",
+    "token.revoke",
     "stop",
     "settings.reload",
     "settings.setup",
@@ -389,12 +392,80 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
-        "pair.create" => match host.pairing().issue(crate::auth::now_ms()) {
-            Ok((code, expires_at)) => {
-                success(request, json!({ "code": code, "expiresAt": expires_at }))
+        "pair.create" => {
+            // Minting credentials is local-only: the source had no gate, so a
+            // remote client holding a token could mint pair codes into more
+            // tokens (a new contract, documented in `api-surface.md`).
+            if state.remote {
+                return failure(
+                    request,
+                    "Pairing codes are minted on the host machine only.".to_owned(),
+                );
             }
-            Err(error) => failure(request, error.to_string()),
-        },
+            match host.pairing().issue(crate::auth::now_ms()) {
+                Ok((code, expires_at)) => {
+                    success(request, json!({ "code": code, "expiresAt": expires_at }))
+                }
+                Err(error) => failure(request, error.to_string()),
+            }
+        }
+        "token.create" => {
+            if state.remote {
+                return failure(
+                    request,
+                    "Remote auth tokens are managed on the host machine only.".to_owned(),
+                );
+            }
+            match crate::auth::TokenStore::new(data_dir).mint() {
+                Ok(minted) => success(request, json!({ "id": minted.id, "token": minted.token })),
+                Err(error) => failure(request, error.to_string()),
+            }
+        }
+        "token.list" => {
+            if state.remote {
+                return failure(
+                    request,
+                    "Remote auth tokens are managed on the host machine only.".to_owned(),
+                );
+            }
+            match crate::auth::TokenStore::new(data_dir).list() {
+                Ok(summaries) => success(
+                    request,
+                    serde_json::to_value(
+                        summaries
+                            .into_iter()
+                            .map(|summary| {
+                                json!({ "id": summary.id, "createdAt": summary.created_at })
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap_or_else(|_| json!([])),
+                ),
+                Err(error) => failure(request, error.to_string()),
+            }
+        }
+        "token.revoke" => {
+            if state.remote {
+                return failure(
+                    request,
+                    "Remote auth tokens are managed on the host machine only.".to_owned(),
+                );
+            }
+            let id = match require(request.payload.get("tokenId"), "tokenId", 64) {
+                Ok(id) => id,
+                Err(error) => return failure(request, error),
+            };
+            match crate::auth::TokenStore::new(data_dir).revoke(&id) {
+                Ok(true) => success(request, json!({ "revoked": true })),
+                Ok(false) => failure(
+                    request,
+                    format!(
+                        "No token with id {id}. List them with `openbutler daemon token list`."
+                    ),
+                ),
+                Err(error) => failure(request, error.to_string()),
+            }
+        }
         "schedule.manage" => schedule::handle_schedule_manage(host, data_dir, request),
         "ledger.events" => match ledger::list_events(data_dir, request.get("limit")) {
             Ok(rows) => success(

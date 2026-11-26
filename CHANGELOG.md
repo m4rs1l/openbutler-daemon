@@ -33,6 +33,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The auth token actions (`token.create` / `token.list` / `token.revoke`) and
+  the local-only gate: the store lived CLI-side in the source and the host
+  owns it now (salted hashes only; the plaintext is answered once). The
+  store gains `list` (id and creation time — never anything secret) and
+  `revoke` (no write when the id is absent). Minting credentials is local
+  only: `pair.create` and every `token.*` action refuse a remote connection
+  (`Pairing codes are minted on the host machine only.` / `Remote auth
+  tokens are managed on the host machine only.`) — the source had no gate,
+  so a remote client holding a token could mint more. New contract,
+  documented in `api-surface.md`. The revoke payload key is `tokenId`: a
+  payload key named `id` collides with the envelope's flattened `id` and the
+  frame fails to deserialize (the CLI's fake daemon showed it first). Pins:
+  mint → verify → list → revoke → empty, the unknown-id sentence, the id
+  validation, and the remote gate over all four actions.
+
 - The host-wide connection roster (`dispatch::clients`) and `stop`'s
   `restart` flag (daemon-host.ts L3191-3214): the arm validates the flag
   (`restart must be a boolean.`, null included), answers a `notification`

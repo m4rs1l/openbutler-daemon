@@ -175,6 +175,7 @@ where
     dispatch_state.set_sink(sink);
 
     if let Admission::Remote { auth_timeout } = admission {
+        dispatch_state.set_remote(true);
         let first = tokio::time::timeout(
             auth_timeout,
             next_frame(&mut reader, &mut decoder, &mut buffer, &mut pending),
