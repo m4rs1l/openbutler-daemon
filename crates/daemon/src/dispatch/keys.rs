@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use super::Host;
 use crate::settings::schema::{ProviderSecrets, ProviderState};
-use crate::shape::js_len;
+use crate::shape::{js_len, screen_line, table_lines};
 
 /// One key's size gate — anything longer is not a credential.
 const MAX_KEY_BYTES: usize = 8 * 1024;
@@ -56,7 +56,42 @@ pub fn list(host: &Host) -> Result<Value, String> {
             "tails": state.keys.iter().map(|key| format!("…{}", tail(key))).collect::<Vec<_>>(),
         }));
     }
-    Ok(json!({ "providers": rows }))
+    // The screen, composed here: the table, or the source's two empty
+    // lines. A client prints it.
+    let lines: Vec<Value> = if rows.is_empty() {
+        vec![
+            screen_line("info", "No provider is configured."),
+            screen_line("info", "Add one with: openbutler keys add <provider>"),
+        ]
+    } else {
+        let table: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| {
+                vec![
+                    row["id"].as_str().unwrap_or("").to_owned(),
+                    if row["enabled"].as_bool().unwrap_or(false) {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_owned(),
+                    row["keyCount"].as_u64().unwrap_or(0).to_string(),
+                    row["tails"]
+                        .as_array()
+                        .map(|tails| {
+                            tails
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default(),
+                ]
+            })
+            .collect();
+        table_lines(&["PROVIDER", "STATE", "KEYS", "ENDING"], &table)
+    };
+    Ok(json!({ "providers": rows, "lines": lines }))
 }
 
 /// Appends keys to a provider (`addProviderKeys`): trimmed, empties
@@ -71,7 +106,11 @@ pub fn add(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<Valu
         .filter(|key| !key.is_empty())
         .collect();
     if normalized.is_empty() {
-        return Ok(json!({ "provider": provider, "added": 0 }));
+        return Ok(json!({
+            "provider": provider,
+            "added": 0,
+            "lines": [screen_line("info", "Nothing added.")]
+        }));
     }
     let mut loaded = crate::settings::load_settings(data_dir).map_err(|error| error.to_string())?;
     let mut secrets = crate::settings::load_secrets(data_dir).map_err(|error| error.to_string())?;
@@ -111,7 +150,20 @@ pub fn add(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<Valu
         .map_err(|error| error.to_string())?;
     host.reload_settings(data_dir)
         .map_err(|error| error.to_string())?;
-    Ok(json!({ "provider": provider, "added": added }))
+    // The screen, composed here: the count sentence the wizard prints.
+    let count = if added == 1 {
+        "1 key".to_owned()
+    } else {
+        format!("{added} keys")
+    };
+    Ok(json!({
+        "provider": provider,
+        "added": added,
+        "lines": [screen_line(
+            "success",
+            format!("{provider}: {count} saved to the secret store.")
+        )]
+    }))
 }
 
 /// Drops every key of a provider, keeping the entry (`removeProviderKeys`).
@@ -126,7 +178,14 @@ pub fn remove(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<V
         .map(|entry| entry.keys.len())
         .unwrap_or(0);
     if removed == 0 {
-        return Ok(json!({ "provider": provider, "removed": 0 }));
+        return Ok(json!({
+            "provider": provider,
+            "removed": 0,
+            "lines": [screen_line(
+                "info",
+                format!("{provider} has no stored keys.")
+            )]
+        }));
     }
     secrets
         .providers
@@ -141,7 +200,14 @@ pub fn remove(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<V
         .map_err(|error| error.to_string())?;
     host.reload_settings(data_dir)
         .map_err(|error| error.to_string())?;
-    Ok(json!({ "provider": provider, "removed": removed }))
+    Ok(json!({
+        "provider": provider,
+        "removed": removed,
+        "lines": [screen_line(
+            "success",
+            format!("{provider}: keys removed. The provider entry itself stays.")
+        )]
+    }))
 }
 
 /// `classifyKeysTarget`: a provider is anything configured or known to the
