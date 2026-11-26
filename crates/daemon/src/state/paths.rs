@@ -103,6 +103,17 @@ pub(crate) fn strip_windows_prefix(path: &std::path::Path) -> std::path::PathBuf
     path.to_path_buf()
 }
 
+/// The custodian workspace root, spelled the way `canonical_scope_root`
+/// spells a workspace it accepted: the data directory is resolved first, so
+/// a second spelling of it (an 8.3 short name, a junction, a `..` leg, a
+/// case difference) cannot hide the child behind a string comparison.
+pub(crate) fn canonical_child_root(parent: &Path, child: &str) -> String {
+    let resolved = std::fs::canonicalize(parent)
+        .map(|path| strip_windows_prefix(&path))
+        .unwrap_or_else(|_| parent.to_path_buf());
+    resolved.join(child).to_string_lossy().into_owned()
+}
+
 /// `canonicalScopeRoot`: expand `~`, resolve against the process
 /// directory, follow symlinks, require a directory. The single path
 /// normalizer — every layer used to carry its own variant of this

@@ -21,6 +21,7 @@ pub use attachments::{
     MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES, decode_base64_image, image_type_from_bytes,
     store_attachment, verify_attachment_path,
 };
+pub(crate) use paths::canonical_child_root;
 /// The one workspace-path normalizer (`canonicalScopeRoot`).
 pub(crate) use paths::canonical_scope_root;
 /// The home directory (`os.homedir()`): skills roots and path expansion.

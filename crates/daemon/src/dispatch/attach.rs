@@ -221,8 +221,8 @@ fn attach_non_chat(
     // The custodian is the host's own conversation, reached through the
     // channels that drive it (L3371): the data directory never opens as a
     // workspace.
-    let custodian_root = data_dir.join("custodian");
-    if super::workspace_key_eq(&scope_root, &custodian_root.to_string_lossy()) {
+    let custodian_root = state::canonical_child_root(data_dir, "custodian");
+    if super::workspace_key_eq(&scope_root, &custodian_root) {
         return Err(
             "The OpenButler custodian data directory cannot be selected as a workspace.".to_owned(),
         );

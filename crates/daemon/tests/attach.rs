@@ -925,6 +925,40 @@ fn the_custodian_gate_runs_before_the_worker_gates() {
 }
 
 #[test]
+fn the_custodian_gate_sees_through_a_second_spelling_of_the_data_directory() {
+    // The gate compared the canonical workspace root against the data
+    // directory exactly as the caller spelled it. Any other spelling of the
+    // same directory - an 8.3 short name on a runner, a junction, a `..`
+    // leg - walked past it. The custodian root now goes through the same
+    // normalizer as the workspace root.
+    let dir = temp_data_dir("b2-custodian-spelling");
+    std::fs::create_dir_all(dir.join("custodian")).unwrap();
+    std::fs::create_dir_all(dir.join("nested")).unwrap();
+    let host = Host::new();
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir.join("nested").join(".."),
+        &mut state,
+        request(
+            "v5",
+            &[
+                (
+                    "workspaceRoot",
+                    json!(dir.join("custodian").to_string_lossy()),
+                ),
+                ("isolatedSession", json!(true)),
+            ],
+        ),
+    );
+    assert_eq!(
+        failure_text(response),
+        "The OpenButler custodian data directory cannot be selected as a workspace."
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn two_worker_view_modes_are_refused() {
     let dir = temp_data_dir("b2-two-views");
     let host = Host::new();
