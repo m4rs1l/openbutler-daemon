@@ -821,6 +821,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `session.send` validates an image's bytes before it answers `accepted`.
+  The source decodes each payload inside `parseQueuedMessage`; this port only
+  checked the field shapes, so a message whose picture was not a PNG, was
+  empty or was over 5 MB was accepted and the loss surfaced later as a
+  notice. The parser now decodes against the source's 5 MB cap and passes on
+  the canonical base64, keeping its tolerance for whitespace.
+
 - `ledger.prune` and `sessions.prune` refuse a duration whose unit is a
   multibyte character instead of unwinding the handler that read it.
   `parse_duration` split the unit off the last byte of the caller's string,

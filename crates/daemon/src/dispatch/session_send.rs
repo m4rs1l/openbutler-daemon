@@ -1,12 +1,16 @@
 //! The `session.send` message contract: `parseQueuedMessage` verbatim
-//! (daemon-host.ts L4104), with one loud deviation — well-formed images
-//! are refused instead of being stored as attachments, because that port
-//! (storeAttachment + references) has not landed and silent loss is not
-//! an option.
+//! (daemon-host.ts L4104). The shape gates run here and so does the
+//! byte-level image check the source performs inside the parser: every
+//! image is decoded against its declared type and size before the send is
+//! accepted, and the payload is re-encoded canonically, so a message that
+//! cannot carry its picture is refused instead of accepted and noticed
+//! later. Storing the bytes is the executor's pre-turn conversion.
 
+use base64::Engine;
 use serde_json::Value;
 
 use crate::agent::QueuedImage;
+use crate::state::{MAX_IMAGE_BYTES, decode_base64_image};
 
 /// `MAX_MESSAGE_TEXT_BYTES` — UTF-8 bytes, like `Buffer.byteLength`.
 pub const MAX_MESSAGE_TEXT_BYTES: usize = 8 * 1024 * 1024;
@@ -49,13 +53,17 @@ pub fn parse_queued_message(value: &Value) -> Result<ParsedMessage, String> {
     let mut parsed_images = Vec::with_capacity(images.len());
     for image in images {
         let fields = image.as_object().ok_or_else(|| PNG_ERROR.to_owned())?;
-        if fields.get("mediaType").and_then(Value::as_str) != Some("image/png")
-            || !fields.get("base64").is_some_and(Value::is_string)
-        {
+        let media_type = fields.get("mediaType").and_then(Value::as_str);
+        let base64 = fields.get("base64").and_then(Value::as_str);
+        let (Some("image/png"), Some(base64)) = (media_type, base64) else {
             return Err(PNG_ERROR.to_owned());
-        }
+        };
+        // The source validates the decoded bytes here (`decodeBase64Image`)
+        // and passes on the canonical encoding: the string's shape says
+        // nothing about whether it is a PNG.
+        let bytes = decode_base64_image(base64, "image/png", MAX_IMAGE_BYTES)?;
         parsed_images.push(QueuedImage {
-            base64: fields["base64"].as_str().unwrap_or_default().to_owned(),
+            base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             media_type: "image/png".to_owned(),
         });
     }

@@ -2,10 +2,9 @@
 //! accept-immediately answer, and the turn handed to the executor seam.
 //!
 //! Source: legacy `daemon-host.ts` case `session.send` (L3501) and
-//! `parseQueuedMessage` (L4104), read 2026-11-17. One documented
-//! deviation: well-formed images are refused loudly instead of being
-//! stored as attachments (that port is a later slice) — silent loss is
-//! not an option.
+//! `parseQueuedMessage` (L4104), read 2026-11-17. Images are decoded and
+//! validated inside the parser, exactly like the source, and the executor
+//! stores the accepted bytes as attachments.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
@@ -241,6 +240,49 @@ fn each_image_must_be_a_base64_png_record() {
         )),
         "Only base64 PNG images are supported over this IPC version."
     );
+}
+
+/// The source decodes inside `parseQueuedMessage`, so the bytes - not the
+/// string - decide whether a send is accepted. Without that, a message
+/// carrying a non-PNG payload was accepted and the loss surfaced later as
+/// a notice; whitespace inside the client's base64 stays incidental.
+#[test]
+fn image_bytes_are_validated_before_acceptance() {
+    let dir = temp_data_dir("send-image-bytes");
+    let session_id = seed_chat(&dir);
+    let (host, _) = host_with_executor();
+    host.reload_settings(&dir).expect("settings load");
+    let mut state = bound_state();
+    success_result(call(
+        &host,
+        &dir,
+        &mut state,
+        request("load", "session.load", &[("sessionId", json!(session_id))]),
+    ));
+
+    let not_png = json!({ "mediaType": "image/png", "base64": "aGVsbG8=" });
+    assert_eq!(
+        failure_text(call(
+            &host,
+            &dir,
+            &mut state,
+            send_request(message("hi", json!([not_png])))
+        )),
+        "An attached image is not a valid image/png."
+    );
+
+    let spaced = json!({ "mediaType": "image/png", "base64": "iVBO\nRw0KGgo=" });
+    assert_eq!(
+        success_result(call(
+            &host,
+            &dir,
+            &mut state,
+            send_request(message("hi", json!([spaced])))
+        )),
+        json!({ "accepted": true })
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
