@@ -14,6 +14,7 @@ mod commands;
 mod config_report;
 pub mod fanout;
 mod host;
+mod keys;
 mod permissions;
 pub(crate) mod schedule;
 mod session_control;
@@ -48,6 +49,9 @@ const PRE_ATTACH: &[&str] = &[
     "settings.setup",
     "settings.set-listen",
     "settings.set-default-workspace",
+    "keys.list",
+    "keys.add",
+    "keys.remove",
     "permissions.set-mode",
     "permissions.manage",
     "team.delivery",
@@ -447,10 +451,36 @@ pub fn handle(
         },
         // What this machine runs: version, shell, paths. Host-wide and
         // count-free — nothing here is a secret.
+        // What this machine runs: version, shell, paths. Host-wide and
+        // count-free — nothing here is a secret.
         "about.report" => match about::report(host, data_dir) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
+        // The provider key store: display fragments on read, writes
+        // local-only (credential contract).
+        "keys.list" => match keys::list(host) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "keys.add" => {
+            if state.remote {
+                return failure(request, keys::REMOTE_REFUSAL.to_owned());
+            }
+            match keys::add(host, data_dir, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
+            }
+        }
+        "keys.remove" => {
+            if state.remote {
+                return failure(request, keys::REMOTE_REFUSAL.to_owned());
+            }
+            match keys::remove(host, data_dir, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
+            }
+        }
         // The usage screen's whole state: host-wide, needs no binding, and
         // safe on a view-only attachment (counts, never key material).
         "usage.report" => match usage_report::report(data_dir, request) {

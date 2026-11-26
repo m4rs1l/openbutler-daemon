@@ -41,6 +41,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `keys.list` / `keys.add` / `keys.remove` — the provider key store
+  (`cli/keys.ts`): rows carry `…tail` display fragments only; writes trim,
+  drop empties, skip duplicates, create the entry enabled and keep
+  `providerOrder`; remove clears the keys and keeps the entry. The write
+  goes through the secrets document, so `settings.yaml` never carries a
+  key. MCP-server and unknown-provider refusals are the source's
+  sentences; the writes are local-only (`API keys are managed on the host
+  machine only.` — a new credential gate). Pins: the empty row set, the
+  append/dedupe path, the remove-keeps-entry path, both classification
+  refusals, the keys payload shape, the remote gate and the
+  settings/config split.
 - `skills.list` — Agent Skill discovery, the `skills.ts` port: the seven
   roots in source order, frontmatter metadata (name must match the
   directory, description 1..=1024 chars, first 8 KiB, symlinks refused),
