@@ -2158,3 +2158,35 @@ async fn a_turn_prices_its_step_from_the_catalog() {
     let cost = row.cost_usd.expect("the step is priced");
     assert!((cost - 0.000_06).abs() < 1e-12, "got {cost}");
 }
+
+#[tokio::test]
+async fn a_failed_admission_save_does_not_leave_the_runner_busy() {
+    // The failure the guard exists for: the record path becomes a directory,
+    // so the admission save cannot write and `send` returns through its
+    // first `?`. Before the guard, `active_current` stayed `Some(..)` for
+    // good: `session.queue` would accept steered messages nothing drains and
+    // a queued compaction would wait forever.
+    let root = temp_root("admit-fail");
+    seed_session(&root);
+    let door = spawn_door().await;
+    let runner = TurnRunner::open(&root, SESSION_ID, door, std::sync::Weak::new())
+        .await
+        .expect("open");
+
+    let record = root
+        .join("sessions")
+        .join(SESSION_ID)
+        .join(format!("{SESSION_ID}.json"));
+    std::fs::remove_file(&record).expect("remove the seeded record");
+    std::fs::create_dir(&record).expect("a directory where the record must be");
+
+    let addr: SocketAddr = "127.0.0.1:9".parse().expect("addr");
+    let error = runner
+        .send(request("never-reached", addr, UserEntrySource::Terminal))
+        .await
+        .expect_err("the admission save must fail");
+    assert!(
+        !runner.is_turn_active(),
+        "a turn that never ran must not keep the runner busy: {error}"
+    );
+}

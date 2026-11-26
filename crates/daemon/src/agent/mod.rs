@@ -319,15 +319,11 @@ impl TurnRunner {
         let turn_id = Uuid::new_v4().to_string();
         // The running turn is the admission current (steering
         // refusals compare against it) and the chat's workspace
-        // binding feeds the refusal bypass.
-        *self
-            .active_current
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(request.clone());
-        *self
-            .active_turn_id
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(turn_id.clone());
+        // binding feeds the refusal bypass. The guard clears both on
+        // **every** way out of this function: an early `?` (a failed
+        // admission save, a refused write) must not leave the runner
+        // looking busy behind a turn that never existed.
+        let _busy = BusyGuard::arm(self, &request, &turn_id);
         *self
             .session_workspace
             .lock()
@@ -633,16 +629,6 @@ impl TurnRunner {
         };
 
         finish_user_entry(&mut state.record, &turn_id, outcome);
-        // The admission current ends with the turn: a later manage
-        // call sees no running task (and the next send re-sets it).
-        *self
-            .active_current
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        *self
-            .active_turn_id
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         if outcome == TurnOutcome::Completed && !final_reply.is_empty() {
             state.record.conversation.push(json!({
                 "role": "assistant",
@@ -965,5 +951,45 @@ impl TurnRunner {
                 *last = Some(next);
             }
         }
+    }
+}
+
+/// Arms the admission markers for one turn and clears them on drop.
+///
+/// The clear used to be written at the end of `send` only, so any early
+/// `?` in between — the admission save is the first candidate — left the
+/// runner looking busy behind a turn that never ran: `session.queue` would
+/// accept steered messages nothing would drain, and a queued compaction
+/// would wait forever.
+struct BusyGuard<'a> {
+    runner: &'a TurnRunner,
+}
+
+impl<'a> BusyGuard<'a> {
+    fn arm(runner: &'a TurnRunner, request: &TurnRequest, turn_id: &str) -> Self {
+        *runner
+            .active_current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(request.clone());
+        *runner
+            .active_turn_id
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(turn_id.to_owned());
+        Self { runner }
+    }
+}
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        *self
+            .runner
+            .active_current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self
+            .runner
+            .active_turn_id
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 }
