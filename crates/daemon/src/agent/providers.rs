@@ -535,7 +535,11 @@ fn read_skill_metadata(path: &Path) -> Option<(String, String)> {
     let metadata: Value = serde_saphyr::from_str(frontmatter).ok()?;
     let name = metadata.get("name")?.as_str()?.to_owned();
     let description = metadata.get("description")?.as_str()?.trim().to_owned();
-    if !is_skill_name(&name) || description.is_empty() || description.len() > 1024 {
+    // The budget is the source's `description.length` (UTF-16 units), and
+    // `crate::skills` reads the same rule for the action's listing: a byte
+    // budget here would hide a skill the listing shows.
+    if !is_skill_name(&name) || description.is_empty() || crate::shape::js_len(&description) > 1024
+    {
         return None;
     }
     Some((name, description))

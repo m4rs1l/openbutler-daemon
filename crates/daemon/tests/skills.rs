@@ -33,6 +33,48 @@ fn skill_md(name: &str, description: &str) -> String {
     format!("---\nname: {name}\ndescription: {description}\n---\n\nBody.\n")
 }
 
+/// The description budget is measured the way the source measures it: in
+/// UTF-16 units, not bytes. A Turkish note of 600 characters is 1200 bytes,
+/// so a byte budget would refuse a description the source accepts.
+#[test]
+fn a_multibyte_description_under_the_budget_is_accepted() {
+    let dir = temp_data_dir("skills-description-units");
+    let description = "\u{11F}".repeat(600);
+    write_skill(&dir, "turkce", &skill_md("turkce", &description));
+    let found = discover_from_roots(&[root(&dir, SkillScope::Global)]);
+    assert_eq!(found.len(), 1, "the description fits the 1024-unit budget");
+    assert_eq!(found[0].description, description);
+}
+
+/// The prompt assembly and the `skills.list` action discover over two
+/// implementations of one rule (the prompt half lives in
+/// `agent::providers`, the action's in `skills`). They must agree: a skill the
+/// listing shows but the prompt drops is invisible to the model, and the
+/// description budget is the field where they drifted once already.
+#[test]
+fn the_prompt_and_the_action_agree_on_what_a_skill_is() {
+    let dir = temp_data_dir("skills-agreement");
+    let description = "\u{11F}".repeat(600);
+    write_skill(&dir, "turkce", &skill_md("turkce", &description));
+    let roots = [root(&dir, SkillScope::Global)];
+    let prompt_roots = [openbutler_daemon::agent::providers::SkillRoot {
+        path: dir.clone(),
+        scope: openbutler_daemon::agent::providers::SkillScope::Global,
+    }];
+
+    let from_action = discover_from_roots(&roots);
+    let from_prompt = openbutler_daemon::agent::providers::discover_skills(&prompt_roots)
+        .expect("the prompt half reads the same roots");
+    assert_eq!(from_action.len(), 1, "the action lists the skill");
+    assert_eq!(
+        from_prompt.len(),
+        1,
+        "the prompt sees the skill the action lists"
+    );
+    assert_eq!(from_action[0].name, from_prompt[0].name);
+    assert_eq!(from_action[0].description, from_prompt[0].description);
+}
+
 #[test]
 fn discovers_metadata_and_orders_by_scope_rank_then_name() {
     let builtin = temp_data_dir("skills-builtin");

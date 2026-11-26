@@ -821,6 +821,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A skill’s description budget is measured in UTF-16 units on both sides.
+  The `skills.list` action already read the source’s rule that way while the
+  system prompt compared bytes, so a Turkish description of 600 characters
+  appeared in the listing and vanished from the prompt.
+
 - Settings writes survive a crash. `atomic_write` staged
   `<name>.<pid>.tmp` with an exclusive create, so a run that died before the
   rename left a name the OS later reassigned to a new process: every write
