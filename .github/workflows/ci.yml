@@ -37,3 +37,20 @@ jobs:
       - run: npm ci
         working-directory: sidecar
       - run: cargo test
+
+  build:
+    name: build (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sidecar/package-lock.json
+      - run: npm ci
+        working-directory: sidecar
+      - run: npm run build
+        working-directory: sidecar
+      - run: cargo build --release
