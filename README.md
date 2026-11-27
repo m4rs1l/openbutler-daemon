@@ -7,8 +7,39 @@ hands them; every rule, decision and computation lives here, so a client
 never re-implements one.
 
 Status: pre-release (0.0.1). The host serves the full action set its CLI
-consumes and an integration suite drives the real binary, but there is no
-installer yet and the wire may still change — consumers pin a git revision.
+consumes and an integration suite drives the real binary. The wire may still
+change — embedders pin a git revision of `openbutler-protocol`.
+
+## Install
+
+Linux (x86_64 or arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/m4rs1l/openbutler-daemon/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/m4rs1l/openbutler-daemon/main/install.ps1 | iex
+```
+
+The installer downloads the release archive for this platform, verifies it
+against `SHA256SUMS`, unpacks the daemon with its sidecar and Node runtime into
+`~/.openbutler/bin` (or `%USERPROFILE%\.openbutler\bin`), checks that the binary
+reports the requested version, writes a marker so a second run is a no-op, and
+adds the directory to `PATH` unless told otherwise.
+
+| Flag | Effect |
+|---|---|
+| `--version <x.y.z>` | install a specific release instead of the latest |
+| `--prefix <dir>` | install under `<dir>` instead of `~/.openbutler` |
+| `--no-modify-path` | leave shell profiles and the user `PATH` alone |
+| `--quiet` | no progress bar, no decoration |
+
+The archive carries everything the host needs at run time: `openbutlerd`,
+`sidecar/dist/` and `node/`. No Node installation is required on the target
+machine; building from source is the only path that wants one.
 
 ## Architecture
 
@@ -29,7 +60,9 @@ exactly one request per call.
 ## Requirements
 
 - Rust 1.99.1, pinned by `rust-toolchain.toml` with `rustfmt` and `clippy`
-- Node.js on `PATH`, for the sidecar (`OPENBUTLER_NODE` overrides the binary)
+- Node.js for the sidecar when building from source; the release archives
+  bundle one and the host finds it beside itself (`OPENBUTLER_NODE` overrides
+  both)
 - Windows, Linux or macOS
 
 ## Build and run

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Component installers (`install.sh`, `install.ps1`): select the release for
+  the platform, verify it against `SHA256SUMS`, unpack into
+  `~/.openbutler/bin` (`%USERPROFILE%\.openbutler\bin`), run the installed
+  binary to confirm it reports the requested version, and write a marker so a
+  second run is a no-op. `--version`, `--prefix`, `--no-modify-path` and
+  `--quiet` are supported; `--prefix` lets the new stack live beside a legacy
+  install until the user is ready to switch.
 - A release workflow: one tag publishes three platform archives
   (`openbutlerd-<version>-<target>`) carrying the daemon, the bundled sidecar
   (`sidecar/dist/`, esbuild output, no `node_modules`) and the pinned Node
