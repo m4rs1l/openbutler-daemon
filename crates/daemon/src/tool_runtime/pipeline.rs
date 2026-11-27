@@ -428,7 +428,7 @@ pub async fn run_tool_call(
         // The worst path (the call failed *and* the ledger write):
         // never silent — the run still carries the tool result.
         if let Err(error) = write(ToolActionState::Failed, Some(result.clone()), Some(message)) {
-            eprintln!("openbutler-daemon: ledger action write: {error}");
+            eprintln!("openbutlerd: ledger action write: {error}");
         }
         return CallOutcome {
             result,
@@ -470,7 +470,7 @@ pub async fn run_tool_call(
         // The worst path (the call failed *and* the ledger write):
         // never silent — the run still carries the tool result.
         if let Err(error) = write(ToolActionState::Failed, Some(result.clone()), Some(message)) {
-            eprintln!("openbutler-daemon: ledger action write: {error}");
+            eprintln!("openbutlerd: ledger action write: {error}");
         }
         return CallOutcome {
             result,
@@ -502,7 +502,7 @@ pub async fn run_tool_call(
             // never silent — the run still carries the tool result.
             if let Err(error) = write(ToolActionState::Failed, Some(result.clone()), Some(message))
             {
-                eprintln!("openbutler-daemon: ledger action write: {error}");
+                eprintln!("openbutlerd: ledger action write: {error}");
             }
             CallOutcome {
                 result,

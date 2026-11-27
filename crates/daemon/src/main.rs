@@ -1,6 +1,6 @@
 //! OpenButler background host entry point.
 //!
-//! `openbutler-daemon run` serves the IPC endpoint until `stop` or Ctrl+C;
+//! `openbutlerd run` serves the IPC endpoint until `stop` or Ctrl+C;
 //! any other invocation prints the protocol version.
 
 use std::process::ExitCode;
@@ -17,7 +17,8 @@ fn main() -> ExitCode {
         Some("run") => run(&mut args),
         _ => {
             println!(
-                "openbutler-daemon protocol v{}",
+                "openbutlerd {} (daemon) protocol v{}",
+                env!("CARGO_PKG_VERSION"),
                 openbutler_protocol::DAEMON_PROTOCOL_VERSION
             );
             ExitCode::SUCCESS
@@ -38,7 +39,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             "--listen" => match args.next() {
                 Some(addr) => listen = Some(addr),
                 None => {
-                    eprintln!("openbutler-daemon: --listen needs an address, e.g. 127.0.0.1:45278");
+                    eprintln!("openbutlerd: --listen needs an address, e.g. 127.0.0.1:45278");
                     return ExitCode::FAILURE;
                 }
             },
@@ -57,7 +58,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                 }
             },
             other => {
-                eprintln!("openbutler-daemon: unknown run option `{other}`");
+                eprintln!("openbutlerd: unknown run option `{other}`");
                 return ExitCode::FAILURE;
             }
         }
@@ -73,7 +74,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("openbutler-daemon: could not start the async runtime: {error}");
+            eprintln!("openbutlerd: could not start the async runtime: {error}");
             return ExitCode::FAILURE;
         }
     };
@@ -85,7 +86,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         let _start_lock = match openbutler_daemon::start_lock::acquire(&config::data_dir()).await {
             Ok(lock) => lock,
             Err(message) => {
-                eprintln!("openbutler-daemon: {message}");
+                eprintln!("openbutlerd: {message}");
                 return ExitCode::FAILURE;
             }
         };
@@ -98,14 +99,14 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             logger.info("host.started", fields);
         }
         if let Some(pid) = openbutler_daemon::start_lock::host_pid(&config::data_dir()).await {
-            eprintln!("openbutler-daemon: An OpenButler host is already running (pid {pid}).");
+            eprintln!("openbutlerd: An OpenButler host is already running (pid {pid}).");
             return ExitCode::FAILURE;
         }
         let host = Arc::new(Host::new());
         // Boot validates and loads the live settings copy; a broken store
         // refuses to start rather than running on defaults.
         if let Err(error) = host.reload_settings(&config::data_dir()) {
-            eprintln!("openbutler-daemon: {error}");
+            eprintln!("openbutlerd: {error}");
             return ExitCode::FAILURE;
         }
         // The listener: the flag wins, `--no-listen` suppresses the saved
@@ -127,7 +128,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             Some(spec) => match openbutler_daemon::listen_target::parse_listen_target(&spec) {
                 Ok(target) => Some(format!("{}:{}", target.host, target.port)),
                 Err(error) => {
-                    eprintln!("openbutler-daemon: {error}");
+                    eprintln!("openbutlerd: {error}");
                     return ExitCode::FAILURE;
                 }
             },
@@ -158,16 +159,16 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             match openbutler_daemon::ledger::LedgerWriter::open(&config::data_dir()) {
                 Ok(writer) => writer,
                 Err(error) => {
-                    eprintln!("openbutler-daemon: {error}");
+                    eprintln!("openbutlerd: {error}");
                     return ExitCode::FAILURE;
                 }
             };
         if let Err(error) = schedule_writer.recover_interrupted_actions() {
-            eprintln!("openbutler-daemon: {error}");
+            eprintln!("openbutlerd: {error}");
             return ExitCode::FAILURE;
         }
         if let Err(error) = schedule_writer.recover_interrupted_events() {
-            eprintln!("openbutler-daemon: {error}");
+            eprintln!("openbutlerd: {error}");
             return ExitCode::FAILURE;
         }
         let schedule_writer = Arc::new(std::sync::Mutex::new(schedule_writer));
@@ -182,13 +183,13 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                     .map(|_inserted| ())
                     .map_err(|error| error.to_string())
             }),
-            Arc::new(|message: String| eprintln!("openbutler-daemon: {message}")),
+            Arc::new(|message: String| eprintln!("openbutlerd: {message}")),
         );
         let stored_schedules = match openbutler_daemon::state::schedules::load(&config::data_dir())
         {
             Ok(schedules) => schedules,
             Err(error) => {
-                eprintln!("openbutler-daemon: {error}");
+                eprintln!("openbutlerd: {error}");
                 return ExitCode::FAILURE;
             }
         };
@@ -225,13 +226,13 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                     // The host keeps running, local only: the door stays shut
                     // and the machine log carries the reason.
                     let message = format!("remote listener not opened on {addr}: {error}");
-                    eprintln!("openbutler-daemon: {message}");
+                    eprintln!("openbutlerd: {message}");
                     let mut fields = serde_json::Map::new();
                     fields.insert("message".to_owned(), serde_json::json!(message));
                     logger.warn("host.listen_refused", fields);
                 }
                 Err(error) => {
-                    eprintln!("openbutler-daemon: could not listen on {addr}: {error}");
+                    eprintln!("openbutlerd: could not listen on {addr}: {error}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -263,7 +264,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                     Some(server)
                 }
                 Err(error) => {
-                    eprintln!("openbutler-daemon: could not start the web server: {error}");
+                    eprintln!("openbutlerd: could not start the web server: {error}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -275,7 +276,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
             result = served => match result {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
-                    eprintln!("openbutler-daemon: could not serve the IPC endpoint: {error}");
+                    eprintln!("openbutlerd: could not serve the IPC endpoint: {error}");
                     ExitCode::FAILURE
                 }
             },

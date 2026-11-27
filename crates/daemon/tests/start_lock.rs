@@ -88,7 +88,7 @@ async fn a_stale_lock_is_reclaimed_and_the_old_owner_cannot_unlink_the_new_one()
 #[tokio::test]
 async fn a_second_entry_reports_the_running_host_and_fails_fast() {
     let dir = temp_dir("e2e");
-    let binary = env!("CARGO_BIN_EXE_openbutler-daemon");
+    let binary = env!("CARGO_BIN_EXE_openbutlerd");
     let mut first = std::process::Command::new(binary)
         .arg("run")
         .env("OPENBUTLER_DATA_DIR", &dir)

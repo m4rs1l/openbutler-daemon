@@ -185,7 +185,7 @@ async fn accept_until_shutdown<S, Accept, Pending>(
             accepted = accept() => match accepted {
                 Ok(stream) => serve(stream),
                 Err(error) => {
-                    eprintln!("openbutler-daemon: accept failed, still listening: {error}");
+                    eprintln!("openbutlerd: accept failed, still listening: {error}");
                     tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
                 }
             },

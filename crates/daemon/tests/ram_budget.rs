@@ -50,7 +50,7 @@ fn working_set(pid: u32) -> Option<u64> {
 #[test]
 fn an_idle_daemon_stays_inside_the_memory_ceiling() {
     let data = scratch("idle");
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_openbutler-daemon"))
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_openbutlerd"))
         .arg("run")
         .env("OPENBUTLER_DATA_DIR", &data)
         .stdin(Stdio::null())

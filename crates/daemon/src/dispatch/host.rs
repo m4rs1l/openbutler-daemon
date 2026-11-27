@@ -235,7 +235,7 @@ impl Host {
                 Err(error) => Err(error.to_string()),
             };
             if let Err(error) = outcome {
-                eprintln!("openbutler-daemon: the provider catalog could not be loaded: {error}");
+                eprintln!("openbutlerd: the provider catalog could not be loaded: {error}");
             }
         });
         true
@@ -378,7 +378,7 @@ impl Host {
         let data_dir = data_dir.to_path_buf();
         runtime.spawn(async move {
             if let Err(error) = crate::schedule::pump::pump_once(&host, &data_dir).await {
-                eprintln!("openbutler-daemon: schedule pump: {error}");
+                eprintln!("openbutlerd: schedule pump: {error}");
             }
         });
     }

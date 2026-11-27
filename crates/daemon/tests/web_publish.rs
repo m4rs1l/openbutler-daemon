@@ -29,11 +29,11 @@ async fn a_web_host_reports_its_pair_url_through_status() {
     )
     .unwrap();
     let binary = bin_dir.join(if cfg!(windows) {
-        "openbutler-daemon.exe"
+        "openbutlerd.exe"
     } else {
-        "openbutler-daemon"
+        "openbutlerd"
     });
-    std::fs::copy(env!("CARGO_BIN_EXE_openbutler-daemon"), &binary).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_openbutlerd"), &binary).unwrap();
 
     let mut child = std::process::Command::new(&binary)
         .args(["run", "--web", "--web-bind", "127.0.0.1:0"])

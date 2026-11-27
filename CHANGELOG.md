@@ -743,6 +743,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The daemon binary is `openbutlerd` (package `openbutler-daemon` unchanged),
+  so the process name follows the `dockerd`/`sshd` convention and can never be
+  mistaken for the `openbutler` command. The data directory keeps its name on
+  purpose — renaming it would move existing data for no user benefit — and the
+  stderr prefix follows the binary (`openbutlerd: …`).
+- `openbutlerd --version` prints `openbutlerd <version> (daemon) protocol v2`,
+  so a machine with both this build and the legacy launcher can tell which one
+  answered.
 - The catalog is **one file**. Each fetch overwrites `catalog.ndjson`
   (staged, synced, renamed) instead of writing an immutable generation
   beside a separate `catalog-index.json`; the header line inside the file

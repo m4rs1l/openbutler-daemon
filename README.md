@@ -36,8 +36,8 @@ exactly one request per call.
 
 ```sh
 cargo build --release
-./target/release/openbutler-daemon run          # local IPC only
-./target/release/openbutler-daemon run --web    # with the browser surface
+./target/release/openbutlerd run          # local IPC only
+./target/release/openbutlerd run --web    # with the browser surface
 ```
 
 `run` accepts:
