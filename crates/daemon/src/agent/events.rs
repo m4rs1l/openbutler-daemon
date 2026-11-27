@@ -10,7 +10,7 @@ use openbutler_protocol::runtime::RuntimeViewData;
 use openbutler_protocol::session::entry::SessionEntry;
 use openbutler_protocol::session::{
     IndexedEntry, RunState, SessionEntriesPatch, SessionPatch, SessionSnapshotData, SessionView,
-    TextDelta,
+    TextDelta, TextDeltaKind,
 };
 
 /// One publishable session state (legacy `AgentSessionSnapshot` reduced to
@@ -112,6 +112,13 @@ pub fn diff_entries(
             append_text.push(TextDelta {
                 index: index as i64,
                 delta: after_text[before_text.len()..].to_owned(),
+                // The entry kind is the stream kind: the client applies the
+                // label instead of guessing from the index.
+                kind: if matches!(after, SessionEntry::Reasoning { .. }) {
+                    TextDeltaKind::Reasoning
+                } else {
+                    TextDeltaKind::Text
+                },
             });
             continue;
         }

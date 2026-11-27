@@ -12,7 +12,7 @@ use openbutler_protocol::envelope::DaemonEvent;
 use openbutler_protocol::runtime::RuntimeViewData;
 use openbutler_protocol::session::entry::SessionEntry;
 use openbutler_protocol::session::{
-    RunState, SessionEntriesPatch, SessionMeta, SessionView, TextDelta,
+    RunState, SessionEntriesPatch, SessionMeta, SessionView, TextDelta, TextDeltaKind,
 };
 use serde_json::{Value, json};
 
@@ -193,6 +193,7 @@ fn a_pure_text_append_rides_an_append_text_delta() {
             append_text: vec![TextDelta {
                 index: 0,
                 delta: "lo world".to_owned(),
+                kind: TextDeltaKind::Text,
             }],
         }),
         "only the text suffix crosses the wire"

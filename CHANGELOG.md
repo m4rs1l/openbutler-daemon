@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Text continuations carry the stream they belong to (`text` | `reasoning`).
+  The patch builder labels each delta from the entry it grows, so a client
+  applies the label instead of inferring one from the index; ordinary text
+  keeps its old wire shape and an older host reads as text.
+
 - `catalog.listProviders` and `catalog.listModels`: read-only picker actions
   over the host catalog (id, name, model count, package; then the models with
   their declared limits). They answer before an attachment and say
