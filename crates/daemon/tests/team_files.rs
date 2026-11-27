@@ -264,14 +264,23 @@ fn the_default_inbox_lands_by_basename_under_the_team_folder() {
         default_inbox_path(&dir, "team", "report.pdf"),
         dir.join("team-inbox").join("team").join("report.pdf")
     );
-    // Basename strips directories on both separators while running here.
     assert_eq!(
         default_inbox_path(&dir, "team", "sub/dir/report.pdf"),
         dir.join("team-inbox").join("team").join("report.pdf")
     );
+    // `\` separates on Windows and is an ordinary character elsewhere, so
+    // the basename follows the platform rule (`path.basename`).
+    #[cfg(windows)]
     assert_eq!(
         default_inbox_path(&dir, "team", "C:\\tmp\\report.pdf"),
         dir.join("team-inbox").join("team").join("report.pdf")
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        default_inbox_path(&dir, "team", "C:\\tmp\\report.pdf"),
+        dir.join("team-inbox")
+            .join("team")
+            .join("C:\\tmp\\report.pdf")
     );
     // resolve() semantics: "." stays inside the team folder, ".." climbs
     // out of it, an empty name lands on the team folder itself.
