@@ -362,15 +362,20 @@ async fn providers_load_lazily_one_call_at_a_time() {
     // Drain stderr concurrently: NODE_DEBUG output fills the pipe long
     // before the call is answered (the same reason the door itself
     // drains stderr — a full pipe freezes the child).
+    // Drain stderr into a shared buffer: NODE_DEBUG output fills the pipe
+    // long before the call is answered (the same reason the door itself
+    // drains stderr - a full pipe freezes the child). Shared, so the test
+    // can wait for the loader line instead of assuming it landed before the
+    // error event did.
+    let trace = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let trace_reader = trace.clone();
     let stderr_drain = tokio::spawn(async move {
-        let mut debug = String::new();
         let mut reader = BufReader::new(stderr);
         let mut chunk = String::new();
         while reader.read_line(&mut chunk).await.unwrap() > 0 {
-            debug.push_str(&chunk);
+            trace_reader.lock().unwrap().push_str(&chunk);
             chunk.clear();
         }
-        debug
     });
 
     let mut lines = BufReader::new(stdout).lines();
@@ -399,9 +404,22 @@ async fn providers_load_lazily_one_call_at_a_time() {
             break;
         }
     }
+    // The loader line may still be in flight when the call answers.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !trace
+        .lock()
+        .unwrap()
+        .contains("@ai-sdk/openai-compatible/dist")
+    {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     drop(stdin);
-    let debug = stderr_drain.await.unwrap();
+    stderr_drain.await.unwrap();
     let _ = child.wait().await;
+    let debug = trace.lock().unwrap().clone();
 
     assert!(
         debug.contains("@ai-sdk/openai-compatible/dist"),
