@@ -59,6 +59,17 @@ fn the_query_answers_null_until_a_root_is_chosen() {
     let host = host_over(&dir);
     let result = result_of(call(&host, &dir, json!({})));
     assert!(result["workspace"].is_null());
+    assert_eq!(
+        result["lines"],
+        json!([{
+            "tone": "plain",
+            "text": format!(
+                "  {:<22} {}",
+                "Default workspace",
+                "(none; bare OpenButler uses the launch directory)"
+            )
+        }])
+    );
 }
 
 #[test]
@@ -70,6 +81,10 @@ fn a_set_canonicalizes_saves_and_survives_a_reload() {
     let result = result_of(call(&host, &dir, json!({ "path": workspace })));
     let expected = canonical(&workspace);
     assert_eq!(result["workspace"], json!(expected));
+    assert_eq!(
+        result["lines"],
+        json!([{ "tone": "success", "text": format!("Bare OpenButler launches will use {expected}.") }])
+    );
 
     // The file is the record: a fresh host reads the same root back.
     let text = std::fs::read_to_string(dir.join("settings.yaml")).unwrap();
@@ -77,6 +92,10 @@ fn a_set_canonicalizes_saves_and_survives_a_reload() {
     let fresh = host_over(&dir);
     let queried = result_of(call(&fresh, &dir, json!({})));
     assert_eq!(queried["workspace"], json!(expected));
+    assert_eq!(
+        queried["lines"],
+        json!([{ "tone": "plain", "text": format!("  {:<22} {}", "Default workspace", expected) }])
+    );
 }
 
 #[test]

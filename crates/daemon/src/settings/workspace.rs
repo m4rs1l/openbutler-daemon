@@ -35,7 +35,13 @@ pub fn handle(host: &Host, data_dir: &Path, request: &DaemonRequest) -> Result<V
     crate::settings::save_settings(data_dir, &mut loaded).map_err(|error| error.to_string())?;
     host.reload_settings(data_dir)
         .map_err(|error| error.to_string())?;
-    Ok(json!({ "workspace": root }))
+    Ok(json!({
+        "workspace": root,
+        "lines": [crate::shape::screen_line(
+            "success",
+            format!("Bare OpenButler launches will use {root}."),
+        )]
+    }))
 }
 
 /// The stored value, or `null` when nobody chose one (the source's
@@ -45,5 +51,12 @@ fn current(host: &Host) -> Value {
         .settings()
         .as_ref()
         .and_then(|loaded| loaded.store.default_workspace_root.clone());
-    json!({ "workspace": workspace })
+    let line = match workspace.as_deref() {
+        Some(root) => crate::shape::kv_line("Default workspace", root),
+        None => crate::shape::kv_line(
+            "Default workspace",
+            "(none; bare OpenButler uses the launch directory)",
+        ),
+    };
+    json!({ "workspace": workspace, "lines": [line] })
 }
