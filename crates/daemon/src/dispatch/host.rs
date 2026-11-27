@@ -19,7 +19,7 @@ use tokio::sync::watch;
 
 use super::fanout::{self, Fanout};
 use crate::agent::TurnExecutor;
-use crate::auth::PairingCodes;
+use crate::auth::{PairingCodes, SignInGate};
 use crate::settings::{LoadedSettings, SettingsError, load_settings};
 
 /// The chat this connection has opened. `session.load` records it; the
@@ -104,6 +104,7 @@ pub struct Host {
     connected_clients: AtomicU32,
     shutdown: watch::Sender<bool>,
     pairing: PairingCodes,
+    sign_in: SignInGate,
     /// The live settings copy every runtime read goes through. Loaded and
     /// reloaded only by `reload_settings` — one writer for the host.
     settings: RwLock<Option<LoadedSettings>>,
@@ -164,6 +165,7 @@ impl Host {
             connected_clients: AtomicU32::new(0),
             shutdown,
             pairing: PairingCodes::new(),
+            sign_in: SignInGate::new(),
             settings: RwLock::new(None),
             executor: RwLock::new(None),
             fanout: Fanout::new(),
@@ -263,6 +265,13 @@ impl Host {
     /// admission gate redeems through it.
     pub fn pairing(&self) -> &PairingCodes {
         &self.pairing
+    }
+
+    /// The shared sign-in lock: every remote connection counts its failures
+    /// here, so five wrong passwords from any number of sockets hold the door
+    /// for a minute. In memory, so a host restart clears it.
+    pub fn sign_in(&self) -> &SignInGate {
+        &self.sign_in
     }
 
     /// Queues a model pick for the session's next turn boundary

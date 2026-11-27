@@ -221,6 +221,15 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
                     );
                     logger.info("host.log", fields);
                 }
+                Err(error @ server::socket::ListenError::NoAccount) => {
+                    // The host keeps running, local only: the door stays shut
+                    // and the machine log carries the reason.
+                    let message = format!("remote listener not opened on {addr}: {error}");
+                    eprintln!("openbutler-daemon: {message}");
+                    let mut fields = serde_json::Map::new();
+                    fields.insert("message".to_owned(), serde_json::json!(message));
+                    logger.warn("host.listen_refused", fields);
+                }
                 Err(error) => {
                     eprintln!("openbutler-daemon: could not listen on {addr}: {error}");
                     return ExitCode::FAILURE;

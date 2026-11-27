@@ -8,6 +8,7 @@
 //! `permissions.rs`, `schedule.rs` and `session_send.rs`.
 
 mod about;
+mod admin;
 mod attach;
 pub mod clients;
 mod commands;
@@ -50,6 +51,7 @@ const PRE_ATTACH: &[&str] = &[
     "settings.reload",
     "settings.setup",
     "settings.setup.review",
+    "admin.create",
     "web.report",
     "mcp.manage",
     "settings.set-listen",
@@ -512,6 +514,15 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
+        "admin.create" => {
+            if state.remote {
+                return failure(request, admin::REMOTE_REFUSAL.to_owned());
+            }
+            match admin::create(host, data_dir, request) {
+                Ok(payload) => success(request, payload),
+                Err(error) => failure(request, error),
+            }
+        }
         "keys.add" => {
             if state.remote {
                 return failure(request, keys::REMOTE_REFUSAL.to_owned());

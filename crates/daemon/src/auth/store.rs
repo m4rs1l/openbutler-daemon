@@ -15,7 +15,7 @@ use base64::Engine;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::{AuthError, ct_eq, hex_encode, write_private};
+use super::{AuthError, creation_stamp, ct_eq, hex_encode, write_private};
 
 /// One minted token: the id lands in the store, the token never does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,19 +234,4 @@ fn hash_token(salt: &[u8], token: &str) -> Vec<u8> {
     hasher.update(salt);
     hasher.update(token.as_bytes());
     hasher.finalize().to_vec()
-}
-
-/// The creation stamp in the TypeScript format: millisecond precision, Z.
-fn creation_stamp() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second(),
-        now.millisecond()
-    )
 }

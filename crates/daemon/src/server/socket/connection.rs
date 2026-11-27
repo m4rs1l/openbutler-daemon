@@ -6,7 +6,7 @@
 //! malformed JSON, a breached frame cap, EOF — close this connection only.
 //!
 //! A remote connection passes the admission gate first: its opening frame
-//! must be `auth` or `pair` (`openbutler_protocol::auth` owns the rules and
+//! must be `login`, `auth`, or the legacy `pair` (`openbutler_protocol::auth` owns the rules and
 //! the wording), answered before dispatch ever runs. A refused, malformed,
 //! or silent socket is closed — fail closed, so an open port never holds an
 //! unauthenticated connection alive.
@@ -16,13 +16,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use openbutler_protocol::auth::{self as auth_plane, AuthSuccess, FirstFrame, PairSuccess};
+use openbutler_protocol::auth::{
+    self as auth_plane, AuthSuccess, FirstFrame, LoginSuccess, PairSuccess,
+};
 use openbutler_protocol::{DaemonResponse, FrameDecoder, MAX_DAEMON_FRAME_BYTES};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use crate::auth::{TokenStore, now_ms};
+use crate::auth::sessions::expires_at_iso;
+use crate::auth::{AdminAccount, AuthError, SessionStore, TokenStore, now_ms};
 use crate::dispatch::{self, Host};
 
 /// Per-socket outbound budget, mirroring `MAX_QUEUED_OUTPUT_BYTES`.
@@ -280,9 +283,86 @@ async fn admit(host: &Host, data_dir: &Path, frame: &[u8], outbound: &Outbound) 
     let value: Value = serde_json::from_slice(frame).unwrap_or(Value::Null);
 
     match auth_plane::classify_first_frame(&value) {
+        FirstFrame::Login {
+            id,
+            username,
+            password,
+        } => {
+            let now = now_ms();
+            if host.sign_in().is_locked(now) {
+                let _ = reply(
+                    outbound,
+                    dispatch::envelope_failure(id, auth_plane::LOGIN_THROTTLED),
+                )
+                .await;
+                return false;
+            }
+            match AdminAccount::new(data_dir).verify(username, password) {
+                Ok(true) => {
+                    host.sign_in().record_success();
+                    let device = auth_plane::device_label(&value);
+                    match SessionStore::new(data_dir).mint(&device, now) {
+                        Ok(issued) => {
+                            let result = serde_json::to_value(LoginSuccess {
+                                device_id: issued.id.clone(),
+                                token: issued.token.clone(),
+                                expires_at: expires_at_iso(&issued),
+                            })
+                            .unwrap_or(Value::Null);
+                            reply(outbound, dispatch::envelope_success(id, result))
+                                .await
+                                .is_ok()
+                        }
+                        Err(AuthError::TooManySessions) => {
+                            let _ = reply(
+                                outbound,
+                                dispatch::envelope_failure(id, auth_plane::TOO_MANY_DEVICES),
+                            )
+                            .await;
+                            false
+                        }
+                        Err(error) => {
+                            let _ =
+                                reply(outbound, dispatch::envelope_failure(id, &error.to_string()))
+                                    .await;
+                            false
+                        }
+                    }
+                }
+                Ok(false) => {
+                    host.sign_in().record_failure(now);
+                    let _ = reply(
+                        outbound,
+                        dispatch::envelope_failure(id, auth_plane::LOGIN_FAILED),
+                    )
+                    .await;
+                    false
+                }
+                Err(AuthError::NoAccount) => {
+                    let _ = reply(
+                        outbound,
+                        dispatch::envelope_failure(id, auth_plane::NO_ACCOUNT),
+                    )
+                    .await;
+                    false
+                }
+                Err(error) => {
+                    let _ =
+                        reply(outbound, dispatch::envelope_failure(id, &error.to_string())).await;
+                    false
+                }
+            }
+        }
         FirstFrame::Auth { id, token } => {
-            // An unreadable store verifies as `false`: fail closed.
-            let admitted = TokenStore::new(data_dir).verify(token).unwrap_or(false);
+            // A session is the credential this host issues now. The legacy
+            // token store is still consulted so a token minted before the
+            // account existed keeps working during the transition; it goes
+            // away with `daemon token` and `daemon pair`.
+            let admitted = SessionStore::new(data_dir)
+                .verify(token, now_ms())
+                .unwrap_or(None)
+                .is_some()
+                || TokenStore::new(data_dir).verify(token).unwrap_or(false);
             if admitted {
                 let result = serde_json::to_value(AuthSuccess {
                     authenticated: true,
@@ -294,7 +374,7 @@ async fn admit(host: &Host, data_dir: &Path, frame: &[u8], outbound: &Outbound) 
             } else {
                 let _ = reply(
                     outbound,
-                    dispatch::envelope_failure(id, auth_plane::AUTH_FAILED),
+                    dispatch::envelope_failure(id, auth_plane::SESSION_REFUSED),
                 )
                 .await;
                 false

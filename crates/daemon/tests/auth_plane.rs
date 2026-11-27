@@ -11,10 +11,13 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use openbutler_daemon::auth::{PairingCodes, TokenStore};
+use openbutler_daemon::auth::{AdminAccount, PairingCodes, TokenStore};
 use openbutler_daemon::dispatch::{self, Host};
 use openbutler_daemon::server;
-use openbutler_protocol::{AUTH_FAILED, DaemonRequest, DaemonResponse, REMOTE_FIRST_FRAME_REFUSED};
+use openbutler_protocol::{
+    DaemonRequest, DaemonResponse, LOGIN_FAILED, LOGIN_THROTTLED, NO_ACCOUNT,
+    REMOTE_FIRST_FRAME_REFUSED, SESSION_REFUSED,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -258,6 +261,9 @@ async fn recv_eof(lines: &mut Lines) {
 async fn a_minted_token_admits_a_remote_socket_and_status_follows() {
     let dir = scratch("gate-ok");
     let host = std::sync::Arc::new(Host::new());
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
     let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
@@ -300,6 +306,9 @@ async fn a_minted_token_admits_a_remote_socket_and_status_follows() {
 async fn a_bad_token_gets_the_fixed_refusal_and_the_connection_closes() {
     let dir = scratch("gate-bad");
     let host = std::sync::Arc::new(Host::new());
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
     let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
@@ -317,7 +326,7 @@ async fn a_bad_token_gets_the_fixed_refusal_and_the_connection_closes() {
     .await;
     let refused = recv(&mut lines).await;
     assert_eq!(refused["ok"], false);
-    assert_eq!(refused["error"], AUTH_FAILED);
+    assert_eq!(refused["error"], SESSION_REFUSED);
     recv_eof(&mut lines).await;
 
     host.request_shutdown();
@@ -328,6 +337,9 @@ async fn a_bad_token_gets_the_fixed_refusal_and_the_connection_closes() {
 async fn a_well_formed_request_as_first_frame_is_refused_and_closed() {
     let dir = scratch("gate-first");
     let host = std::sync::Arc::new(Host::new());
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
     let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
@@ -357,6 +369,9 @@ async fn a_well_formed_request_as_first_frame_is_refused_and_closed() {
 async fn a_pairing_frame_over_tcp_mints_a_working_token() {
     let dir = scratch("gate-pair");
     let host = std::sync::Arc::new(Host::new());
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
     let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
@@ -406,6 +421,9 @@ async fn a_pairing_frame_over_tcp_mints_a_working_token() {
 async fn a_silent_remote_socket_is_closed_after_the_auth_deadline() {
     let dir = scratch("gate-silent");
     let host = std::sync::Arc::new(Host::new());
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
     let addr = server::socket::serve_tcp(
         "127.0.0.1:0",
         host.clone(),
@@ -419,5 +437,214 @@ async fn a_silent_remote_socket_is_closed_after_the_auth_deadline() {
     recv_eof(&mut lines).await;
 
     host.request_shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+// --- Account sign-in ---------------------------------------------------------
+
+#[tokio::test]
+async fn a_login_mints_a_session_and_the_session_admits_later_connections() {
+    let dir = scratch("login-ok");
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
+    let host = std::sync::Arc::new(Host::new());
+    let addr =
+        server::socket::serve_tcp("127.0.0.1:0", host, dir.clone(), Duration::from_millis(200))
+            .await
+            .expect("bind");
+
+    let (mut write, mut lines) = connect(addr).await;
+    send(
+        &mut write,
+        &json!({
+            "version": 2,
+            "id": "l1",
+            "action": "login",
+            "username": "owner",
+            "password": "correct horse battery",
+            "device": "test-laptop"
+        }),
+    )
+    .await;
+    let issued = recv(&mut lines).await;
+    assert_eq!(issued["ok"], true, "sign-in succeeds");
+    let token = issued["result"]["token"]
+        .as_str()
+        .expect("login carries the session token")
+        .to_owned();
+    assert!(
+        token.starts_with("obt_"),
+        "the session token keeps its prefix"
+    );
+    assert!(
+        issued["result"]["deviceId"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "login names the session it minted"
+    );
+    assert!(
+        issued["result"]["expiresAt"]
+            .as_str()
+            .is_some_and(|stamp| stamp.ends_with('Z')),
+        "the expiry is an ISO stamp"
+    );
+    drop(write);
+
+    let (mut write, mut lines) = connect(addr).await;
+    send(
+        &mut write,
+        &json!({"version": 2, "id": "a1", "action": "auth", "token": token}),
+    )
+    .await;
+    let admitted: Value = recv(&mut lines).await;
+    assert_eq!(
+        admitted["result"]["authenticated"], true,
+        "the minted session admits the next connection"
+    );
+    send(
+        &mut write,
+        &json!({"version": 2, "id": "s1", "action": "status"}),
+    )
+    .await;
+    assert_eq!(
+        recv(&mut lines).await["ok"],
+        true,
+        "dispatch runs after sign-in"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_host_without_an_account_refuses_to_open_the_door() {
+    let dir = scratch("login-no-account");
+    let host = std::sync::Arc::new(Host::new());
+    let outcome =
+        server::socket::serve_tcp("127.0.0.1:0", host, dir.clone(), Duration::from_millis(200))
+            .await;
+    match outcome {
+        Err(server::socket::ListenError::NoAccount) => {}
+        other => panic!("a host with no account must not bind, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn an_unknown_username_answers_like_a_wrong_password() {
+    let dir = scratch("login-unknown-user");
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
+    let host = std::sync::Arc::new(Host::new());
+    let addr =
+        server::socket::serve_tcp("127.0.0.1:0", host, dir.clone(), Duration::from_millis(200))
+            .await
+            .expect("bind");
+
+    let (mut write, mut lines) = connect(addr).await;
+    send(
+        &mut write,
+        &json!({
+            "version": 2,
+            "id": "u1",
+            "action": "login",
+            "username": "someone-else",
+            "password": "correct horse battery"
+        }),
+    )
+    .await;
+    assert_eq!(
+        recv(&mut lines).await["error"],
+        LOGIN_FAILED,
+        "the answer never says which half was wrong"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn five_wrong_passwords_shut_the_door_and_the_right_one_does_not_open_it() {
+    let dir = scratch("login-lock");
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
+    let host = std::sync::Arc::new(Host::new());
+    let addr =
+        server::socket::serve_tcp("127.0.0.1:0", host, dir.clone(), Duration::from_millis(200))
+            .await
+            .expect("bind");
+
+    for attempt in 1..=5 {
+        let (mut write, mut lines) = connect(addr).await;
+        send(
+            &mut write,
+            &json!({
+                "version": 2,
+                "id": format!("w{attempt}"),
+                "action": "login",
+                "username": "owner",
+                "password": "wrong"
+            }),
+        )
+        .await;
+        assert_eq!(
+            recv(&mut lines).await["error"],
+            LOGIN_FAILED,
+            "attempt {attempt} answers the fixed refusal"
+        );
+    }
+
+    let (mut write, mut lines) = connect(addr).await;
+    send(
+        &mut write,
+        &json!({
+            "version": 2,
+            "id": "w6",
+            "action": "login",
+            "username": "owner",
+            "password": "correct horse battery"
+        }),
+    )
+    .await;
+    assert_eq!(
+        recv(&mut lines).await["error"],
+        LOGIN_THROTTLED,
+        "the lock holds even for the right password"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_deleted_account_turns_a_login_into_the_fixed_no_account_answer() {
+    let dir = scratch("login-deleted");
+    AdminAccount::new(&dir)
+        .create("owner", "correct horse battery")
+        .expect("account");
+    let host = std::sync::Arc::new(Host::new());
+    let addr =
+        server::socket::serve_tcp("127.0.0.1:0", host, dir.clone(), Duration::from_millis(200))
+            .await
+            .expect("bind");
+    std::fs::remove_file(dir.join("admin.json")).expect("remove the account");
+
+    let (mut write, mut lines) = connect(addr).await;
+    send(
+        &mut write,
+        &json!({
+            "version": 2,
+            "id": "d1",
+            "action": "login",
+            "username": "owner",
+            "password": "correct horse battery"
+        }),
+    )
+    .await;
+    assert_eq!(
+        recv(&mut lines).await["error"],
+        NO_ACCOUNT,
+        "an account that vanished between bind and sign-in answers honestly"
+    );
+
     let _ = std::fs::remove_dir_all(&dir);
 }

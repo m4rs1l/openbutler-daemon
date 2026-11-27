@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The admin account: one username and one argon2id verifier in `admin.json`
+  (a PHC string, so its salt and cost travel with the record and a later cost
+  raise does not lock anyone out). Created on the host machine only, by
+  `admin.create`; a second create is refused and a broken store admits nobody.
+- Device sessions: `login` answers with `LoginSuccess { deviceId, token,
+  expiresAt }`, and every later connection presents that token as `auth`. The
+  store keeps salted SHA-256 only, expires after thirty days, refreshes
+  `lastSeenAt` at most once an hour, and refuses an eleventh device instead of
+  evicting one.
+- The sign-in lock: five consecutive failures hold the door for sixty seconds,
+  shared by every connection, and a success clears it.
+- The remote door refuses to open without an account: the host keeps running
+  locally, records `host.listen_refused`, and never binds a port whose first
+  frame could create the account.
+- `admin.create` answers with the host's own sentence, so the client prints a
+  line it did not compose.
+
 - The Vercel AI Gateway is a provider. `@ai-sdk/gateway` was missing from
   the sidecar registry while the catalog marks a provider with it (id
   `vercel`), so configuring one produced `unknown provider`. The package

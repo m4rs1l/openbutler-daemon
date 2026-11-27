@@ -28,3 +28,4 @@ notify = { workspace = true }
 sysinfo = { workspace = true }
 if-addrs = "0.15.0"
 reqwest = { workspace = true }
+argon2 = "0.6.0"

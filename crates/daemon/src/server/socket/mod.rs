@@ -18,6 +18,18 @@ use tokio::sync::watch;
 
 use crate::dispatch::Host;
 
+/// Why the remote door did not open.
+#[derive(Debug, thiserror::Error)]
+pub enum ListenError {
+    /// No admin account exists, so no remote client could ever sign in. The
+    /// host keeps running locally; the account is created on this machine.
+    #[error("{}", openbutler_protocol::auth::NO_ACCOUNT)]
+    NoAccount,
+    /// The address could not be bound.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 /// Serves the IPC endpoint until the host requests shutdown.
 ///
 /// A bind failure (endpoint already taken) is returned to the caller as an
@@ -87,13 +99,20 @@ pub async fn serve(
 /// Binds a TCP listener and serves it behind the admission gate until the
 /// host requests shutdown. Returns the bound address (pass `:0` to pick a
 /// free port). Every accepted socket is remote: its first frame must pass
-/// the `auth` / `pair` gate or the connection is closed.
+/// the `login` / `auth` / `pair` gate or the connection is closed.
+///
+/// The door refuses to open without an admin account ([`ListenError::NoAccount`]):
+/// a port whose only first frame can create the account would be a takeover
+/// window, so the account is created on the host machine before the port exists.
 pub async fn serve_tcp(
     addr: &str,
     host: Arc<Host>,
     data_dir: PathBuf,
     auth_timeout: Duration,
-) -> std::io::Result<std::net::SocketAddr> {
+) -> Result<std::net::SocketAddr, ListenError> {
+    if !crate::auth::AdminAccount::new(&data_dir).is_configured() {
+        return Err(ListenError::NoAccount);
+    }
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let local = listener.local_addr()?;
     let shutdown = host.subscribe_shutdown();
