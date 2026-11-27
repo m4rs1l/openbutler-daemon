@@ -134,7 +134,7 @@ async fn missing_workspace_fails_the_event_and_the_schedule() {
     let data_dir = temp_data_dir("missing");
     let schedule = daily_schedule(
         "abc123",
-        Path::new("C:/definitely-gone-workspace"),
+        &data_dir.join("definitely-gone-workspace"),
         "origin-gone",
     );
     state::schedules::save(&data_dir, &[schedule]).expect("save schedule");
