@@ -298,9 +298,7 @@ fn run(args: &mut impl Iterator<Item = String>) -> ExitCode {
 /// last resort. The heap belt keeps the node process's commit bounded —
 /// every measurement already runs this profile.
 fn production_door_config() -> DoorConfig {
-    let node_program = std::env::var_os("OPENBUTLER_NODE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("node"));
+    let node_program = config::node_program();
     let script = std::env::var_os("OPENBUTLER_SIDECAR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {

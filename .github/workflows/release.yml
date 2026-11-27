@@ -1,0 +1,152 @@
+name: release
+
+# One tag, one release: the three platform archives this repository owns, each
+# with the daemon binary, the bundled sidecar and the Node runtime it runs on.
+# The tag must carry the crate's version; the build fails otherwise, so a
+# release can never claim a version the binary does not report.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  NODE_RUNTIME: "24.22.3"
+
+jobs:
+  build:
+    name: build (${{ matrix.asset }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: linux-amd64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            node_dist: node-v24.22.3-linux-x64
+            node_member: bin/node
+            runtime: node
+          - asset: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            node_dist: node-v24.22.3-linux-arm64
+            node_member: bin/node
+            runtime: node
+          - asset: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            node_dist: win-x64
+            node_member: node.exe
+            runtime: node.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # Installs the exact toolchain pinned by rust-toolchain.toml.
+      - run: rustup show
+      - run: rustup target add ${{ matrix.target }}
+
+      # The daemon's bundled SQLite is C: the arm64 build needs a cross gcc.
+      - name: cross toolchain (linux arm64)
+        if: matrix.asset == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          {
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
+            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
+            echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
+          } >> "$GITHUB_ENV"
+
+      - name: the tag carries the crate version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(grep -A3 '^\[workspace.package\]' Cargo.toml | grep -m1 '^version = ' | cut -d'"' -f2)"
+          if [ "$tag" != "$crate" ]; then
+            echo "tag v$tag does not match the workspace version $crate" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.3
+          cache: npm
+          cache-dependency-path: sidecar/package-lock.json
+      - run: npm ci
+        working-directory: sidecar
+      # esbuild bundles the sidecar into dist/: entry.js plus one lazy chunk
+      # per provider, so the archive carries no node_modules.
+      - run: npm run build
+        working-directory: sidecar
+
+      - run: cargo build --release --target ${{ matrix.target }}
+
+      - name: assemble (linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          stage="openbutlerd-${version}-${{ matrix.asset }}"
+          mkdir -p "$stage/node" "$stage/sidecar"
+          cp "target/${{ matrix.target }}/release/openbutlerd" "$stage/openbutlerd"
+          curl -fsSL "https://nodejs.org/dist/v${NODE_RUNTIME}/${{ matrix.node_dist }}.tar.xz" -o node.tar.xz
+          tar -xJf node.tar.xz "${{ matrix.node_dist }}/${{ matrix.node_member }}"
+          cp "${{ matrix.node_dist }}/${{ matrix.node_member }}" "$stage/node/node"
+          chmod +x "$stage/node/node"
+          cp -r sidecar/dist "$stage/sidecar/dist"
+          rm -f "$stage/sidecar/dist/metafile.json"
+          cp LICENSE README.md "$stage/"
+          tar -czf "${stage}.tar.gz" "$stage"
+          if [ "${{ matrix.asset }}" = "linux-amd64" ]; then
+            "./$stage/openbutlerd" --version
+          fi
+
+      - name: assemble (windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $stage = "openbutlerd-$version-${{ matrix.asset }}"
+          New-Item -ItemType Directory -Force -Path "$stage/node" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/sidecar" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/openbutlerd.exe" "$stage/openbutlerd.exe"
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v$env:NODE_RUNTIME/win-x64/node.exe" -OutFile "$stage/node/node.exe"
+          Copy-Item -Recurse sidecar/dist "$stage/sidecar/dist"
+          Remove-Item "$stage/sidecar/dist/metafile.json" -ErrorAction SilentlyContinue
+          Copy-Item LICENSE, README.md $stage
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+          & "./$stage/openbutlerd.exe" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            openbutlerd-*.tar.gz
+            openbutlerd-*.zip
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "openbutlerd $version" \
+            --generate-notes

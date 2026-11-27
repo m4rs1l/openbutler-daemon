@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A release workflow: one tag publishes three platform archives
+  (`openbutlerd-<version>-<target>`) carrying the daemon, the bundled sidecar
+  (`sidecar/dist/`, esbuild output, no `node_modules`) and the pinned Node
+  runtime (24.22.3), plus a `SHA256SUMS` file. The tag must equal the
+  workspace version or the build fails.
+- The daemon resolves its Node runtime in one order: `OPENBUTLER_NODE`, then
+  the runtime shipped beside the binary (`<exe dir>/node/node[.exe]`), then
+  `PATH`. Before this, a packaged host ignored the runtime it shipped with and
+  used whatever `node` the machine happened to have first.
 - The admin account: one username and one argon2id verifier in `admin.json`
   (a PHC string, so its salt and cost travel with the record and a later cost
   raise does not lock anyone out). Created on the host machine only, by
