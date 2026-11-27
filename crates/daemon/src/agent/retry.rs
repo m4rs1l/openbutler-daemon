@@ -39,6 +39,14 @@ pub fn door_is_retryable(error: &crate::sidecar::DoorError) -> bool {
     )
 }
 
+/// The call id for a further attempt. Every attempt is its own call on the
+/// door: the router keys routes by id, so reusing a failed attempt's id
+/// lets that failure's own cleanup remove the new route and the retried
+/// stream then ends silently with nothing in it.
+pub fn retry_call_id(base: &str, attempt: usize) -> String {
+    format!("{base}.r{attempt}")
+}
+
 /// `describeRetryCause`: the status code when the provider sent one, nothing
 /// more. No advice, no speculation.
 pub fn cause(status: Option<u16>) -> String {
@@ -69,7 +77,7 @@ pub fn notice_text(attempt: usize, total: usize, wait_ms: u64, status: Option<u1
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{cause, is_retryable, notice_text};
+    use super::{cause, is_retryable, notice_text, retry_call_id};
 
     #[test]
     fn only_the_statuses_another_attempt_may_survive_are_retried() {
@@ -118,5 +126,18 @@ mod tests {
             "Provider error (500). Retry 1 of 2 in 1s.",
             "a zero wait still reads as one second"
         );
+    }
+
+    #[test]
+    fn every_attempt_gets_its_own_call_id() {
+        // The router keys routes by call id. A further attempt that reused
+        // the failed attempt's id could have its route removed by that
+        // failure's own cleanup, leaving the retried stream empty.
+        let first = retry_call_id("call-1", 1);
+        let second = retry_call_id("call-1", 2);
+        assert_ne!(first, "call-1");
+        assert_ne!(first, second);
+        assert!(first.starts_with("call-1"), "{first}");
+        assert!(second.starts_with("call-1"), "{second}");
     }
 }

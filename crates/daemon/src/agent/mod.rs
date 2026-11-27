@@ -928,7 +928,9 @@ impl TurnRunner {
                                     cancelled = true;
                                     break;
                                 }
-                                match self.door.call(Lane::Interactive, call.clone()).await {
+                                let mut next = call.clone();
+                                next.id = retry::retry_call_id(&call.id, retry_attempt);
+                                match self.door.call(Lane::Interactive, next).await {
                                     Ok(next) => {
                                         stream = next;
                                         continue;
