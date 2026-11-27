@@ -405,7 +405,7 @@ async fn providers_load_lazily_one_call_at_a_time() {
 
     assert!(
         debug.contains("@ai-sdk/openai-compatible/dist"),
-        "the called provider loads"
+        "the called provider loads; trace:\n{debug}",
     );
     for key in PROVIDERS {
         // The called provider loads by definition, and `ai@7.0.173`
