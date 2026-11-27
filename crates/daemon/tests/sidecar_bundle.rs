@@ -197,14 +197,19 @@ async fn the_bundle_splits_lazy_chunks_and_behaves_like_the_source() {
     // `..` segment, so the raw path never matches — canonicalize first;
     // on Windows that returns the verbatim `\\?\C:\...` form, whose URL
     // form must drop the whole `//?/` prefix or the root ends up with
-    // four slashes and never matches.
+    // four slashes and never matches. A POSIX path already begins with a
+    // slash, so it takes ile:// instead of ile:///.
     let dist_root = {
         let raw = std::fs::canonicalize(sidecar_dir().join("dist"))
             .expect("dist must exist after the build")
             .to_string_lossy()
             .replace('\\', "/");
         let normalized = raw.strip_prefix("//?/").unwrap_or(&raw);
-        format!("file:///{normalized}")
+        if normalized.starts_with('/') {
+            format!("file://{normalized}")
+        } else {
+            format!("file:///{normalized}")
+        }
     };
     let mut loaded: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for line in trace.lines() {
