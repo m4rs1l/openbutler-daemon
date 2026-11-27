@@ -898,11 +898,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A turn's opening chunk no longer disappears. The attach path hands the
-  turn runner the snapshot the client just received and the first publish
-  diffs from it; before, the first state only seeded the baseline, so the
-  beginning of the answer was treated as already sent and never crossed the
-  wire.
+- A turn's opening chunk no longer disappears. Two losses stacked: the
+  first publish only seeded the baseline, so a state the client was never
+  handed counted as sent, and the patch builder dropped the rows appended
+  after a rewritten one — the answer's first row was born in the same publish
+  that stamped the reasoning block's duration, so its append never crossed
+  the wire and a client printed only the tail of the first word. The attach
+  path now seeds the turn runner with the snapshot the client received, and a
+  delta always carries the appended tail.
 
 - A transient provider failure no longer ends the turn. The host had no
   retry at all while the SDK runs with `maxRetries: 0`, so a 429 or a 5xx

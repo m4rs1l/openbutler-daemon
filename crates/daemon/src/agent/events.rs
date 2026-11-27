@@ -128,7 +128,11 @@ pub fn diff_entries(
         });
     }
     Some(SessionEntriesPatch::Delta {
-        append: vec![],
+        // The tail is appended whether or not an earlier row was rewritten in
+        // the same publish: the reasoning block's stamped duration and the
+        // answer's opening chunk land together, and dropping the append left
+        // the client without a row for the answer.
+        append: next[previous.len()..].to_vec(),
         replace,
         append_text,
     })

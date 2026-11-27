@@ -1576,6 +1576,98 @@ async fn a_running_turn_publishes_live_state_to_the_fanout() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// An attaching client is handed a snapshot and then only patches: applying
+/// every frame in order must reproduce the transcript the host persisted.
+/// The answer's opening chunk lands in the same publish that stamps the
+/// reasoning block's duration, so this pins both the seeded baseline and the
+/// tail append — the failure was a client printing `haba` for `Merhaba`.
+#[tokio::test]
+async fn a_client_applying_every_frame_rebuilds_the_whole_answer() {
+    let root = temp_root("reattach");
+    seed_session(&root);
+    let (addr, _mock) = mock_server().await;
+    let door = spawn_door().await;
+
+    let host = Arc::new(openbutler_daemon::dispatch::Host::new());
+    host.set_runtime_view(runtime_view());
+    let sink = Arc::new(RecordingSink::default());
+    host.fanout().subscribe(SESSION_ID, sink.clone());
+
+    let record = saved(&root);
+    let runner = Arc::new(
+        TurnRunner::open(&root, SESSION_ID, door, Arc::downgrade(&host))
+            .await
+            .expect("open"),
+    );
+    // What attach hands over: the record as it stands before the turn.
+    runner.seed_baseline(openbutler_daemon::agent::events::PublishSnapshot {
+        session: openbutler_protocol::session::SessionView {
+            meta: record.meta.clone(),
+            entries: record.entries.clone(),
+        },
+        run: serde_json::from_value(json!({
+            "busy": false,
+            "runningTurnId": null,
+            "pendingApproval": null,
+            "pendingApprovalId": null,
+            "pendingQuestion": null,
+            "queuedMessageCount": 0,
+            "firstQueuedMessage": null,
+            "queuedMessages": [],
+            "sessionSaveError": null,
+            "streamingAssistantIndex": null
+        }))
+        .expect("run state"),
+    });
+
+    let turn = runner
+        .send(request("think", addr, UserEntrySource::Terminal))
+        .await
+        .expect("turn");
+    assert_eq!(turn.outcome, TurnOutcome::Completed);
+
+    let mut view: Vec<SessionEntry> = record.entries.clone();
+    for frame in sink.frames.lock().unwrap().iter() {
+        let event: openbutler_protocol::DaemonEvent =
+            serde_json::from_slice(frame.strip_suffix(b"\n").unwrap_or(frame)).expect("event");
+        let openbutler_protocol::DaemonEvent::Patch { patch, .. } = event else {
+            continue;
+        };
+        match patch.entries_patch {
+            None => {}
+            Some(openbutler_protocol::session::SessionEntriesPatch::ReplaceAll { entries }) => {
+                view = entries;
+            }
+            Some(openbutler_protocol::session::SessionEntriesPatch::Delta {
+                append,
+                replace,
+                append_text,
+            }) => {
+                view.extend(append);
+                for rewritten in replace {
+                    view[rewritten.index as usize] = rewritten.entry;
+                }
+                for delta in append_text {
+                    match &mut view[delta.index as usize] {
+                        SessionEntry::Assistant { text, .. }
+                        | SessionEntry::Reasoning { text, .. }
+                        | SessionEntry::Notice { text, .. }
+                        | SessionEntry::User { text, .. } => text.push_str(&delta.delta),
+                        other => panic!("a text continuation grew {other:?}"),
+                    }
+                }
+            }
+        }
+    }
+    let persisted = saved(&root);
+    assert_eq!(
+        view, persisted.entries,
+        "a client applying every frame must end with the host's transcript"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[tokio::test]
 async fn a_question_queues_and_resolves_through_the_answer_seam() {
     let root = temp_root("question-queue");
