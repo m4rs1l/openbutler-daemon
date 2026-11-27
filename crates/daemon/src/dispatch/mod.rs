@@ -10,6 +10,7 @@
 mod about;
 mod admin;
 mod attach;
+mod catalog_pick;
 pub mod clients;
 mod commands;
 mod config_report;
@@ -42,6 +43,8 @@ const PRE_ATTACH: &[&str] = &[
     "status",
     "about.report",
     "config.report",
+    "catalog.listProviders",
+    "catalog.listModels",
     "usage.report",
     "pair.create",
     "token.create",
@@ -82,6 +85,8 @@ const PRE_ATTACH: &[&str] = &[
 /// is refused on a read-only attachment before its handler runs.
 const VIEW_ONLY_ACTIONS: &[&str] = &[
     "config.report",
+    "catalog.listProviders",
+    "catalog.listModels",
     "session.list",
     "session.entries-range",
     "session.find-attachment",
@@ -490,6 +495,16 @@ pub fn handle(
         }
         // The manager screen's whole state: host-wide, needs no binding, and
         // safe on a view-only attachment (counts, never key material).
+        // The setup pickers read the host's catalog; nothing here is a
+        // secret and no workspace is involved.
+        "catalog.listProviders" => match catalog_pick::list_providers(host) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "catalog.listModels" => match catalog_pick::list_models(host, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
         "config.report" => match config_report::report(host, data_dir) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),

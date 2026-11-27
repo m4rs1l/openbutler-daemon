@@ -133,7 +133,6 @@ async fn status_reports_this_process_over_the_wire() {
     };
     let status: openbutler_protocol::DaemonStatus = serde_json::from_value(result).unwrap();
     assert_eq!(status.pid, std::process::id());
-    assert_eq!(status.workspace_count, 0, "no workspace runtimes yet");
     assert_eq!(
         status.build_id,
         Some(None),

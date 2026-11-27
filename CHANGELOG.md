@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `catalog.listProviders` and `catalog.listModels`: read-only picker actions
+  over the host catalog (id, name, model count, package; then the models with
+  their declared limits). They answer before an attachment and say
+  `loaded: false` instead of an empty list when no catalog is in hand.
+
 - `settings.setup`, `keys.add` and `keys.remove` accept a signed-in remote
   session. The admin account is the trust boundary, so a remote admin can
   configure the host it owns; `admin.create`, `token.*`, `pair.create`,
@@ -762,6 +767,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unsafe_code = "forbid"` lint, CI gates, MIT license.
 
 ### Changed
+
+- `status` no longer prints a workspace count. The number was a legacy screen
+  value nothing computed; the status reports the pid, the start time, the
+  connected clients and the rows the host actually knows.
 
 - The daemon binary is `openbutlerd` (package `openbutler-daemon` unchanged),
   so the process name follows the `dockerd`/`sshd` convention and can never be

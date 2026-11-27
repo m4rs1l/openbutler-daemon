@@ -435,7 +435,6 @@ impl Host {
         let lines = vec![
             ScreenLine::plain(format!("{:<14} {}", "pid:", std::process::id())),
             ScreenLine::plain(format!("{:<14} {}", "started:", self.started_at)),
-            ScreenLine::plain(format!("{:<14} 0", "workspaces:")),
             ScreenLine::plain(format!("{:<14} {connected_clients}", "clients:")),
             // A source run reports an explicit null (contract: null = source
             // run, absent = older host), and the screen's row says `source`.
@@ -444,12 +443,8 @@ impl Host {
         DaemonStatus {
             pid: std::process::id(),
             started_at: self.started_at.clone(),
-            // Workspace runtimes are not implemented yet: an honest zero,
-            // not a fabricated count.
-            workspace_count: 0,
             connected_clients,
             schedules: None,
-            telegram: None,
             unresponsive: None,
             entry: None,
             web: self

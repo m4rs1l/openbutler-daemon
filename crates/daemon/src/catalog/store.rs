@@ -23,6 +23,16 @@ use super::{
 /// not a header this build wrote.
 const MAX_HEADER_BYTES: usize = 8 * 1024 * 1024;
 
+/// One row of the setup picker: what a provider list needs without reading
+/// a whole provider line into the caller.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderRow {
+    pub id: String,
+    pub name: String,
+    pub models: u64,
+    pub npm: Option<String>,
+}
+
 /// One provider plus its index facts — the listing shape the source
 /// returns (`{id, ...entry}`).
 #[derive(Debug, Clone, Serialize)]
@@ -112,6 +122,35 @@ impl CatalogStore {
                     entry: entry.clone(),
                 })
                 .collect()
+        })
+    }
+
+    /// The picker's listing: id, display name, model count and the package
+    /// that speaks the provider. Names and packages live in the provider
+    /// lines, so this reads each line once — it is the setup screen, not a
+    /// hot path, and the index alone carries neither.
+    pub fn list_provider_rows(&self) -> Vec<ProviderRow> {
+        self.with_state(|inner| {
+            refresh_if_changed(inner);
+            let Some(index) = &inner.index else {
+                return Vec::new();
+            };
+            let mut rows = Vec::with_capacity(index.entries.len());
+            for (id, entry) in &index.entries {
+                let provider = provider_from_disk(inner, id);
+                let name = provider
+                    .as_ref()
+                    .and_then(|provider| provider.name.clone())
+                    .unwrap_or_else(|| id.clone());
+                let npm = provider.and_then(|provider| provider.npm);
+                rows.push(ProviderRow {
+                    id: id.clone(),
+                    name,
+                    models: entry.model_count,
+                    npm,
+                });
+            }
+            rows
         })
     }
 
