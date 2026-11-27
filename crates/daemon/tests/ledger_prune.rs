@@ -122,7 +122,18 @@ fn a_preview_counts_the_same_selection_apply_deletes() {
     let preview = prune(&dir, json!({ "kind": "events", "olderThan": "30d" })).unwrap();
     assert_eq!(
         preview,
-        json!({ "events": 1, "actions": 0, "transitions": 0 })
+        json!({
+            "events": 1,
+            "actions": 0,
+            "transitions": 0,
+            "lines": [
+                { "tone": "plain", "text": "  1 event(s), 0 action(s), 0 transition(s)" },
+                {
+                    "tone": "info",
+                    "text": "Nothing was deleted; re-run with --yes to delete these 1 record(s)."
+                }
+            ]
+        })
     );
     assert_eq!(count_events(&dir), 5, "a preview never deletes");
 
@@ -134,7 +145,15 @@ fn a_preview_counts_the_same_selection_apply_deletes() {
     .unwrap();
     assert_eq!(
         applied,
-        json!({ "events": 1, "actions": 0, "transitions": 0 })
+        json!({
+            "events": 1,
+            "actions": 0,
+            "transitions": 0,
+            "lines": [
+                { "tone": "plain", "text": "  1 event(s), 0 action(s), 0 transition(s)" },
+                { "tone": "success", "text": "Pruned 1 record(s)." }
+            ]
+        })
     );
     assert_eq!(count_events(&dir), 4);
     let connection = rusqlite::Connection::open(dir.join("state.db")).unwrap();
@@ -172,7 +191,18 @@ fn actions_prune_only_terminal_rows() {
     // Two transitions belong to the completed action (proposed, completed).
     assert_eq!(
         preview,
-        json!({ "events": 0, "actions": 1, "transitions": 2 })
+        json!({
+            "events": 0,
+            "actions": 1,
+            "transitions": 2,
+            "lines": [
+                { "tone": "plain", "text": "  0 event(s), 1 action(s), 2 transition(s)" },
+                {
+                    "tone": "info",
+                    "text": "Nothing was deleted; re-run with --yes to delete these 3 record(s)."
+                }
+            ]
+        })
     );
     let applied = prune(
         &dir,
@@ -181,7 +211,15 @@ fn actions_prune_only_terminal_rows() {
     .unwrap();
     assert_eq!(
         applied,
-        json!({ "events": 0, "actions": 1, "transitions": 2 })
+        json!({
+            "events": 0,
+            "actions": 1,
+            "transitions": 2,
+            "lines": [
+                { "tone": "plain", "text": "  0 event(s), 1 action(s), 2 transition(s)" },
+                { "tone": "success", "text": "Pruned 3 record(s)." }
+            ]
+        })
     );
     let connection = rusqlite::Connection::open(dir.join("state.db")).unwrap();
     let ids: Vec<String> = {
@@ -237,7 +275,15 @@ fn the_refusals_are_the_source_sentences() {
     let counts = prune(&dir, json!({ "kind": "events", "olderThan": "30d" })).unwrap();
     assert_eq!(
         counts,
-        json!({ "events": 0, "actions": 0, "transitions": 0 })
+        json!({
+            "events": 0,
+            "actions": 0,
+            "transitions": 0,
+            "lines": [{
+                "tone": "info",
+                "text": "No events records are older than 30d; nothing to prune."
+            }]
+        })
     );
     assert!(!dir.join("state.db").exists());
 }

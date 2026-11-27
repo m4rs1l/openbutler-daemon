@@ -18,6 +18,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::db_path;
+use crate::shape;
 
 /// Terminal action states (the source's `TERMINAL_ACTION_STATES`).
 const PRUNABLE_ACTIONS_SQL: &str = "
@@ -68,74 +69,113 @@ pub fn prune(data_dir: &Path, request: &DaemonRequest) -> Result<Value, String> 
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
     let path = db_path(data_dir);
-    if !path.exists() {
+    let (events, actions, transitions) = if !path.exists() {
         // Nothing recorded: an empty selection, and no file is created.
-        return Ok(json!({ "events": 0, "actions": 0, "transitions": 0 }));
-    }
-    let connection = Connection::open(&path).map_err(|error| error.to_string())?;
-    connection
-        .busy_timeout(std::time::Duration::from_secs(5))
-        .map_err(|error| error.to_string())?;
-
-    if kind == "events" {
-        let sql = format!("SELECT COUNT(*) FROM ({PRUNABLE_EVENTS_SQL})");
-        let selected: i64 = connection
-            .query_row(&sql, [&cutoff], |row| row.get(0))
+        (0, 0, 0)
+    } else {
+        let connection = Connection::open(&path).map_err(|error| error.to_string())?;
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|error| error.to_string())?;
-        let deleted = if apply && selected > 0 {
-            connection
-                .execute(
-                    &format!(
-                        "DELETE FROM openbutler_events WHERE event_id IN ({PRUNABLE_EVENTS_SQL})"
-                    ),
-                    [&cutoff],
-                )
-                .map_err(|error| error.to_string())? as i64
+        if kind == "events" {
+            let sql = format!("SELECT COUNT(*) FROM ({PRUNABLE_EVENTS_SQL})");
+            let selected: i64 = connection
+                .query_row(&sql, [&cutoff], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            let deleted = if apply && selected > 0 {
+                connection
+                    .execute(
+                        &format!(
+                            "DELETE FROM openbutler_events WHERE event_id IN ({PRUNABLE_EVENTS_SQL})"
+                        ),
+                        [&cutoff],
+                    )
+                    .map_err(|error| error.to_string())? as i64
+            } else {
+                0
+            };
+            (if apply { deleted } else { selected }, 0, 0)
         } else {
-            0
-        };
-        return Ok(json!({
-            "events": if apply { deleted } else { selected },
-            "actions": 0,
-            "transitions": 0
-        }));
-    }
+            let count_sql = format!(
+                "WITH selected_actions AS ({PRUNABLE_ACTIONS_SQL})
+                 SELECT (SELECT COUNT(*) FROM selected_actions),
+                   (SELECT COUNT(*) FROM openbutler_action_transitions
+                    WHERE request_id IN (SELECT request_id FROM selected_actions))"
+            );
+            let (selected_actions, selected_transitions): (i64, i64) = connection
+                .query_row(&count_sql, [&cutoff], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|error| error.to_string())?;
+            if !apply {
+                (0, selected_actions, selected_transitions)
+            } else {
+                let transaction = connection
+                    .unchecked_transaction()
+                    .map_err(|error| error.to_string())?;
+                let transitions = transaction
+                    .execute(
+                        &format!(
+                            "DELETE FROM openbutler_action_transitions WHERE request_id IN ({PRUNABLE_ACTIONS_SQL})"
+                        ),
+                        [&cutoff],
+                    )
+                    .map_err(|error| error.to_string())? as i64;
+                let actions = transaction
+                    .execute(
+                        &format!(
+                            "DELETE FROM openbutler_actions WHERE request_id IN ({PRUNABLE_ACTIONS_SQL})"
+                        ),
+                        [&cutoff],
+                    )
+                    .map_err(|error| error.to_string())? as i64;
+                transaction.commit().map_err(|error| error.to_string())?;
+                (0, actions, transitions)
+            }
+        }
+    };
+    Ok(payload(kind, older, apply, events, actions, transitions))
+}
 
-    let count_sql = format!(
-        "WITH selected_actions AS ({PRUNABLE_ACTIONS_SQL})
-         SELECT (SELECT COUNT(*) FROM selected_actions),
-           (SELECT COUNT(*) FROM openbutler_action_transitions
-            WHERE request_id IN (SELECT request_id FROM selected_actions))"
-    );
-    let (selected_actions, selected_transitions): (i64, i64) = connection
-        .query_row(&count_sql, [&cutoff], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map_err(|error| error.to_string())?;
-    if !apply {
-        return Ok(json!({
-            "events": 0,
-            "actions": selected_actions,
-            "transitions": selected_transitions
-        }));
-    }
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|error| error.to_string())?;
-    let transitions = transaction
-        .execute(
-            &format!(
-                "DELETE FROM openbutler_action_transitions WHERE request_id IN ({PRUNABLE_ACTIONS_SQL})"
+/// The answer: the counts a JSON consumer reads and the screen the CLI
+/// prints. Which sentences exist, what they say and how they read is the
+/// host's decision; the client only maps the tone to its own palette.
+fn payload(
+    kind: &str,
+    older: &str,
+    apply: bool,
+    events: i64,
+    actions: i64,
+    transitions: i64,
+) -> Value {
+    let total = events + actions + transitions;
+    let lines = if total == 0 {
+        vec![shape::screen_line(
+            "info",
+            format!("No {kind} records are older than {older}; nothing to prune."),
+        )]
+    } else {
+        vec![
+            shape::screen_line(
+                "plain",
+                format!("  {events} event(s), {actions} action(s), {transitions} transition(s)"),
             ),
-            [&cutoff],
-        )
-        .map_err(|error| error.to_string())? as i64;
-    let actions = transaction
-        .execute(
-            &format!("DELETE FROM openbutler_actions WHERE request_id IN ({PRUNABLE_ACTIONS_SQL})"),
-            [&cutoff],
-        )
-        .map_err(|error| error.to_string())? as i64;
-    transaction.commit().map_err(|error| error.to_string())?;
-    Ok(json!({ "events": 0, "actions": actions, "transitions": transitions }))
+            if apply {
+                shape::screen_line("success", format!("Pruned {total} record(s)."))
+            } else {
+                shape::screen_line(
+                    "info",
+                    format!(
+                        "Nothing was deleted; re-run with --yes to delete these {total} record(s)."
+                    ),
+                )
+            },
+        ]
+    };
+    json!({
+        "events": events,
+        "actions": actions,
+        "transitions": transitions,
+        "lines": lines
+    })
 }
 
 /// `parseRetentionDuration` (retention.ts L9): `<digits><m|h|d|w>`, trimmed
