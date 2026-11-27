@@ -29,9 +29,6 @@ const MAX_KEY_BYTES: usize = 8 * 1024;
 const MAX_KEYS_PER_CALL: usize = 32;
 /// Provider ids are short slugs; the settings schema caps them at 128.
 const MAX_PROVIDER_BYTES: usize = 128;
-/// The store is managed on the host machine only (new contract).
-pub const REMOTE_REFUSAL: &str = "API keys are managed on the host machine only.";
-
 /// One row per configured provider, in `providerOrder` then id order —
 /// `describeProviderKeys`, with `…tail` display fragments.
 pub fn list(host: &Host) -> Result<Value, String> {

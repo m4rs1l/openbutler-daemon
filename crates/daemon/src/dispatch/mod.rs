@@ -466,18 +466,16 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
-        // The wizard writes the same secret store `keys.add` writes, so it
-        // carries the same local-only gate: a remote token must not be able
-        // to replace a provider's credentials by a different door.
-        "settings.setup" => {
-            if state.remote {
-                return failure(request, keys::REMOTE_REFUSAL.to_owned());
-            }
-            match crate::settings::setup::handle(host, data_dir, request) {
-                Ok(payload) => success(request, payload),
-                Err(error) => failure(request, error),
-            }
-        }
+        // The wizard writes the same secret store `keys.add` writes. Both are
+        // open to a signed-in remote session: the admin account is the trust
+        // boundary, so a remote admin configures the host it owns. The
+        // local-only rule that remains covers identity and process control
+        // (`admin.create`, `token.*`, `pair.create`, `logs.tail`,
+        // `mcp.manage` add, `sessions.prune`).
+        "settings.setup" => match crate::settings::setup::handle(host, data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
         "settings.set-listen" => match crate::settings::listen::handle(host, data_dir, request) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
@@ -508,8 +506,8 @@ pub fn handle(
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
         },
-        // The provider key store: display fragments on read, writes
-        // local-only (credential contract).
+        // The provider key store: display fragments on read; a signed-in
+        // session may write it (see the setup arm for the trust rule).
         "keys.list" => match keys::list(host) {
             Ok(payload) => success(request, payload),
             Err(error) => failure(request, error),
@@ -523,24 +521,14 @@ pub fn handle(
                 Err(error) => failure(request, error),
             }
         }
-        "keys.add" => {
-            if state.remote {
-                return failure(request, keys::REMOTE_REFUSAL.to_owned());
-            }
-            match keys::add(host, data_dir, request) {
-                Ok(payload) => success(request, payload),
-                Err(error) => failure(request, error),
-            }
-        }
-        "keys.remove" => {
-            if state.remote {
-                return failure(request, keys::REMOTE_REFUSAL.to_owned());
-            }
-            match keys::remove(host, data_dir, request) {
-                Ok(payload) => success(request, payload),
-                Err(error) => failure(request, error),
-            }
-        }
+        "keys.add" => match keys::add(host, data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
+        "keys.remove" => match keys::remove(host, data_dir, request) {
+            Ok(payload) => success(request, payload),
+            Err(error) => failure(request, error),
+        },
         // The usage screen's whole state: host-wide, needs no binding, and
         // safe on a view-only attachment (counts, never key material).
         "usage.report" => match usage_report::report(data_dir, request) {

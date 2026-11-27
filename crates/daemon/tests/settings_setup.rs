@@ -445,11 +445,11 @@ fn a_repeated_provider_id_is_refused() {
     );
 }
 
-/// The credential invariant: `keys.add` refuses a remote caller, and the
-/// wizard writes the same secret store, so it must refuse there too — one
-/// sentence, one authority.
+/// The credential invariant now follows the account: a signed-in remote
+/// session writes the same secret store the local wizard writes, through the
+/// same action and the same parser.
 #[test]
-fn a_remote_connection_cannot_write_credentials_through_setup() {
+fn a_signed_in_remote_session_may_write_credentials_through_setup() {
     let dir = temp_data_dir("setup-remote");
     let host = Host::new();
     let mut state = dispatch::DispatchState::new();
@@ -459,17 +459,15 @@ fn a_remote_connection_cannot_write_credentials_through_setup() {
         "providers".to_owned(),
         json!([provider("mock", vec![json!(KEY)])]),
     );
-    let DaemonResponse::Failure { error, .. } = dispatch::handle(&host, &dir, &mut state, &request)
-    else {
-        panic!("a remote credential write must be refused");
-    };
-    assert_eq!(error, "API keys are managed on the host machine only.");
-    // The refusal runs before the merge: nothing reached the disk.
+    let response = dispatch::handle(&host, &dir, &mut state, &request);
     assert!(
-        !dir.join("config.yaml").exists(),
-        "the secret store was written"
+        !matches!(response, DaemonResponse::Failure { .. }),
+        "{response:?}"
     );
-    assert!(!dir.join("settings.yaml").exists(), "settings were written");
+    let secrets = std::fs::read_to_string(dir.join("config.yaml")).unwrap();
+    assert!(secrets.contains(KEY), "{secrets}");
+    let settings = std::fs::read_to_string(dir.join("settings.yaml")).unwrap();
+    assert!(!settings.contains(KEY), "the key reached settings.yaml");
 }
 
 fn refusal_of(response: DaemonResponse) -> String {

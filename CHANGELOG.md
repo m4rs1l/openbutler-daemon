@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `settings.setup`, `keys.add` and `keys.remove` accept a signed-in remote
+  session. The admin account is the trust boundary, so a remote admin can
+  configure the host it owns; `admin.create`, `token.*`, `pair.create`,
+  `logs.tail`, `mcp.manage` add and `sessions.prune` stay local-only.
 - Component installers (`install.sh`, `install.ps1`): select the release for
   the platform, verify it against `SHA256SUMS`, unpack into
   `~/.openbutler/bin` (`%USERPROFILE%\.openbutler\bin`), run the installed
