@@ -16,8 +16,29 @@ env:
   NODE_RUNTIME: "24.22.3"
 
 jobs:
+  # A tag is a promise that the tree passes its own gates. The release refuses
+  # to publish while fmt, clippy or the suite is red — a defect that ships once
+  # must not need a second release to leave.
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sidecar/package-lock.json
+      - run: npm ci
+        working-directory: sidecar
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
   build:
     name: build (${{ matrix.asset }})
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
