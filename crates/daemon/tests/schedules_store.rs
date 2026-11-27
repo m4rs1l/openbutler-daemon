@@ -27,11 +27,16 @@ fn temp_root(tag: &str) -> PathBuf {
 }
 
 fn schedule(id: &str) -> ScheduleState {
+    // Absolute wherever the suite runs; the store validates absoluteness.
+    let workspace_root = std::env::temp_dir()
+        .join("proj")
+        .to_string_lossy()
+        .into_owned();
     ScheduleState {
         id: id.to_owned(),
         name: "Nightly build".to_owned(),
         enabled: true,
-        workspace_root: "C:\\work\\proj".to_owned(),
+        workspace_root,
         origin_session_id: "chat-1".to_owned(),
         instruction: "rebuild the site".to_owned(),
         trigger: ScheduleTrigger {
