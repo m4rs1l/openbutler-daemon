@@ -285,6 +285,16 @@ impl TurnRunner {
     /// question is dismissed too (the source's stop handler, L1259),
     /// and the queued sends are cancelled unless `keepQueue` was set
     /// (L1256).
+    /// Records the state a client was handed at attach, so the first publish of
+    /// a turn diffs from it. Without this the first state only seeded the
+    /// baseline and the opening chunk of the answer never reached the client.
+    pub fn seed_baseline(&self, snapshot: crate::agent::events::PublishSnapshot) {
+        *self
+            .last_published
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(snapshot);
+    }
+
     pub fn stop(&self, keep_queue: bool) {
         self.stop.store(true, Ordering::SeqCst);
         let pending = self

@@ -898,6 +898,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A turn's opening chunk no longer disappears. The attach path hands the
+  turn runner the snapshot the client just received and the first publish
+  diffs from it; before, the first state only seeded the baseline, so the
+  beginning of the answer was treated as already sent and never crossed the
+  wire.
+
 - A transient provider failure no longer ends the turn. The host had no
   retry at all while the SDK runs with `maxRetries: 0`, so a 429 or a 5xx
   surfaced as a failed run; the source retries on its own backoff

@@ -171,6 +171,18 @@ pub fn attach_chat(
         runtime: runtime.clone(),
         saved_sessions: state::list_sessions(data_dir, &WorkspaceFilter::Any).unwrap_or_default(),
     };
+    // The snapshot is what this client now holds; the turn runner must
+    // diff from it, or the first chunk of the next answer is taken for
+    // "already sent" and never crosses the wire.
+    if let Some(executor) = host.executor() {
+        executor.seed_baseline(
+            &chat_session_id,
+            crate::agent::events::PublishSnapshot {
+                session: snapshot.session.clone(),
+                run: snapshot.run.clone(),
+            },
+        );
+    }
     super::session_write::queue_attach_event(state, snapshot, runtime);
     serde_json::to_value(result).map_err(|_| "The attach response could not be serialized.".into())
 }

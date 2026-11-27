@@ -119,9 +119,24 @@ pub fn temp_data_dir(tag: &str) -> PathBuf {
 #[derive(Clone, Default)]
 pub struct RecordingExecutor {
     pub busy: std::sync::Arc<std::sync::Mutex<bool>>,
+    /// Every baseline the attach path handed over (session id + snapshot).
+    pub seeds: std::sync::Arc<
+        std::sync::Mutex<Vec<(String, openbutler_daemon::agent::events::PublishSnapshot)>>,
+    >,
 }
 
 impl openbutler_daemon::agent::TurnExecutor for RecordingExecutor {
+    fn seed_baseline(
+        &self,
+        session_id: &str,
+        snapshot: openbutler_daemon::agent::events::PublishSnapshot,
+    ) {
+        self.seeds
+            .lock()
+            .unwrap()
+            .push((session_id.to_owned(), snapshot));
+    }
+
     fn spawn_turn(
         self: std::sync::Arc<Self>,
         _session_id: String,

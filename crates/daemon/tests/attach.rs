@@ -1300,3 +1300,46 @@ fn a_new_chat_attach_creates_a_fresh_draft_and_binds_the_connection() {
     assert_eq!(load_value["ok"], json!(true), "{load_value}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_attach_seeds_the_runner_with_the_snapshot_it_hands_over() {
+    // The client now holds this snapshot. The turn runner must diff from it,
+    // not from whatever state the first publish happens to see, or the
+    // opening chunk of the answer is taken for "already sent".
+    let dir = temp_data_dir("attach-seed");
+    let host = Arc::new(Host::new());
+    let recorder = Arc::new(common::RecordingExecutor::default());
+    host.set_executor(recorder.clone());
+    let mut state = DispatchState::new();
+    let response = call(
+        &host,
+        &dir,
+        &mut state,
+        request(
+            "seed1",
+            &[
+                ("clientKind", json!("terminal")),
+                ("newChatSession", json!(true)),
+            ],
+        ),
+    );
+    let result = success_result(response);
+    let session_id = result["snapshot"]["session"]["id"]
+        .as_str()
+        .expect("the chat id")
+        .to_owned();
+    let seeds = recorder.seeds.lock().unwrap();
+    assert_eq!(seeds.len(), 1, "one baseline per attach");
+    assert_eq!(
+        seeds[0].0, session_id,
+        "the seeded chat is the attached one"
+    );
+    let handed = result["snapshot"]["session"]["entries"]
+        .as_array()
+        .map_or(0, Vec::len);
+    assert_eq!(
+        seeds[0].1.session.entries.len(),
+        handed,
+        "the baseline is exactly what the client received"
+    );
+}

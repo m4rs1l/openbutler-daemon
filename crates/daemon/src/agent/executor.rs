@@ -11,6 +11,7 @@ use openbutler_protocol::SessionEntryMeta;
 use openbutler_protocol::entry::{NoticeTone, SessionEntry};
 use tokio::runtime::Handle;
 
+use super::events::PublishSnapshot;
 use super::{TurnError, TurnRequest, TurnRunner};
 use crate::sidecar::{DoorConfig, SidecarDoor};
 use crate::state;
@@ -39,6 +40,13 @@ pub trait TurnExecutor: Send + Sync {
     /// Whether a session's run is still live (`session.new` refuses to
     /// open a chat while the current one runs).
     fn is_busy(&self, session_id: &str) -> bool;
+
+    /// Records the state a client was just handed (attach). The next publish
+    /// diffs from it, so the first chunk of a turn is never taken for
+    /// "already sent". A default no-op keeps test doubles simple.
+    fn seed_baseline(&self, session_id: &str, snapshot: PublishSnapshot) {
+        let _ = (session_id, snapshot);
+    }
     /// `session.queue`: steers or removes one queued message of the
     /// session (id-guarded like the source's `manageQueuedMessage`);
     /// the runner's refusals are the client's error text.
@@ -77,6 +85,8 @@ pub struct DoorExecutor {
     config: DoorConfig,
     door: tokio::sync::Mutex<Option<SidecarDoor>>,
     runners: Mutex<HashMap<String, Arc<TurnRunner>>>,
+    /// Baseline snapshots handed to clients before their runner existed.
+    pending_baselines: Mutex<HashMap<String, PublishSnapshot>>,
     /// The host runners publish live state to; weak so an executor never
     /// pins the host's lifetime.
     host: std::sync::Weak<crate::dispatch::Host>,
@@ -94,6 +104,7 @@ impl DoorExecutor {
             config,
             door: tokio::sync::Mutex::new(None),
             runners: Mutex::new(HashMap::new()),
+            pending_baselines: Mutex::new(HashMap::new()),
             host,
         }
     }
@@ -121,6 +132,16 @@ impl DoorExecutor {
         };
         let runner =
             Arc::new(TurnRunner::open(&self.data_dir, session_id, door, self.host.clone()).await?);
+        // A client attached before this runner existed: the snapshot it was
+        // handed is the baseline the first publish must diff from.
+        if let Some(seed) = self
+            .pending_baselines
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(session_id)
+        {
+            runner.seed_baseline(seed);
+        }
         self.runners
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -130,6 +151,24 @@ impl DoorExecutor {
 }
 
 impl TurnExecutor for DoorExecutor {
+    fn seed_baseline(&self, session_id: &str, snapshot: PublishSnapshot) {
+        let existing = self
+            .runners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .cloned();
+        match existing {
+            Some(runner) => runner.seed_baseline(snapshot),
+            None => {
+                self.pending_baselines
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(session_id.to_owned(), snapshot);
+            }
+        }
+    }
+
     fn spawn_turn(self: Arc<Self>, session_id: String, request: TurnRequest) {
         // The response has already gone out; from here failures are
         // notices on the record. Images are decoded and stored first —
